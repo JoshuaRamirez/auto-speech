@@ -14,6 +14,9 @@ setup/.installed
 # Per-machine calibration history (profile itself IS committed as a sample)
 config/calibration_history.jsonl
 
+# Per-machine replay cache (audio, not source of truth)
+config/cache/
+
 # Large test artifacts — WAVs are regenerable; keep logs and text
 tests/outputs/**/*.wav
 

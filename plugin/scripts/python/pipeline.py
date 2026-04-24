@@ -8,7 +8,10 @@ import threading
 from datetime import datetime, timezone
 from pathlib import Path
 
+from afplay_launcher import AfplayLauncher
 from audio_transcript import AudioTranscript
+from cache_entry import CacheEntry
+from cache_store import CachePromotionError, CacheStore
 from chunk_planner import ChunkPlanner
 from config_constants import (
     BASE_DURATION_SECONDS,
@@ -27,6 +30,7 @@ from tts_engine import TTSEngine, TTSGenerationError
 from voice_profile import VoiceProfile
 from voice_profile_store import VoiceProfileStore
 from wav_concatenator import WavConcatError, WavConcatenator
+from wav_inspector import WavInspector
 
 
 EXIT_OK = 0
@@ -42,6 +46,10 @@ def _project_root() -> Path:
 
 def _default_config_path() -> Path:
     return _project_root() / "config" / "voice_calibration.json"
+
+
+def _default_cache_root() -> Path:
+    return _project_root() / "config" / "cache"
 
 
 def _load_profile_or_fallback() -> VoiceProfile:
@@ -66,16 +74,56 @@ def _load_profile_or_fallback() -> VoiceProfile:
 class PipelineOrchestrator:
     """Wire all services for a single /speak invocation."""
 
-    def __init__(self, keep_artifacts: bool = False) -> None:
+    def __init__(
+        self,
+        keep_artifacts: bool = False,
+        source_hash: str | None = None,
+        cache_root: Path | None = None,
+    ) -> None:
         self._keep_artifacts = keep_artifacts
+        self._source_hash = source_hash
+        self._cache = CacheStore(cache_root or _default_cache_root())
+
+    def _maybe_cache_hit(
+        self, profile: VoiceProfile, stop_event: threading.Event
+    ) -> int | None:
+        """If --source-hash was provided and the cache has a matching entry,
+        play it and return an exit code. Otherwise return None.
+        """
+        if self._source_hash is None:
+            return None
+        hit = self._cache.lookup(self._source_hash)
+        if hit is None:
+            print(
+                f"[pipeline] cache miss  hash={self._source_hash[:16]}...",
+                file=sys.stderr,
+            )
+            return None
+        wav_path, entry = hit
+        print(
+            f"[pipeline] cache HIT   hash={self._source_hash[:16]}... "
+            f"voice={entry.voice_id} dur={entry.duration_seconds:.1f}s "
+            f"path={wav_path}",
+            file=sys.stderr,
+        )
+        rc = AfplayLauncher.play(wav_path, stop_event)
+        return EXIT_OK if rc == 0 else EXIT_PLAYBACK_FAIL
 
     def run(self, transcript_text: str, turn_ordinal: int = 1) -> int:
+        profile = _load_profile_or_fallback()
+        stop_event = threading.Event()
+
+        # Cache short-circuit comes FIRST so that a cache hit needs no
+        # transcript_text at all — the cached full.wav is self-sufficient.
+        cache_result = self._maybe_cache_hit(profile, stop_event)
+        if cache_result is not None:
+            return cache_result
+
         transcript_text = transcript_text.strip()
         if not transcript_text:
             print("[pipeline] empty transcript text", file=sys.stderr)
             return EXIT_REWRITE_FAIL
 
-        profile = _load_profile_or_fallback()
         transcript = AudioTranscript(text=transcript_text)
         tmpdir = Path(
             tempfile.mkdtemp(
@@ -88,7 +136,6 @@ class PipelineOrchestrator:
             f"tmpdir={tmpdir}"
         )
 
-        stop_event = threading.Event()
         tts_engine = TTSEngine()
         short_path = ShortPathStrategy(SHORT_THRESHOLD_SECONDS)
 
@@ -108,6 +155,11 @@ class PipelineOrchestrator:
                 exit_code = self._long_path(
                     transcript, profile, tts_engine, tmpdir, stop_event
                 )
+
+            if exit_code == EXIT_OK:
+                promote_rc = self._maybe_promote(tmpdir, profile, transcript)
+                if promote_rc != EXIT_OK:
+                    exit_code = promote_rc
         except KeyboardInterrupt:
             print("[pipeline] keyboard interrupt")
             stop_event.set()
@@ -119,6 +171,48 @@ class PipelineOrchestrator:
             else:
                 print(f"[pipeline] artifacts preserved at {tmpdir}")
         return exit_code
+
+    def _maybe_promote(
+        self,
+        tmpdir: Path,
+        profile: VoiceProfile,
+        transcript: AudioTranscript,
+    ) -> int:
+        """Promote tmpdir/full.wav into the cache if --source-hash was set.
+
+        No-op (returns EXIT_OK) when source_hash is None.
+        """
+        if self._source_hash is None:
+            return EXIT_OK
+        full_wav = tmpdir / "full.wav"
+        if not full_wav.is_file() or full_wav.stat().st_size == 0:
+            print(
+                f"[pipeline] promote skipped: {full_wav} missing or empty",
+                file=sys.stderr,
+            )
+            return EXIT_TTS_FAIL
+        try:
+            duration = WavInspector.duration_seconds(full_wav)
+        except Exception as exc:
+            print(f"[pipeline] promote inspect failed: {exc}", file=sys.stderr)
+            return EXIT_TTS_FAIL
+        entry = CacheEntry(
+            source_hash=self._source_hash,
+            voice_id=profile.voice_id,
+            speed=profile.speed,
+            char_count=transcript.char_count,
+            duration_seconds=duration,
+            created_at=datetime.now(timezone.utc)
+            .isoformat(timespec="seconds")
+            .replace("+00:00", "Z"),
+            chars_per_second_at_creation=profile.chars_per_second,
+        )
+        try:
+            self._cache.promote(self._source_hash, full_wav, entry)
+        except CachePromotionError as exc:
+            print(f"[pipeline] cache promote failed: {exc}", file=sys.stderr)
+            return EXIT_TTS_FAIL
+        return EXIT_OK
 
     def _long_path(
         self,

@@ -13,19 +13,31 @@ The user invoked `/speak $ARGUMENTS`. Parse the argument:
 - Else → stop and respond to the user with a one-line error:
   "speak: argument must be a positive integer, got `<value>`". Do not proceed.
 
-## Step 1 — Extract the source message
+## Step 1 — Extract the source message and compute its cache key
 
-Run this single Bash command, substituting `ORDINAL`:
+Run this single Bash command, substituting `ORDINAL`. It writes the
+extracted source text to a temp file and prints the cache-key hash to
+stdout on the same invocation (the hash is derived from the source text
+plus the active voice_id and speed).
 
 ```
-/Users/joshua/Developer/auto-speech/plugin/scripts/shell/run_extract.sh --ordinal ORDINAL
+set -euo pipefail
+SRC_FILE=$(mktemp -t auto-speech-src-XXXX)
+/Users/joshua/Developer/auto-speech/plugin/scripts/shell/run_extract.sh --ordinal ORDINAL > "$SRC_FILE"
+HASH=$(/Users/joshua/Developer/auto-speech/plugin/scripts/shell/compute_hash.sh < "$SRC_FILE")
+echo "SRC_FILE=$SRC_FILE"
+echo "HASH=$HASH"
+cat "$SRC_FILE"
 ```
 
-If the command exits with code `2` ("no such turn") or code `3` ("no transcript"),
-stop and pass the stderr message to the user verbatim. Do not proceed.
+If the first subcommand exits with code `2` ("no such turn") or code `3`
+("no transcript"), stop and pass the stderr message to the user verbatim.
+Do not proceed.
 
-The command's stdout is the **full verbatim text** of the selected assistant
-message. Hold it as `SOURCE_TEXT`.
+From the output, record three values:
+- `SOURCE_HASH` — the 64-hex-char string after `HASH=`.
+- `SRC_FILE` — the temp file path after `SRC_FILE=` (keep for step 4).
+- `SOURCE_TEXT` — the full verbatim message text that follows those two lines.
 
 ## Step 2 — Rewrite for audio
 
@@ -86,17 +98,23 @@ Hold the rewritten text as `AUDIO_TEXT`.
 ## Step 3 — Speak it
 
 Run this Bash command, passing `AUDIO_TEXT` on stdin via a heredoc. Substitute
-the actual rewritten text in place of `{AUDIO_TEXT}`, and the ORDINAL value
-in place of ORDINAL:
+the actual rewritten text in place of `{AUDIO_TEXT}`, the ORDINAL value
+in place of ORDINAL, and the `SOURCE_HASH` recorded in step 1:
 
 ```
-/Users/joshua/Developer/auto-speech/plugin/scripts/shell/run_speak.sh --ordinal ORDINAL <<'__AUTO_SPEECH_EOF__'
+/Users/joshua/Developer/auto-speech/plugin/scripts/shell/run_speak.sh --ordinal ORDINAL --source-hash SOURCE_HASH <<'__AUTO_SPEECH_EOF__'
 {AUDIO_TEXT}
 __AUTO_SPEECH_EOF__
 ```
 
 Use the exact heredoc delimiter shown (`__AUTO_SPEECH_EOF__`) so the
 rewritten text may safely contain any other token.
+
+Passing `--source-hash` enables the replay cache: on a second invocation
+of `/speak` for the same message, the cache hit skips both the rewrite
+pass and the TTS pipeline entirely. On a miss (the first invocation),
+the pipeline runs normally and the resulting audio is promoted into the
+cache so the next time is instant.
 
 ## Step 4 — Report
 
