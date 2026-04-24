@@ -16,6 +16,17 @@ if ! command -v uv >/dev/null 2>&1; then
     exit 1
 fi
 
+if ! command -v mpv >/dev/null 2>&1; then
+    if command -v brew >/dev/null 2>&1; then
+        echo "[auto-speech install] installing mpv via brew"
+        brew install mpv
+    else
+        echo "error: mpv is not installed and Homebrew is unavailable." >&2
+        echo "       Install mpv manually and re-run this script." >&2
+        exit 1
+    fi
+fi
+
 if [[ ! -d "$VENV" ]]; then
     echo "[auto-speech install] creating venv at $VENV with Python 3.12"
     uv venv --python 3.12 "$VENV"

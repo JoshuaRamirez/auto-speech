@@ -22,24 +22,30 @@ VENV="$PROJECT_ROOT/.venv"
 # shellcheck disable=SC1091
 source "$VENV/bin/activate"
 
-python - "$CONFIG_JSON" <<'PY'
+# Buffer stdin to a temp file. Using a heredoc for the Python block would
+# steal python's stdin, so we pass the source text via an argv-referenced
+# file instead.
+SRC_TMP=$(mktemp -t auto-speech-hash-XXXXXX)
+trap 'rm -f "$SRC_TMP"' EXIT
+cat > "$SRC_TMP"
+
+python - "$CONFIG_JSON" "$SRC_TMP" <<'PY'
 import hashlib
 import json
 import sys
 from pathlib import Path
 
 config_path = Path(sys.argv[1])
+src_path = Path(sys.argv[2])
 try:
     data = json.loads(config_path.read_text(encoding="utf-8"))
     voice_id = str(data["voice_id"])
     speed = float(data["speed"])
 except (FileNotFoundError, KeyError, ValueError, json.JSONDecodeError):
-    # Fallback to v0.1 defaults so the cache key remains stable when the
-    # profile is absent (same key space used by the fallback orchestrator).
     voice_id = "af_heart"
     speed = 1.0
 
-source_bytes = sys.stdin.buffer.read()
+source_bytes = src_path.read_bytes()
 key_input = source_bytes + b"\x00" + f"{voice_id}:{speed}".encode("utf-8")
 print(hashlib.sha256(key_input).hexdigest())
 PY

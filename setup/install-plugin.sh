@@ -40,5 +40,10 @@ install_one() {
 
 install_one "speak.md"
 install_one "replay.md"
+install_one "pause.md"
+install_one "resume.md"
+install_one "seek.md"
+install_one "restart.md"
+install_one "end.md"
 
-echo "[install-plugin] /speak and /replay are available in any Claude Code session."
+echo "[install-plugin] auto-speech commands installed: /speak /replay /pause /resume /seek /restart /end"

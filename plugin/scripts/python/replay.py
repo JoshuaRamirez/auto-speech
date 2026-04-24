@@ -3,11 +3,10 @@ from __future__ import annotations
 
 import argparse
 import sys
-import threading
 from pathlib import Path
 
-from afplay_launcher import AfplayLauncher
 from cache_store import CacheStore
+from mpv_controller import MpvController, MpvNotInstalledError, MpvStartupError
 
 
 EXIT_OK = 0
@@ -58,13 +57,10 @@ def main(argv: list[str] | None = None) -> int:
         file=sys.stderr,
     )
 
-    stop_event = threading.Event()
     try:
-        rc = AfplayLauncher.play(wav_path, stop_event)
-    except KeyboardInterrupt:
-        stop_event.set()
-        return EXIT_INTERRUPTED
-    if rc != 0:
+        MpvController().start(wav_path)
+    except (MpvNotInstalledError, MpvStartupError) as exc:
+        print(f"replay: mpv start failed: {exc}", file=sys.stderr)
         return EXIT_PLAYBACK_FAIL
     return EXIT_OK
 

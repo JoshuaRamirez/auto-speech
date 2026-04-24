@@ -4,9 +4,9 @@ from __future__ import annotations
 import threading
 from pathlib import Path
 
-from afplay_launcher import AfplayLauncher
 from audio_transcript import AudioTranscript
 from duration_estimator import DurationEstimator
+from mpv_controller import MpvController, MpvNotInstalledError, MpvStartupError
 from tts_engine import TTSEngine
 from voice_profile import VoiceProfile
 
@@ -35,5 +35,9 @@ class ShortPathStrategy:
         tts_engine.synthesize(transcript.text, voice_profile, wav_path)
         if stop_event.is_set():
             return 130
-        rc = AfplayLauncher.play(wav_path, stop_event)
-        return 0 if rc == 0 else 6
+        try:
+            MpvController().start(wav_path)
+        except (MpvNotInstalledError, MpvStartupError) as exc:
+            print(f"[short-path] mpv start failed: {exc}")
+            return 6
+        return 0

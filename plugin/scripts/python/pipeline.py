@@ -8,7 +8,6 @@ import threading
 from datetime import datetime, timezone
 from pathlib import Path
 
-from afplay_launcher import AfplayLauncher
 from audio_transcript import AudioTranscript
 from cache_entry import CacheEntry
 from cache_store import CachePromotionError, CacheStore
@@ -19,11 +18,10 @@ from config_constants import (
     DEFAULT_SPEED,
     DEFAULT_VOICE_ID,
     FALLBACK_CHARS_PER_SEC,
-    QUEUE_CAPACITY,
     SHORT_THRESHOLD_SECONDS,
 )
-from playback_consumer import PlaybackConsumer
-from playback_queue import PlaybackQueue
+from mpv_controller import MpvController, MpvNotInstalledError, MpvStartupError
+from playback_queue import SENTINEL, PlaybackQueue
 from segment_producer import SegmentProducer
 from short_path import ShortPathStrategy
 from tts_engine import TTSEngine, TTSGenerationError
@@ -71,6 +69,28 @@ def _load_profile_or_fallback() -> VoiceProfile:
     )
 
 
+def _start_mpv_or_exit_code(wav_path: Path) -> int:
+    """Hand a WAV off to the mpv controller. Returns an exit code.
+
+    Starting mpv is non-blocking from the orchestrator's perspective:
+    the controller returns once the mpv socket is responsive, which is
+    typically 200–400 ms after spawn. Playback continues after this
+    process exits — that's the point of Phase 12.
+    """
+    try:
+        MpvController().start(wav_path)
+    except MpvNotInstalledError as exc:
+        print(f"[pipeline] {exc}", file=sys.stderr)
+        return EXIT_PLAYBACK_FAIL
+    except MpvStartupError as exc:
+        print(f"[pipeline] mpv startup failed: {exc}", file=sys.stderr)
+        return EXIT_PLAYBACK_FAIL
+    except FileNotFoundError as exc:
+        print(f"[pipeline] mpv could not find WAV: {exc}", file=sys.stderr)
+        return EXIT_PLAYBACK_FAIL
+    return EXIT_OK
+
+
 class PipelineOrchestrator:
     """Wire all services for a single /speak invocation."""
 
@@ -84,11 +104,9 @@ class PipelineOrchestrator:
         self._source_hash = source_hash
         self._cache = CacheStore(cache_root or _default_cache_root())
 
-    def _maybe_cache_hit(
-        self, profile: VoiceProfile, stop_event: threading.Event
-    ) -> int | None:
+    def _maybe_cache_hit(self, profile: VoiceProfile) -> int | None:
         """If --source-hash was provided and the cache has a matching entry,
-        play it and return an exit code. Otherwise return None.
+        start mpv on it and return an exit code. Otherwise return None.
         """
         if self._source_hash is None:
             return None
@@ -106,8 +124,7 @@ class PipelineOrchestrator:
             f"path={wav_path}",
             file=sys.stderr,
         )
-        rc = AfplayLauncher.play(wav_path, stop_event)
-        return EXIT_OK if rc == 0 else EXIT_PLAYBACK_FAIL
+        return _start_mpv_or_exit_code(wav_path)
 
     def run(self, transcript_text: str, turn_ordinal: int = 1) -> int:
         profile = _load_profile_or_fallback()
@@ -115,7 +132,7 @@ class PipelineOrchestrator:
 
         # Cache short-circuit comes FIRST so that a cache hit needs no
         # transcript_text at all — the cached full.wav is self-sufficient.
-        cache_result = self._maybe_cache_hit(profile, stop_event)
+        cache_result = self._maybe_cache_hit(profile)
         if cache_result is not None:
             return cache_result
 
@@ -232,27 +249,27 @@ class PipelineOrchestrator:
             f"[pipeline] plan chunks={len(plan)} est_total={plan.total_estimated_duration_seconds:.1f}s"
         )
 
-        queue = PlaybackQueue(capacity=QUEUE_CAPACITY)
+        # Phase 12 note: the consumer no longer plays per-chunk. The producer
+        # generates all chunks; we then concat; mpv plays the single WAV.
+        # Queue sized to hold every segment plus SENTINEL so the producer
+        # never blocks (there is no reader draining until we drain below).
+        queue = PlaybackQueue(capacity=max(len(plan) + 2, 4))
         producer = SegmentProducer(tts_engine, profile, tmpdir, queue, stop_event)
-        consumer = PlaybackConsumer(queue, stop_event)
-
         t_prod = threading.Thread(target=producer.run, args=(plan,), name="producer")
-        t_cons = threading.Thread(target=consumer.run, name="consumer")
         t_prod.start()
-        t_cons.start()
-
         t_prod.join()
-        t_cons.join()
 
         if producer.error is not None:
-            # Producer errors most commonly map to TTS failure.
-            if isinstance(producer.error, TTSGenerationError):
-                return EXIT_TTS_FAIL
             return EXIT_TTS_FAIL
-        if consumer.error is not None:
-            return EXIT_PLAYBACK_FAIL
 
-        # Invariant I-10.1: concat-iff-success. Both threads finished cleanly.
+        # Drain so the producer's SENTINEL contract is satisfied and the
+        # queue is empty before we let it be GC'd.
+        while True:
+            item = queue.get(timeout=0.5)
+            if item is SENTINEL:
+                break
+
+        # Invariant I-10.1: concat-iff-success.
         chunk_paths = [tmpdir / f"chunk-{d.index:03d}.wav" for d in plan]
         full_path = tmpdir / "full.wav"
         try:
@@ -267,4 +284,5 @@ class PipelineOrchestrator:
                 p.unlink(missing_ok=True)
             print(f"[pipeline] removed {len(chunk_paths)} chunk WAVs")
 
-        return EXIT_OK
+        # Hand off to mpv. Controller returns once the socket is ready.
+        return _start_mpv_or_exit_code(full_path)
