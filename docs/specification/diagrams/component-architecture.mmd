@@ -1,0 +1,59 @@
+%%{init: {'theme':'neutral'}}%%
+flowchart TB
+    subgraph L5[L5 Interface]
+        cmd[speak.md<br/>slash command]
+        entry[speak.py<br/>CLI entry]
+    end
+    subgraph L4[L4 Orchestration]
+        orch[PipelineOrchestrator]
+        short[ShortPathStrategy]
+    end
+    subgraph L3[L3 Domain Services]
+        loc[TranscriptLocator]
+        sel[MessageSelector]
+        cal[Calibrator]
+        planner[ChunkPlanner]
+        prod[SegmentProducer]
+        cons[PlaybackConsumer]
+    end
+    subgraph L2[L2 Domain Primitives]
+        fib[FibonacciSeq]
+        snap[BoundarySnapper]
+        dur[DurationEstimator]
+    end
+    subgraph L1[L1 IO Adapters]
+        reader[TranscriptReader]
+        tts[TTSEngine]
+        play[AfplayLauncher]
+        wav[WavInspector]
+    end
+
+    cmd --> entry
+    entry --> orch
+    orch --> short
+    orch --> loc
+    orch --> sel
+    orch --> planner
+    orch --> prod
+    orch --> cons
+    loc --> reader
+    sel --> reader
+    planner --> fib
+    planner --> snap
+    planner --> dur
+    prod --> tts
+    prod --> wav
+    cons --> play
+    cal --> tts
+    cal --> wav
+
+    classDef l5 fill:#fde,stroke:#c8a
+    classDef l4 fill:#fed,stroke:#ca8
+    classDef l3 fill:#efd,stroke:#ac8
+    classDef l2 fill:#def,stroke:#8ac
+    classDef l1 fill:#edf,stroke:#a8c
+    class cmd,entry l5
+    class orch,short l4
+    class loc,sel,cal,planner,prod,cons l3
+    class fib,snap,dur l2
+    class reader,tts,play,wav l1

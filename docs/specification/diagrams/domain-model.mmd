@@ -1,0 +1,60 @@
+%%{init: {'theme':'neutral'}}%%
+classDiagram
+    class TranscriptSession {
+        +UUID session_id
+        +Path file_path
+        +iter_assistant_messages()
+    }
+    class AssistantMessage {
+        +int turn_index
+        +int ordinal_from_end
+        +datetime timestamp
+        +str text
+    }
+    class AudioTranscript {
+        +AssistantMessage source
+        +str text
+        +int char_count
+        +float estimated_duration_seconds
+    }
+    class ChunkPlan {
+        +tuple descriptors
+        +float total_estimated_duration_seconds
+    }
+    class ChunkDescriptor {
+        +int index
+        +int fib_index
+        +int target_char_count
+        +int actual_char_count
+        +str text
+    }
+    class AudioSegment {
+        +Path wav_path
+        +float actual_duration_seconds
+        +float generation_elapsed_seconds
+    }
+    class VoiceProfile {
+        +str voice_id
+        +float speed
+        +float chars_per_second
+        +datetime calibrated_at
+    }
+    class CalibrationRun {
+        +datetime timestamp
+        +int reference_text_chars
+        +float measured_duration_seconds
+        +float computed_chars_per_second
+    }
+    class PlaybackQueue {
+        +put(segment)
+        +get()
+        +close()
+    }
+
+    TranscriptSession "1" --> "*" AssistantMessage : contains
+    AssistantMessage "1" --> "1" AudioTranscript : rewrites_to
+    AudioTranscript "1" --> "1" ChunkPlan : decomposes_to
+    ChunkPlan "1" --> "*" ChunkDescriptor : orders
+    ChunkDescriptor "1" --> "1" AudioSegment : materializes_as
+    VoiceProfile "1" ..> "*" CalibrationRun : derived_from
+    AudioSegment "*" --> "1" PlaybackQueue : enqueued_in

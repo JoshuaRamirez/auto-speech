@@ -1,0 +1,49 @@
+%%{init: {'theme':'neutral'}}%%
+sequenceDiagram
+    autonumber
+    actor U as User
+    participant CC as Claude Code
+    participant O as Orchestrator
+    participant L as Locator
+    participant S as Selector
+    participant R as Rewriter<br/>(Claude)
+    participant P as Planner
+    participant Pr as Producer
+    participant Q as Queue
+    participant Co as Consumer
+    participant T as TTSEngine
+    participant A as afplay
+
+    U->>CC: /speak n
+    CC->>O: invoke
+    O->>L: locate session transcript
+    L-->>O: jsonl path
+    O->>S: select Nth assistant message
+    S-->>O: AssistantMessage
+    O->>R: rewrite for audio (via Claude)
+    R-->>O: AudioTranscript
+    alt estimated duration <= SHORT_THRESHOLD
+        O->>T: synthesize(full text)
+        T-->>O: single AudioSegment
+        O->>A: play segment
+        A-->>O: finished
+    else long path
+        O->>P: plan chunks
+        P-->>O: ChunkPlan
+        O->>Pr: start producer
+        O->>Co: start consumer
+        loop for each descriptor in plan
+            Pr->>T: synthesize(chunk text)
+            T-->>Pr: WAV path
+            Pr->>Q: put(segment)
+        end
+        Pr->>Q: put(SENTINEL)
+        loop until SENTINEL
+            Q-->>Co: segment
+            Co->>A: afplay wav
+            A-->>Co: finished
+        end
+        Co-->>O: done
+    end
+    O-->>CC: exit 0
+    CC-->>U: completes

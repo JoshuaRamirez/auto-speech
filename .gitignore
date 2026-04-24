@@ -1,0 +1,21 @@
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.Python
+
+# Virtual environment (managed by setup/install.sh)
+.venv/
+
+# Install-time sentinel
+setup/.installed
+
+# Per-machine calibration history (profile itself IS committed as a sample)
+config/calibration_history.jsonl
+
+# Large test artifacts — WAVs are regenerable; keep logs and text
+tests/outputs/**/*.wav
+
+# macOS
+.DS_Store

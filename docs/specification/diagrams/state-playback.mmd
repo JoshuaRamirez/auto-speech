@@ -1,0 +1,12 @@
+%%{init: {'theme':'neutral'}}%%
+stateDiagram-v2
+    [*] --> Waiting
+    Waiting --> Playing : segment dequeued
+    Playing --> Waiting : afplay finishes<br/>and more segments expected
+    Playing --> Draining : afplay finishes<br/>and SENTINEL seen
+    Waiting --> Draining : SENTINEL seen<br/>queue empty
+    Draining --> Done : last afplay returns 0
+    Playing --> Error : afplay nonzero exit
+    Waiting --> Error : stop_event set
+    Error --> [*]
+    Done --> [*]

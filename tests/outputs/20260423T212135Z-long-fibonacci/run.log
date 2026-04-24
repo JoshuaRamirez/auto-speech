@@ -1,0 +1,35 @@
+[pipeline] ordinal=1 chars=847 tmpdir=/var/folders/tf/mzd8mjpn08n70hsj7jd3bk340000gn/T/auto-speech-20260423T212135-xz75vcvs
+[pipeline] long path (Fibonacci)
+[pipeline] plan chunks=5 est_total=53.5s
+[producer] synth #1 chars=77 -> chunk-001.wav
+[tts_engine] loading mlx-community/Kokoro-82M-bf16 ...
+Fetching 56 files:   0%|          | 0/56 [00:00<?, ?it/s]Fetching 56 files: 100%|██████████| 56/56 [00:00<00:00, 32162.27it/s]
+[tts_engine] model loaded
+[tts_engine] synthesizing chars=77 voice=af_heart speed=1.0
+Creating new KokoroPipeline for language: a
+[tts_engine] wrote /var/folders/tf/mzd8mjpn08n70hsj7jd3bk340000gn/T/auto-speech-20260423T212135-xz75vcvs/chunk-001.wav
+[producer] enqueue #1 gen=2.33s dur=5.12s
+[producer] synth #2 chars=53 -> chunk-002.wav
+[tts_engine] synthesizing chars=53 voice=af_heart speed=1.0
+[consumer] play  #1 dur=5.12s path=chunk-001.wav
+[tts_engine] wrote /var/folders/tf/mzd8mjpn08n70hsj7jd3bk340000gn/T/auto-speech-20260423T212135-xz75vcvs/chunk-002.wav
+[producer] enqueue #2 gen=0.10s dur=3.65s
+[producer] synth #3 chars=119 -> chunk-003.wav
+[tts_engine] synthesizing chars=119 voice=af_heart speed=1.0
+[tts_engine] wrote /var/folders/tf/mzd8mjpn08n70hsj7jd3bk340000gn/T/auto-speech-20260423T212135-xz75vcvs/chunk-003.wav
+[producer] enqueue #3 gen=0.17s dur=7.55s
+[producer] synth #4 chars=234 -> chunk-004.wav
+[tts_engine] synthesizing chars=234 voice=af_heart speed=1.0
+[tts_engine] wrote /var/folders/tf/mzd8mjpn08n70hsj7jd3bk340000gn/T/auto-speech-20260423T212135-xz75vcvs/chunk-004.wav
+[producer] enqueue #4 gen=0.32s dur=14.70s
+[producer] synth #5 chars=364 -> chunk-005.wav
+[tts_engine] synthesizing chars=364 voice=af_heart speed=1.0
+[tts_engine] wrote /var/folders/tf/mzd8mjpn08n70hsj7jd3bk340000gn/T/auto-speech-20260423T212135-xz75vcvs/chunk-005.wav
+[producer] enqueue #5 gen=0.48s dur=21.55s
+[consumer] play  #2 dur=3.65s path=chunk-002.wav
+[consumer] play  #3 dur=7.55s path=chunk-003.wav
+[producer] closed queue
+[consumer] play  #4 dur=14.70s path=chunk-004.wav
+[consumer] play  #5 dur=21.55s path=chunk-005.wav
+[consumer] received SENTINEL; done
+[pipeline] artifacts preserved at /var/folders/tf/mzd8mjpn08n70hsj7jd3bk340000gn/T/auto-speech-20260423T212135-xz75vcvs

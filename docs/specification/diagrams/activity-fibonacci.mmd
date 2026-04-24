@@ -1,0 +1,22 @@
+%%{init: {'theme':'neutral'}}%%
+flowchart TB
+    start([AudioTranscript ready]) --> load[Load VoiceProfile<br/>chars_per_sec C, base N]
+    load --> estimate[Estimate total_duration<br/>= char_count / C]
+    estimate --> cond{total <= SHORT_THRESHOLD?}
+    cond -->|yes| short[Emit single chunk<br/>containing full text]
+    cond -->|no| init[k := 1<br/>offset := 0<br/>plan := empty]
+    init --> loop[target := F k * N * C]
+    loop --> snap[BoundarySnapper<br/>find boundary near offset+target<br/>within tolerance]
+    snap --> record[Append ChunkDescriptor to plan<br/>offset := new_boundary]
+    record --> remain{offset < char_count?}
+    remain -->|no| done([emit plan])
+    remain -->|yes| grow[k := k+1]
+    grow --> loop
+    short --> done
+
+    classDef term fill:#efe,stroke:#8a8
+    classDef io fill:#fed,stroke:#ca8
+    classDef logic fill:#def,stroke:#8ac
+    class start,done term
+    class load,estimate,init,loop,snap,record,grow,short logic
+    class cond,remain logic

@@ -1,0 +1,27 @@
+%%{init: {'theme':'neutral'}}%%
+flowchart TB
+    user([User])
+    cc[Claude Code session]
+    transcript[(Session JSONL transcript<br/>~/.claude/projects/...)]
+    plugin[auto-speech plugin]
+    kokoro[Kokoro TTS<br/>via mlx-audio]
+    afplay[macOS afplay]
+    speakers([Speakers])
+
+    user -->|"/speak [n]"| cc
+    cc -->|invokes slash command| plugin
+    plugin -->|reads prior turn| transcript
+    plugin -->|rewrite pass<br/>through Claude| cc
+    plugin -->|synthesizes chunks| kokoro
+    kokoro -->|WAV files| plugin
+    plugin -->|plays in order| afplay
+    afplay --> speakers
+    speakers --> user
+
+    classDef external fill:#eef,stroke:#88a
+    classDef system fill:#efe,stroke:#8a8
+    classDef store fill:#ffe,stroke:#aa8
+    class user,speakers external
+    class cc,kokoro,afplay external
+    class plugin system
+    class transcript store

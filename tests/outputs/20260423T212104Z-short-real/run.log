@@ -1,0 +1,17 @@
+=== SOURCE (extracted with --ordinal 2) ===
+Locator logs are polluting stdout — need them on stderr so the extracted text is clean.
+
+=== REWRITE ===
+Locator logs are polluting standard out. We need them on standard error so the extracted text is clean.
+
+=== RUN ===
+[pipeline] ordinal=2 chars=103 tmpdir=/var/folders/tf/mzd8mjpn08n70hsj7jd3bk340000gn/T/auto-speech-20260423T212104-r6sn2i7w
+[pipeline] short path
+[tts_engine] loading mlx-community/Kokoro-82M-bf16 ...
+Fetching 56 files:   0%|          | 0/56 [00:00<?, ?it/s]Fetching 56 files: 100%|██████████| 56/56 [00:00<00:00, 46751.80it/s]
+[tts_engine] model loaded
+[tts_engine] synthesizing chars=103 voice=af_heart speed=1.0
+Creating new KokoroPipeline for language: a
+[tts_engine] wrote /var/folders/tf/mzd8mjpn08n70hsj7jd3bk340000gn/T/auto-speech-20260423T212104-r6sn2i7w/short-path.wav
+[pipeline] artifacts preserved at /var/folders/tf/mzd8mjpn08n70hsj7jd3bk340000gn/T/auto-speech-20260423T212104-r6sn2i7w
+=== TOTAL ELAPSED: 10.90s ===
