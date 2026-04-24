@@ -163,11 +163,66 @@ most-recent assistant message; `/speak 2` works; error paths fire clearly.
 **Check gate:** NFR table in 01-conceptualization passes for each scenario.
 **Deliverables:** `tests/manual_test_plan.md`, captured outputs, micro-design doc.
 
+### Phase 10 — Mandatory WAV concatenation (post-v0.1)
+**Goal:** every successful run leaves exactly one `full.wav`; chunks are
+deleted unless `--keep-artifacts`. Short path renames to `full.wav`.
+Supersedes (in spirit) v0.1's "nothing persists on success" asymmetry
+between paths.
+**Micro-process stub:**
+- M1: `WavConcatenator` (L1 I/O adapter).
+- M2: see phase-10 micro-design.
+- M3: orchestrator calls concatenator post-join (long), renames (short).
+- M4: stdlib `wave`; write-then-rename atomicity.
+**Check gate:** `--keep-artifacts` run shows only `full.wav` (short) or
+chunks + `full.wav` (long); frame-count sum invariant verified.
+**Deliverables:** `wav_concatenator.py`, edits to `pipeline.py` and
+`short_path.py`, test, micro-design doc, ADR-007.
+
+### Phase 11 — Source-hash cache + /replay (post-v0.1)
+**Goal:** a run whose source text hashes to an existing cache entry skips
+the entire pipeline and plays the cached `full.wav`. `/replay` slash
+command plays the most recent cache entry without consulting the transcript.
+**Micro-process stub:**
+- M1: `CacheStore`, `CacheEntry`. New slash command `/replay`.
+- M2: see phase-11 micro-design.
+- M3: `pipeline.py` checks store before full run; promotes tmpdir
+  `full.wav` into cache on successful miss-runs.
+- M4: cache dir `config/cache/<hash>/{full.wav, meta.json}`.
+**Check gate:** Two consecutive `/speak` invocations on the same source
+skip TTS on the second; `/replay` plays the most-recent.
+**Deliverables:** `cache_store.py`, `cache_entry.py`, `replay.md`
+slash command, `run_replay.sh`, edits to `speak.py`/`pipeline.py`,
+micro-design, ADR-008.
+
+### Phase 12 — mpv-based seekable playback (post-v0.1)
+**Goal:** swap `afplay` for `mpv` so playback supports pause, resume,
+seek (absolute and relative), jump-to-start, jump-to-end. The mpv
+process is long-lived across slash-command invocations via a JSON-IPC
+Unix socket.
+**Micro-process stub:**
+- M1: `MpvController` (L3 service), `MpvIpc` (L1 adapter). New slash
+  commands `/pause`, `/resume`, `/seek`, etc.
+- M2: see phase-12 micro-design.
+- M3: `MpvController` owns the mpv subprocess lifecycle + socket.
+  `PlaybackConsumer` routes through it for long-path, `ShortPathStrategy`
+  likewise.
+- M4: mpv `--input-ipc-server=<sock>`; JSON command line protocol.
+**Check gate:** During a long playback, `/pause` stops audio; `/resume`
+resumes from the same offset; `/seek +15` fast-forwards; `/seek end`
+jumps to the last second.
+**Deliverables:** `mpv_controller.py`, `mpv_ipc.py`, the new slash
+commands, Homebrew install note in `setup/install.sh`, micro-design,
+ADR-009.
+
 ## Act (post-completion)
 
-After Phase 9 successfully gates, a single retrospective note in
-`docs/plan/retrospective.md` captures:
+After Phase 9 successfully gated, a single retrospective note in
+`docs/plan/retrospective.md` captured:
 - What took longer than expected.
 - What the calibration revealed about Kokoro's actual throughput.
 - What the first listening session surfaced for `BASE_DURATION_SECONDS`.
 - Any emergent ADRs (e.g., bumping N from 4 → 5).
+
+Phases 10–12 add a second retrospective entry after Phase 12's check
+gate: lessons about always-concat ergonomics, cache hit rate in real
+usage, and mpv-controller lifecycle quirks.

@@ -134,3 +134,56 @@ the phase's check gate is the final task.
 | 9.3 | Run `/speak` on a long response with code; save tmpdir | `tests/outputs/<ts>-long-code/` |
 | 9.4 | Run `/speak 3` on a response 3 back; save tmpdir | `tests/outputs/<ts>-ordinal/` |
 | 9.5 | Capture NFR measurements; write retrospective | `docs/plan/retrospective.md` |
+
+---
+
+## Phase 10 — Mandatory WAV concatenation (post-v0.1)
+
+| # | Task | Artifact |
+|---|---|---|
+| 10.1 | Write ADR-007 (mandatory concat + cache-centric artifact) | `docs/decisions/ADR-007-mandatory-concat-and-cache-centric-artifact.md` |
+| 10.2 | Write micro-design for phase 10 | `docs/micro-design/phase-10-concat.md` |
+| 10.3 | Write `wav_concatenator.py` | `plugin/scripts/python/wav_concatenator.py` |
+| 10.4 | Write unit test: concat frame-count sum + format parity | `tests/test_wav_concat.py` |
+| 10.5 | Edit `short_path.py` — rename output to `full.wav` | `plugin/scripts/python/short_path.py` |
+| 10.6 | Edit `pipeline.py` — call concat post-join; conditional chunk cleanup | `plugin/scripts/python/pipeline.py` |
+| 10.7 | Run long-path test with `--keep-artifacts`; verify chunks + `full.wav` both present | manual gate |
+| 10.8 | Run short-path test with `--keep-artifacts`; verify only `full.wav` | manual gate |
+| 10.9 | Commit phase 10 | git commit |
+
+---
+
+## Phase 11 — Source-hash replay cache (post-v0.1)
+
+| # | Task | Artifact |
+|---|---|---|
+| 11.1 | Write ADR-008 (source-hash replay cache) | `docs/decisions/ADR-008-source-hash-replay-cache.md` |
+| 11.2 | Write micro-design for phase 11 | `docs/micro-design/phase-11-cache-replay.md` |
+| 11.3 | Write `cache_entry.py` (dataclass) | `plugin/scripts/python/cache_entry.py` |
+| 11.4 | Write `cache_store.py` (lookup / promote / list by mtime) | `plugin/scripts/python/cache_store.py` |
+| 11.5 | Add `--source-hash` to `speak.py`; extend `pipeline.py` to consult/promote cache | edits |
+| 11.6 | Edit `plugin/commands/speak.md` — compute sha256 of source, pass as flag | `plugin/commands/speak.md` |
+| 11.7 | Write `plugin/commands/replay.md` slash command | `plugin/commands/replay.md` |
+| 11.8 | Write `plugin/scripts/shell/run_replay.sh` | shell wrapper |
+| 11.9 | Write `plugin/scripts/python/replay.py` — play most-recent cache entry | entry |
+| 11.10 | Manual gate: run `/speak` twice on same source; second skips TTS | gate |
+| 11.11 | Manual gate: `/replay` plays most recent cache entry | gate |
+| 11.12 | Commit phase 11 | git commit |
+
+---
+
+## Phase 12 — mpv-based seekable playback (post-v0.1)
+
+| # | Task | Artifact |
+|---|---|---|
+| 12.1 | Write ADR-009 (mpv controller) | `docs/decisions/ADR-009-mpv-controller.md` |
+| 12.2 | Write micro-design for phase 12 | `docs/micro-design/phase-12-mpv-controller.md` |
+| 12.3 | Update `setup/install.sh` to install mpv (brew) | edits |
+| 12.4 | Write `mpv_ipc.py` (JSON line protocol over Unix socket) | `plugin/scripts/python/mpv_ipc.py` |
+| 12.5 | Write `mpv_controller.py` (subprocess lifecycle + control surface) | `plugin/scripts/python/mpv_controller.py` |
+| 12.6 | Edit `playback_consumer.py` / `short_path.py` to route through controller | edits |
+| 12.7 | Write slash commands `pause.md`, `resume.md`, `seek.md`, `restart.md`, `end.md` | commands |
+| 12.8 | Write `plugin/scripts/shell/run_control.sh` | shell wrapper |
+| 12.9 | Write `plugin/scripts/python/control.py` — send a single control op | entry |
+| 12.10 | Manual gate: during a long playback, pause / resume / seek / end each behave | gate |
+| 12.11 | Commit phase 12 | git commit |

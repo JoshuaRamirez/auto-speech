@@ -26,6 +26,7 @@ from short_path import ShortPathStrategy
 from tts_engine import TTSEngine, TTSGenerationError
 from voice_profile import VoiceProfile
 from voice_profile_store import VoiceProfileStore
+from wav_concatenator import WavConcatError, WavConcatenator
 
 
 EXIT_OK = 0
@@ -156,4 +157,20 @@ class PipelineOrchestrator:
             return EXIT_TTS_FAIL
         if consumer.error is not None:
             return EXIT_PLAYBACK_FAIL
+
+        # Invariant I-10.1: concat-iff-success. Both threads finished cleanly.
+        chunk_paths = [tmpdir / f"chunk-{d.index:03d}.wav" for d in plan]
+        full_path = tmpdir / "full.wav"
+        try:
+            WavConcatenator.concat(chunk_paths, full_path)
+        except WavConcatError as exc:
+            print(f"[pipeline] concat failed: {exc}", file=sys.stderr)
+            return EXIT_TTS_FAIL
+
+        # Invariant I-10.2: chunks-absent-on-success-unless-kept.
+        if not self._keep_artifacts:
+            for p in chunk_paths:
+                p.unlink(missing_ok=True)
+            print(f"[pipeline] removed {len(chunk_paths)} chunk WAVs")
+
         return EXIT_OK

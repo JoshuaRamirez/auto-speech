@@ -31,7 +31,7 @@ class ShortPathStrategy:
         tmpdir: Path,
         stop_event: threading.Event,
     ) -> int:
-        wav_path = tmpdir / "short-path.wav"
+        wav_path = tmpdir / "full.wav"
         tts_engine.synthesize(transcript.text, voice_profile, wav_path)
         if stop_event.is_set():
             return 130
