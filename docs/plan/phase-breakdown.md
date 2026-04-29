@@ -246,3 +246,20 @@ the phase's check gate is the final task.
 | 15.13 | Smoke test: cache miss triggers `claude -p` + audio | gate |
 | 15.14 | Smoke test: staleness check skips superseded worker | gate |
 | 15.15 | Commit phase 15 | git commit |
+
+---
+
+## Phase 16 — `/auto-speech-app` slash command launcher
+
+| # | Task | Artifact |
+|---|---|---|
+| 16.1 | Write ADR-013 (slash-command webapp launcher) | `docs/decisions/ADR-013-slash-command-webapp-launcher.md` |
+| 16.2 | Write micro-design for phase 16 | `docs/micro-design/phase-16-slash-command-webapp-launcher.md` |
+| 16.3 | Write `start_webapp.sh` (idempotent, double-fork, pidfile, health poll) | `plugin/scripts/shell/start_webapp.sh` |
+| 16.4 | Write `/auto-speech-app` slash command | `plugin/commands/auto-speech-app.md` |
+| 16.5 | Update `setup/install-plugin.sh` to symlink the new command | edits |
+| 16.6 | Smoke test: with server down → spawns + responds | gate |
+| 16.7 | Smoke test: with server up → "already running" | gate |
+| 16.8 | Smoke test: stale pidfile cleaned + fresh spawn | gate |
+| 16.9 | Smoke test: detachment survives shell exit | gate |
+| 16.10 | Commit phase 16 | git commit |

@@ -269,6 +269,24 @@ hit path; cache miss → rewrite → audio; staleness skip.
 **Deliverables:** hook + worker scripts, install/uninstall scripts,
 two slash commands, micro-design, ADR-012.
 
+### Phase 16 — `/auto-speech-app` slash command launcher (post-v0.1)
+**Goal:** a single slash command brings up the localhost web server
+detached and idempotent — useful both for first launch and for
+"is it still running?" checks. No new Python.
+**Micro-process stub:**
+- M1: `start_webapp.sh` (idempotent start with pidfile + python double-fork
+  detach), `auto-speech-app.md` slash command body.
+- M2: pidfile alive-check + URL health-check; clean stale pidfile;
+  spawn detached; poll for URL responsiveness up to 10 s.
+- M3: slash command runs the script; script reuses `run_server.sh`
+  (no edits to web_server.py).
+- M4: bash script + slash command; symlink installed by
+  `setup/install-plugin.sh`.
+**Check gate:** idempotent (twice = same one); spawn-when-down;
+detect-stale-pidfile; survives session exit.
+**Deliverables:** `start_webapp.sh`, `auto-speech-app.md`,
+`install-plugin.sh` edit, micro-design, ADR-013.
+
 ## Act (post-completion)
 
 After Phase 9 successfully gated, a single retrospective note in
