@@ -120,10 +120,14 @@
   <main>
     <section class="panel">
       <h2>Speak</h2>
-      <textarea id="text" placeholder="Paste or type text. Spoken verbatim — no rewrite. (For Claude responses, use /speak inside Claude Code instead.)"></textarea>
+      <textarea id="text" placeholder="Paste or type text. With rewrite on (default), Claude restates it for audio. With rewrite off, the text is spoken verbatim, including any markdown characters."></textarea>
       <div class="row" style="margin-top: 10px;">
         <button id="speakBtn" class="primary">Speak</button>
         <button id="clearBtn">Clear</button>
+        <label style="margin-left: 8px; display: inline-flex; gap: 6px; align-items: center; font-size: 13px; color: var(--muted); cursor: pointer;">
+          <input type="checkbox" id="rewriteToggle" checked>
+          <span>Audio-friendly rewrite (Claude CLI)</span>
+        </label>
         <span id="speakHint" class="meta" style="margin-left: auto; color: var(--muted); font-size: 12px;"></span>
       </div>
     </section>
@@ -289,19 +293,23 @@
     }
   };
 
+  const rewriteToggle = $("rewriteToggle");
+
   speakBtn.addEventListener("click", async () => {
     const text = textArea.value;
     if (!text.trim()) { showToast("nothing to speak", "error"); return; }
+    const rewrite = rewriteToggle.checked;
     speakBtn.disabled = true;
-    speakHint.textContent = "generating…";
+    speakHint.textContent = rewrite ? "rewriting…" : "generating…";
     try {
-      const j = await sendControl("/api/speak", { text });
+      const j = await sendControl("/api/speak", { text, rewrite });
+      const modeTag = j.mode === "passthrough" ? " (verbatim)" : "";
       if (j.status === "cache_hit") {
-        showToast(`cache hit · ${j.duration_seconds.toFixed(1)}s`, "ok");
-        speakHint.textContent = `cache hit · ${fmt(j.duration_seconds)}`;
+        showToast(`cache hit${modeTag} · ${j.duration_seconds.toFixed(1)}s`, "ok");
+        speakHint.textContent = `cache hit${modeTag} · ${fmt(j.duration_seconds)}`;
       } else {
-        showToast(`spoke ${j.char_count} chars`, "ok");
-        speakHint.textContent = `${j.char_count} chars · ~${fmt(j.estimated_duration_seconds)}`;
+        showToast(`spoke ${j.char_count} chars${modeTag}`, "ok");
+        speakHint.textContent = `${j.char_count} chars${modeTag} · ~${fmt(j.estimated_duration_seconds)}`;
       }
       setPolling(500);
       refreshStatus();

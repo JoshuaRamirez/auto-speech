@@ -232,6 +232,25 @@ controls work from the UI.
 **Deliverables:** `web_server.py`, `index.html`, `run_server.sh`,
 edits to `pipeline.py` and `install.sh`, micro-design, ADR-010.
 
+### Phase 14 — Web rewriter via Claude CLI (post-v0.1)
+**Goal:** the web app produces audio-friendly speech for arbitrary
+pasted text by running the same 12-rule rewrite that `/speak` uses,
+via `claude -p` subprocess. UI exposes a checkbox to toggle rewrite
+on/off; cache key gains a pipeline-mode suffix when off so the two
+modes don't collide.
+**Micro-process stub:**
+- M1: `ClaudeCliRewriter` (single L1 adapter class).
+- M2: see phase-14 micro-design.
+- M3: rewriter sits between `_handle_speak` and the pipeline; cache
+  lookup happens after key-mode resolution.
+- M4: prompt template extracted to `plugin/prompts/audio_rewrite_prompt.txt`;
+  shared with `/speak` as the canonical source.
+**Check gate:** novel paste with rewrite-on hears markdown stripped;
+repeat hits cache; rewrite-off produces literal markdown speech under
+a distinct cache key.
+**Deliverables:** `claude_cli_rewriter.py`, prompt template file,
+`web_server.py` edits, `index.html` checkbox, micro-design, ADR-011.
+
 ## Act (post-completion)
 
 After Phase 9 successfully gated, a single retrospective note in

@@ -206,3 +206,21 @@ the phase's check gate is the final task.
 | 13.10 | Manual gate: Pause/Resume/Seek/Restart/End all work from UI | gate |
 | 13.11 | Manual gate: Cache list populates and Replay-from-cache works | gate |
 | 13.12 | Commit phase 13 | git commit |
+
+---
+
+## Phase 14 — Web rewriter via Claude CLI
+
+| # | Task | Artifact |
+|---|---|---|
+| 14.1 | Write ADR-011 (CLI vs API vs local-LM) | `docs/decisions/ADR-011-claude-cli-rewriter.md` |
+| 14.2 | Write micro-design for phase 14 | `docs/micro-design/phase-14-claude-cli-rewriter.md` |
+| 14.3 | Extract 12-rule prompt to a shared file | `plugin/prompts/audio_rewrite_prompt.txt` |
+| 14.4 | Write `claude_cli_rewriter.py` (subprocess wrapper) | `plugin/scripts/python/claude_cli_rewriter.py` |
+| 14.5 | Edit `web_server.py`: load rewriter; rewrite branch in `_handle_speak`; cache-key mode suffix | edits |
+| 14.6 | Edit `index.html`: add rewrite checkbox; pass flag in POST | edits |
+| 14.7 | Smoke test: rewrite-on novel paste → markdown stripped in audio | gate |
+| 14.8 | Smoke test: rewrite-on repeat → cache hit, no claude invocation | gate |
+| 14.9 | Smoke test: rewrite-off novel paste → distinct cache key, literal speech | gate |
+| 14.10 | Smoke test: rewrite-on with `claude` removed from PATH → loud error | gate |
+| 14.11 | Commit phase 14 | git commit |

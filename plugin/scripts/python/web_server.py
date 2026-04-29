@@ -30,6 +30,12 @@ from flask import Flask, jsonify, render_template, request
 from audio_transcript import AudioTranscript
 from cache_entry import CacheEntry
 from cache_store import CachePromotionError, CacheStore
+from claude_cli_rewriter import (
+    ClaudeCliRewriteError,
+    ClaudeCliRewriter,
+    ClaudeCliUnavailable,
+    load_default_template,
+)
 from config_constants import DEFAULT_SPEED, DEFAULT_VOICE_ID, FALLBACK_CHARS_PER_SEC
 from duration_estimator import DurationEstimator
 from mpv_controller import MpvController, MpvNotInstalledError, MpvStartupError
@@ -95,6 +101,22 @@ class WebServer:
         self._tts_executor = ThreadPoolExecutor(
             max_workers=1, thread_name_prefix="tts-worker"
         )
+
+        # Phase 14: shared 12-rule rewrite prompt + CLI-backed rewriter.
+        try:
+            template = load_default_template()
+        except FileNotFoundError as exc:
+            print(f"[web] WARNING: rewrite prompt missing: {exc}", file=sys.stderr)
+            template = "{SOURCE}"
+        self._rewriter = ClaudeCliRewriter(template)
+        if self._rewriter.is_available():
+            print("[web] rewriter: claude CLI on PATH", file=sys.stderr)
+        else:
+            print(
+                "[web] WARNING: `claude` not on PATH. Rewrite-on requests will fail; "
+                "rewrite-off (pass-through) still works.",
+                file=sys.stderr,
+            )
 
         self._register_routes()
         self._prewarm_tts()
@@ -181,10 +203,15 @@ class WebServer:
     def _handle_speak(self):
         body = request.get_json(silent=True) or {}
         text = (body.get("text") or "").strip()
+        rewrite_mode = bool(body.get("rewrite", True))  # Phase 14: default ON
         if not text:
             return jsonify({"error": "text is required"}), 400
 
-        source_hash = self._compute_hash(text)
+        # Phase 14: distinct cache key per pipeline mode so rewrite-on and
+        # passthrough don't alias for the same source text.
+        source_hash = self._compute_hash(
+            text, mode="rewrite" if rewrite_mode else "passthrough"
+        )
 
         with self._lock:
             hit = self._cache.lookup(source_hash)
@@ -198,20 +225,36 @@ class WebServer:
                     {
                         "status": "cache_hit",
                         "hash": source_hash,
+                        "mode": "rewrite" if rewrite_mode else "passthrough",
                         "char_count": entry.char_count,
                         "duration_seconds": entry.duration_seconds,
                     }
                 )
 
-            # Miss: run the full pipeline with the held TTSEngine. MLX
-            # requires the same thread that loaded the model also runs
-            # every generate() — route through the dedicated worker.
+            # Miss. Decide what AUDIO_TEXT we're sending to TTS.
+            if rewrite_mode:
+                try:
+                    audio_text = self._rewriter.rewrite(text)
+                except ClaudeCliUnavailable as exc:
+                    return jsonify({"error": str(exc)}), 500
+                except ClaudeCliRewriteError as exc:
+                    return jsonify({"error": f"rewrite failed: {exc}"}), 500
+                print(
+                    f"[web] rewrite: {len(text)} → {len(audio_text)} chars",
+                    file=sys.stderr,
+                )
+            else:
+                audio_text = text
+
+            # Run the TTS pipeline with the held TTSEngine. MLX requires
+            # generate() runs on the same thread that loaded the model —
+            # route through the dedicated worker.
             orchestrator = PipelineOrchestrator(
                 source_hash=source_hash,
                 cache_root=_cache_root(),
                 tts_engine=self._tts,
             )
-            future = self._tts_executor.submit(orchestrator.run, text)
+            future = self._tts_executor.submit(orchestrator.run, audio_text)
             try:
                 rc = future.result()
             except Exception as exc:  # noqa: BLE001
@@ -219,12 +262,14 @@ class WebServer:
             if rc != EXIT_OK:
                 return jsonify({"error": f"pipeline exited with code {rc}"}), 500
 
-            est = DurationEstimator.estimate_seconds(len(text), self._profile)
+            est = DurationEstimator.estimate_seconds(len(audio_text), self._profile)
             return jsonify(
                 {
                     "status": "started",
                     "hash": source_hash,
-                    "char_count": len(text),
+                    "mode": "rewrite" if rewrite_mode else "passthrough",
+                    "source_char_count": len(text),
+                    "char_count": len(audio_text),
                     "estimated_duration_seconds": est,
                 }
             )
@@ -364,12 +409,24 @@ class WebServer:
             return jsonify({"error": err}), 502
         return jsonify({"status": "ok"})
 
-    def _compute_hash(self, text: str) -> str:
+    def _compute_hash(self, text: str, mode: str = "rewrite") -> str:
+        """Hash key for the cache.
+
+        Mode "rewrite" preserves the existing key shape (sha256 over
+        source||0x00||voice:speed) so cache entries created by the slash
+        command and by web rewrite-on share keys.
+
+        Mode "passthrough" appends 0x00||"passthrough" so its entries
+        live in a distinct key space and never alias rewrite entries
+        for the same source.
+        """
         key_input = (
             text.encode("utf-8")
             + b"\x00"
             + f"{self._profile.voice_id}:{self._profile.speed}".encode("utf-8")
         )
+        if mode != "rewrite":
+            key_input += b"\x00" + mode.encode("utf-8")
         return hashlib.sha256(key_input).hexdigest()
 
 
