@@ -253,21 +253,24 @@ class PipelineOrchestrator:
             f"[pipeline] plan chunks={len(plan)} est_total={plan.total_estimated_duration_seconds:.1f}s"
         )
 
-        # Phase 12 note: the consumer no longer plays per-chunk. The producer
-        # generates all chunks; we then concat; mpv plays the single WAV.
-        # Queue sized to hold every segment plus SENTINEL so the producer
-        # never blocks (there is no reader draining until we drain below).
+        # Phases 12 + 13 note: playback is no longer per-chunk. The producer
+        # generates all chunks; we concat; mpv plays the single WAV. Run
+        # the producer SYNCHRONOUSLY on the calling thread so single-thread
+        # TTS engines (MLX in particular: per-thread compute streams) keep
+        # their state on the same thread that loaded the model.
         queue = PlaybackQueue(capacity=max(len(plan) + 2, 4))
         producer = SegmentProducer(tts_engine, profile, tmpdir, queue, stop_event)
-        t_prod = threading.Thread(target=producer.run, args=(plan,), name="producer")
-        t_prod.start()
-        t_prod.join()
+        try:
+            producer.run(plan)
+        except Exception:
+            # SegmentProducer.run records the error before re-raising.
+            return EXIT_TTS_FAIL
 
         if producer.error is not None:
             return EXIT_TTS_FAIL
 
-        # Drain so the producer's SENTINEL contract is satisfied and the
-        # queue is empty before we let it be GC'd.
+        # Drain the queue so its SENTINEL contract is satisfied. The
+        # producer has already finished, so this is a non-blocking sweep.
         while True:
             item = queue.get(timeout=0.5)
             if item is SENTINEL:
