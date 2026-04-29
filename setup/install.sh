@@ -38,7 +38,7 @@ echo "[auto-speech install] installing mlx-audio and misaki..."
 # shellcheck disable=SC1091
 source "$VENV/bin/activate"
 uv pip install --upgrade pip
-uv pip install mlx-audio "misaki[en]" num2words
+uv pip install mlx-audio "misaki[en]" num2words "flask>=3.0"
 python -m spacy download en_core_web_sm
 
 date -u +"%Y-%m-%dT%H:%M:%SZ" > "$SENTINEL"

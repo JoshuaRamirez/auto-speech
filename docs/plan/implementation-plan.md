@@ -214,6 +214,24 @@ jumps to the last second.
 commands, Homebrew install note in `setup/install.sh`, micro-design,
 ADR-009.
 
+### Phase 13 — Localhost web UI (post-v0.1)
+**Goal:** a Flask server bound to 127.0.0.1:7860 exposes the existing
+pipeline + cache + mpv control surface through HTTP, with a single-page
+UI for paste-and-speak. Holds one TTSEngine for the life of the process
+so requests after the first skip the model load.
+**Micro-process stub:**
+- M1: `WebServer` (L4 service, single class). Refactor `PipelineOrchestrator`
+  to accept an injected `TTSEngine`.
+- M2: see phase-13 micro-design.
+- M3: routes call existing services; thread-lock serializes pipeline-running
+  endpoints.
+- M4: Flask + a single static index.html (inline CSS/JS).
+**Check gate:** Page loads at `http://127.0.0.1:7860/`; pasting text
+triggers a cache-miss run; second paste of same text hits cache; mpv
+controls work from the UI.
+**Deliverables:** `web_server.py`, `index.html`, `run_server.sh`,
+edits to `pipeline.py` and `install.sh`, micro-design, ADR-010.
+
 ## Act (post-completion)
 
 After Phase 9 successfully gated, a single retrospective note in

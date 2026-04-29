@@ -1,0 +1,360 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>auto-speech</title>
+  <style>
+    :root {
+      --bg: #0e1116;
+      --panel: #161b22;
+      --border: #2a313c;
+      --text: #d6dde6;
+      --muted: #8b95a3;
+      --accent: #5aa9ff;
+      --accent-strong: #2f86eb;
+      --good: #4cb784;
+      --warn: #d4a44b;
+      --bad: #e06b6b;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      font: 15px/1.5 -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif;
+      background: var(--bg); color: var(--text);
+    }
+    header {
+      padding: 14px 20px; border-bottom: 1px solid var(--border);
+      display: flex; align-items: baseline; justify-content: space-between;
+    }
+    header h1 { margin: 0; font-size: 17px; font-weight: 600; }
+    header .meta { color: var(--muted); font-size: 13px; }
+    main {
+      max-width: 920px; margin: 0 auto; padding: 18px 20px 60px;
+      display: grid; grid-template-columns: 1fr; gap: 16px;
+    }
+    .panel {
+      background: var(--panel); border: 1px solid var(--border);
+      border-radius: 8px; padding: 14px;
+    }
+    .panel h2 { margin: 0 0 10px; font-size: 13px; color: var(--muted);
+      text-transform: uppercase; letter-spacing: .04em; font-weight: 600; }
+    textarea {
+      width: 100%; min-height: 160px; resize: vertical;
+      font: 14px/1.5 ui-monospace, SFMono-Regular, Menlo, monospace;
+      background: #0a0d12; color: var(--text);
+      border: 1px solid var(--border); border-radius: 6px;
+      padding: 10px; outline: none;
+    }
+    textarea:focus { border-color: var(--accent); }
+    .row { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
+    .row + .row { margin-top: 8px; }
+    button {
+      font: inherit; padding: 7px 14px; border-radius: 6px;
+      border: 1px solid var(--border); background: #1d242d; color: var(--text);
+      cursor: pointer;
+    }
+    button:hover { border-color: var(--accent); color: var(--accent); }
+    button:disabled { opacity: .45; cursor: not-allowed; }
+    button.primary {
+      background: var(--accent-strong); border-color: var(--accent-strong); color: #fff;
+    }
+    button.primary:hover { background: var(--accent); border-color: var(--accent); color: #fff; }
+    button.danger { color: var(--bad); border-color: #5a3038; }
+    button.danger:hover { color: #fff; background: var(--bad); border-color: var(--bad); }
+    .status {
+      display: flex; align-items: center; gap: 12px;
+      font: 13px ui-monospace, SFMono-Regular, Menlo, monospace;
+      color: var(--muted);
+    }
+    .status .dot {
+      width: 8px; height: 8px; border-radius: 50%;
+      background: var(--muted);
+    }
+    .status.active .dot { background: var(--good); box-shadow: 0 0 6px var(--good); }
+    .status.paused .dot { background: var(--warn); }
+    progress {
+      flex: 1; height: 8px; background: #0a0d12;
+      border: 1px solid var(--border); border-radius: 4px;
+      appearance: none; -webkit-appearance: none;
+    }
+    progress::-webkit-progress-bar { background: #0a0d12; border-radius: 4px; }
+    progress::-webkit-progress-value { background: var(--accent); border-radius: 4px; }
+    .cache-list {
+      max-height: 280px; overflow-y: auto;
+      border: 1px solid var(--border); border-radius: 6px; background: #0a0d12;
+    }
+    .cache-empty { padding: 14px; color: var(--muted); font-style: italic; text-align: center; }
+    .cache-entry {
+      padding: 10px 12px; border-bottom: 1px solid var(--border);
+      display: grid; grid-template-columns: 1fr auto; gap: 10px; align-items: center;
+      cursor: pointer;
+    }
+    .cache-entry:last-child { border-bottom: none; }
+    .cache-entry:hover { background: #131a23; }
+    .cache-entry .meta {
+      font: 12px ui-monospace, SFMono-Regular, Menlo, monospace; color: var(--muted);
+    }
+    .cache-entry .hash { color: var(--accent); }
+    .toast {
+      position: fixed; right: 20px; bottom: 20px;
+      background: #1d242d; border: 1px solid var(--border);
+      border-radius: 6px; padding: 10px 14px; font-size: 13px;
+      max-width: 380px;
+      transform: translateY(20px); opacity: 0;
+      transition: transform .18s, opacity .18s;
+    }
+    .toast.show { transform: translateY(0); opacity: 1; }
+    .toast.error { border-color: var(--bad); color: var(--bad); }
+    .toast.ok { border-color: var(--good); }
+  </style>
+</head>
+<body>
+  <header>
+    <h1>auto-speech</h1>
+    <div class="meta" id="profile">
+      voice {{ voice_id }} · speed {{ "%.2f"|format(speed) }} · {{ "%.2f"|format(chars_per_second) }} chars/s
+    </div>
+  </header>
+
+  <main>
+    <section class="panel">
+      <h2>Speak</h2>
+      <textarea id="text" placeholder="Paste or type text. Spoken verbatim — no rewrite. (For Claude responses, use /speak inside Claude Code instead.)"></textarea>
+      <div class="row" style="margin-top: 10px;">
+        <button id="speakBtn" class="primary">Speak</button>
+        <button id="clearBtn">Clear</button>
+        <span id="speakHint" class="meta" style="margin-left: auto; color: var(--muted); font-size: 12px;"></span>
+      </div>
+    </section>
+
+    <section class="panel">
+      <h2>Playback</h2>
+      <div class="status" id="statusRow">
+        <div class="dot"></div>
+        <span id="statusText">idle</span>
+        <progress id="progress" value="0" max="1"></progress>
+        <span id="positionText" class="meta">0:00 / 0:00</span>
+      </div>
+      <div class="row" style="margin-top: 10px;">
+        <button data-act="pause">Pause</button>
+        <button data-act="resume">Resume</button>
+        <button data-act="restart">Restart</button>
+        <button data-seek="-30">−30s</button>
+        <button data-seek="-15">−15s</button>
+        <button data-seek="+15">+15s</button>
+        <button data-seek="+30">+30s</button>
+        <button data-seek="end">Skip to end</button>
+        <button data-act="end" class="danger">End</button>
+      </div>
+    </section>
+
+    <section class="panel">
+      <h2>Cache</h2>
+      <div id="cacheList" class="cache-list">
+        <div class="cache-empty">no entries yet</div>
+      </div>
+    </section>
+  </main>
+
+  <div id="toast" class="toast" role="status" aria-live="polite"></div>
+
+<script>
+(() => {
+  const $ = (id) => document.getElementById(id);
+  const textArea = $("text");
+  const speakBtn = $("speakBtn");
+  const clearBtn = $("clearBtn");
+  const speakHint = $("speakHint");
+  const statusRow = $("statusRow");
+  const statusText = $("statusText");
+  const positionText = $("positionText");
+  const progressEl = $("progress");
+  const cacheList = $("cacheList");
+  const toast = $("toast");
+
+  let pollHandle = null;
+  let pollInterval = 2000;
+
+  const showToast = (msg, kind = "ok", ms = 3000) => {
+    toast.textContent = msg;
+    toast.className = `toast show ${kind}`;
+    setTimeout(() => toast.classList.remove("show"), ms);
+  };
+
+  const fmt = (s) => {
+    if (!isFinite(s) || s < 0) s = 0;
+    const m = Math.floor(s / 60);
+    const ss = Math.floor(s % 60).toString().padStart(2, "0");
+    return `${m}:${ss}`;
+  };
+
+  const setPolling = (intervalMs) => {
+    if (pollHandle) clearInterval(pollHandle);
+    pollInterval = intervalMs;
+    pollHandle = setInterval(refreshStatus, pollInterval);
+  };
+
+  const refreshStatus = async () => {
+    try {
+      const r = await fetch("/api/status");
+      const j = await r.json();
+      if (!j.active) {
+        statusRow.className = "status";
+        statusText.textContent = "idle";
+        progressEl.value = 0; progressEl.max = 1;
+        positionText.textContent = "0:00 / 0:00";
+        if (pollInterval !== 2000) setPolling(2000);
+        return;
+      }
+      statusRow.className = "status " + (j.paused ? "paused" : "active");
+      statusText.textContent = j.paused ? "paused" : "playing";
+      progressEl.max = Math.max(j.duration, 0.01);
+      progressEl.value = Math.min(j.position, progressEl.max);
+      positionText.textContent = `${fmt(j.position)} / ${fmt(j.duration)}`;
+      if (pollInterval !== 500) setPolling(500);
+    } catch (e) {
+      // If we can't reach the server, just leave the UI as-is.
+    }
+  };
+
+  // Build a single cache entry node using safe DOM construction (no innerHTML).
+  const buildCacheEntry = (e) => {
+    const wrap = document.createElement("div");
+    wrap.className = "cache-entry";
+    wrap.dataset.hash = e.hash;
+
+    const left = document.createElement("div");
+
+    const line1 = document.createElement("div");
+    line1.className = "meta";
+    const hashSpan = document.createElement("span");
+    hashSpan.className = "hash";
+    hashSpan.textContent = e.hash.slice(0, 16);
+    line1.appendChild(hashSpan);
+    line1.appendChild(document.createTextNode(
+      ` · ${e.char_count} chars · ${fmt(e.duration_seconds)} · ${e.voice_id} @${e.speed}`
+    ));
+
+    const line2 = document.createElement("div");
+    line2.className = "meta";
+    line2.textContent = e.created_at;
+
+    left.appendChild(line1);
+    left.appendChild(line2);
+
+    const replayBtn = document.createElement("button");
+    replayBtn.dataset.replay = e.hash;
+    replayBtn.textContent = "Replay";
+
+    wrap.appendChild(left);
+    wrap.appendChild(replayBtn);
+    return wrap;
+  };
+
+  const renderCache = (entries) => {
+    while (cacheList.firstChild) cacheList.removeChild(cacheList.firstChild);
+    if (!entries || entries.length === 0) {
+      const empty = document.createElement("div");
+      empty.className = "cache-empty";
+      empty.textContent = "no entries yet";
+      cacheList.appendChild(empty);
+      return;
+    }
+    for (const e of entries) cacheList.appendChild(buildCacheEntry(e));
+  };
+
+  const refreshCache = async () => {
+    try {
+      const r = await fetch("/api/cache");
+      const j = await r.json();
+      renderCache(j.entries || []);
+    } catch (e) { /* ignore */ }
+  };
+
+  const sendControl = async (path, body = null) => {
+    try {
+      const opts = { method: "POST" };
+      if (body !== null) {
+        opts.headers = { "Content-Type": "application/json" };
+        opts.body = JSON.stringify(body);
+      }
+      const r = await fetch(path, opts);
+      const j = await r.json();
+      if (!r.ok) throw new Error(j.error || `HTTP ${r.status}`);
+      return j;
+    } catch (e) {
+      showToast(e.message || String(e), "error");
+      throw e;
+    }
+  };
+
+  speakBtn.addEventListener("click", async () => {
+    const text = textArea.value;
+    if (!text.trim()) { showToast("nothing to speak", "error"); return; }
+    speakBtn.disabled = true;
+    speakHint.textContent = "generating…";
+    try {
+      const j = await sendControl("/api/speak", { text });
+      if (j.status === "cache_hit") {
+        showToast(`cache hit · ${j.duration_seconds.toFixed(1)}s`, "ok");
+        speakHint.textContent = `cache hit · ${fmt(j.duration_seconds)}`;
+      } else {
+        showToast(`spoke ${j.char_count} chars`, "ok");
+        speakHint.textContent = `${j.char_count} chars · ~${fmt(j.estimated_duration_seconds)}`;
+      }
+      setPolling(500);
+      refreshStatus();
+      refreshCache();
+    } catch (e) {
+      speakHint.textContent = "";
+    } finally {
+      speakBtn.disabled = false;
+    }
+  });
+
+  clearBtn.addEventListener("click", () => { textArea.value = ""; speakHint.textContent = ""; });
+
+  document.querySelectorAll("[data-act]").forEach(btn => {
+    btn.addEventListener("click", async () => {
+      const act = btn.getAttribute("data-act");
+      try {
+        await sendControl(`/api/${act}`);
+        if (act === "end") showToast("ended", "ok");
+        refreshStatus();
+      } catch (_) {}
+    });
+  });
+
+  document.querySelectorAll("[data-seek]").forEach(btn => {
+    btn.addEventListener("click", async () => {
+      const target = btn.getAttribute("data-seek");
+      try {
+        await sendControl("/api/seek", { target });
+        refreshStatus();
+      } catch (_) {}
+    });
+  });
+
+  cacheList.addEventListener("click", async (ev) => {
+    const replayBtn = ev.target.closest("[data-replay]");
+    const entry = ev.target.closest(".cache-entry");
+    const hash = (replayBtn && replayBtn.getAttribute("data-replay"))
+              || (entry && entry.dataset.hash);
+    if (!hash) return;
+    try {
+      await sendControl("/api/replay", { hash });
+      showToast("replaying cached", "ok");
+      setPolling(500);
+      refreshStatus();
+    } catch (_) {}
+  });
+
+  // initial load
+  refreshCache();
+  setPolling(2000);
+  refreshStatus();
+})();
+</script>
+</body>
+</html>

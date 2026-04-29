@@ -99,10 +99,14 @@ class PipelineOrchestrator:
         keep_artifacts: bool = False,
         source_hash: str | None = None,
         cache_root: Path | None = None,
+        tts_engine: TTSEngine | None = None,
     ) -> None:
         self._keep_artifacts = keep_artifacts
         self._source_hash = source_hash
         self._cache = CacheStore(cache_root or _default_cache_root())
+        # When a long-lived caller (e.g., the web server) holds a hot
+        # TTSEngine, injecting it here skips the per-run model load.
+        self._injected_tts = tts_engine
 
     def _maybe_cache_hit(self, profile: VoiceProfile) -> int | None:
         """If --source-hash was provided and the cache has a matching entry,
@@ -153,7 +157,7 @@ class PipelineOrchestrator:
             f"tmpdir={tmpdir}"
         )
 
-        tts_engine = TTSEngine()
+        tts_engine = self._injected_tts or TTSEngine()
         short_path = ShortPathStrategy(SHORT_THRESHOLD_SECONDS)
 
         exit_code = EXIT_OK

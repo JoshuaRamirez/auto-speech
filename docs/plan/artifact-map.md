@@ -81,14 +81,16 @@ Per-phase micro-design documents live in `docs/micro-design/`.
 | 10 — Mandatory concat | `docs/micro-design/phase-10-concat.md` | `plugin/scripts/python/wav_concatenator.py`; edits to `pipeline.py`, `short_path.py`; `tests/test_wav_concat.py` |
 | 11 — Source-hash cache + `/replay` | `docs/micro-design/phase-11-cache-replay.md` | `plugin/scripts/python/cache_store.py`, `plugin/scripts/python/cache_entry.py`; new slash command `plugin/commands/replay.md`; edits to `speak.py`, `pipeline.py`; shell wrapper `plugin/scripts/shell/run_replay.sh` |
 | 12 — mpv-based seekable playback | `docs/micro-design/phase-12-mpv-controller.md` | `plugin/scripts/python/mpv_controller.py`, `plugin/scripts/python/mpv_ipc.py`; new slash commands under `plugin/commands/` (`pause.md`, `resume.md`, `seek.md`, etc.); edits to `playback_consumer.py` and `short_path.py` to route through the controller |
+| 13 — Localhost web server | `docs/micro-design/phase-13-web-server.md` | `plugin/scripts/python/web_server.py`, `plugin/web/templates/index.html`, `plugin/scripts/shell/run_server.sh`; edits to `pipeline.py` (injectable TTSEngine), `setup/install.sh` (flask) |
 
-### New ADRs for phases 10–12
+### ADRs
 
 | ADR | Path |
 |---|---|
 | 007 — Mandatory concatenation; cache-centric single-artifact model | `docs/decisions/ADR-007-mandatory-concat-and-cache-centric-artifact.md` |
 | 008 — Source-hash replay cache | `docs/decisions/ADR-008-source-hash-replay-cache.md` |
 | 009 — mpv-based seekable playback controller | `docs/decisions/ADR-009-mpv-controller.md` |
+| 010 — Localhost web UI | `docs/decisions/ADR-010-localhost-web-ui.md` |
 
 ---
 

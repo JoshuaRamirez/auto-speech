@@ -187,3 +187,22 @@ the phase's check gate is the final task.
 | 12.9 | Write `plugin/scripts/python/control.py` — send a single control op | entry |
 | 12.10 | Manual gate: during a long playback, pause / resume / seek / end each behave | gate |
 | 12.11 | Commit phase 12 | git commit |
+
+---
+
+## Phase 13 — Localhost web UI
+
+| # | Task | Artifact |
+|---|---|---|
+| 13.1 | Write ADR-010 (localhost web UI) | `docs/decisions/ADR-010-localhost-web-ui.md` |
+| 13.2 | Write micro-design for phase 13 | `docs/micro-design/phase-13-web-server.md` |
+| 13.3 | Refactor `PipelineOrchestrator.__init__` to accept `tts_engine` param | edits |
+| 13.4 | Add `flask` to `setup/install.sh` and install into the venv | edits |
+| 13.5 | Write `plugin/scripts/python/web_server.py` (WebServer class + main) | new |
+| 13.6 | Write `plugin/web/templates/index.html` (UI) | new |
+| 13.7 | Write `plugin/scripts/shell/run_server.sh` | new |
+| 13.8 | Manual gate: server boots, model pre-warmed, `/api/status` returns | gate |
+| 13.9 | Manual gate: Speak → cache miss; Speak again → cache hit | gate |
+| 13.10 | Manual gate: Pause/Resume/Seek/Restart/End all work from UI | gate |
+| 13.11 | Manual gate: Cache list populates and Replay-from-cache works | gate |
+| 13.12 | Commit phase 13 | git commit |
