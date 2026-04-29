@@ -27,6 +27,15 @@ if ! command -v mpv >/dev/null 2>&1; then
     fi
 fi
 
+if ! command -v jq >/dev/null 2>&1; then
+    if command -v brew >/dev/null 2>&1; then
+        echo "[auto-speech install] installing jq via brew (used by setup/install-hook.sh)"
+        brew install jq
+    else
+        echo "warning: jq is not installed; setup/install-hook.sh will fail until you install it." >&2
+    fi
+fi
+
 if [[ ! -d "$VENV" ]]; then
     echo "[auto-speech install] creating venv at $VENV with Python 3.12"
     uv venv --python 3.12 "$VENV"

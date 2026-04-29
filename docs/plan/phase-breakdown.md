@@ -224,3 +224,25 @@ the phase's check gate is the final task.
 | 14.9 | Smoke test: rewrite-off novel paste → distinct cache key, literal speech | gate |
 | 14.10 | Smoke test: rewrite-on with `claude` removed from PATH → loud error | gate |
 | 14.11 | Commit phase 14 | git commit |
+
+---
+
+## Phase 15 — Autoplay-on-Stop hook
+
+| # | Task | Artifact |
+|---|---|---|
+| 15.1 | Write ADR-012 (Stop-hook autoplay) | `docs/decisions/ADR-012-stop-hook-autoplay.md` |
+| 15.2 | Write micro-design for phase 15 | `docs/micro-design/phase-15-stop-hook-autoplay.md` |
+| 15.3 | Add `jq` check to `setup/install.sh` (brew-install if missing) | edits |
+| 15.4 | Write `autoplay_hook.sh` (entrypoint, fast checks, spawn worker) | `plugin/scripts/shell/autoplay_hook.sh` |
+| 15.5 | Write `autoplay_worker.sh` (detached worker; rewrite + speak) | `plugin/scripts/shell/autoplay_worker.sh` |
+| 15.6 | Write `setup/install-hook.sh` (idempotent jq-edit of settings.json) | `setup/install-hook.sh` |
+| 15.7 | Write `setup/uninstall-hook.sh` (idempotent removal) | `setup/uninstall-hook.sh` |
+| 15.8 | Write `/autoplay-on` and `/autoplay-off` slash commands | `plugin/commands/autoplay-on.md`, `plugin/commands/autoplay-off.md` |
+| 15.9 | Update `setup/install-plugin.sh` to symlink the new commands | edits |
+| 15.10 | Smoke test: install/uninstall idempotent | gate |
+| 15.11 | Smoke test: marker fast-path skips work | gate |
+| 15.12 | Smoke test: cache hit triggers playback | gate |
+| 15.13 | Smoke test: cache miss triggers `claude -p` + audio | gate |
+| 15.14 | Smoke test: staleness check skips superseded worker | gate |
+| 15.15 | Commit phase 15 | git commit |

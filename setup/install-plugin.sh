@@ -45,5 +45,7 @@ install_one "resume.md"
 install_one "seek.md"
 install_one "restart.md"
 install_one "end.md"
+install_one "autoplay-on.md"
+install_one "autoplay-off.md"
 
-echo "[install-plugin] auto-speech commands installed: /speak /replay /pause /resume /seek /restart /end"
+echo "[install-plugin] auto-speech commands installed: /speak /replay /pause /resume /seek /restart /end /autoplay-on /autoplay-off"

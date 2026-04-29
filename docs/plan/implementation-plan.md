@@ -251,6 +251,24 @@ a distinct cache key.
 **Deliverables:** `claude_cli_rewriter.py`, prompt template file,
 `web_server.py` edits, `index.html` checkbox, micro-design, ADR-011.
 
+### Phase 15 — Autoplay-on-Stop hook (post-v0.1)
+**Goal:** when installed, Claude Code's Stop hook auto-runs the same
+backend the web app uses (extract → `claude -p` → `speak.py`) so every
+substantive assistant turn becomes audio. Opt-in, global, fast pause
+via a marker file.
+**Micro-process stub:**
+- M1: shell scripts only — `autoplay_hook.sh` (entrypoint), `autoplay_worker.sh`
+  (detached worker). New slash commands `/autoplay-on`, `/autoplay-off`.
+- M2: hook does fast checks (~50 ms), spawns worker via setsid; worker
+  performs cache lookup, `claude -p` rewrite on miss, then speak.
+- M3: reuses Phase 14's CLI rewriter, Phase 11's cache, Phase 12's mpv.
+  No new Python.
+- M4: jq-based idempotent `setup/install-hook.sh` / `uninstall-hook.sh`.
+**Check gate:** install/uninstall idempotent; marker → fast bail; cache
+hit path; cache miss → rewrite → audio; staleness skip.
+**Deliverables:** hook + worker scripts, install/uninstall scripts,
+two slash commands, micro-design, ADR-012.
+
 ## Act (post-completion)
 
 After Phase 9 successfully gated, a single retrospective note in

@@ -83,6 +83,7 @@ Per-phase micro-design documents live in `docs/micro-design/`.
 | 12 — mpv-based seekable playback | `docs/micro-design/phase-12-mpv-controller.md` | `plugin/scripts/python/mpv_controller.py`, `plugin/scripts/python/mpv_ipc.py`; new slash commands under `plugin/commands/` (`pause.md`, `resume.md`, `seek.md`, etc.); edits to `playback_consumer.py` and `short_path.py` to route through the controller |
 | 13 — Localhost web server | `docs/micro-design/phase-13-web-server.md` | `plugin/scripts/python/web_server.py`, `plugin/web/templates/index.html`, `plugin/scripts/shell/run_server.sh`; edits to `pipeline.py` (injectable TTSEngine), `setup/install.sh` (flask) |
 | 14 — Web rewriter via Claude CLI | `docs/micro-design/phase-14-claude-cli-rewriter.md` | `plugin/scripts/python/claude_cli_rewriter.py`, `plugin/prompts/audio_rewrite_prompt.txt`; edits to `web_server.py` (rewrite branch + cache-key mode suffix), `index.html` (checkbox) |
+| 15 — Stop-hook autoplay | `docs/micro-design/phase-15-stop-hook-autoplay.md` | `plugin/scripts/shell/autoplay_hook.sh`, `plugin/scripts/shell/autoplay_worker.sh`, `setup/install-hook.sh`, `setup/uninstall-hook.sh`, `plugin/commands/autoplay-on.md`, `plugin/commands/autoplay-off.md` |
 
 ### ADRs
 
@@ -93,6 +94,7 @@ Per-phase micro-design documents live in `docs/micro-design/`.
 | 009 — mpv-based seekable playback controller | `docs/decisions/ADR-009-mpv-controller.md` |
 | 010 — Localhost web UI | `docs/decisions/ADR-010-localhost-web-ui.md` |
 | 011 — Web rewriter via `claude -p` (CLI subprocess) | `docs/decisions/ADR-011-claude-cli-rewriter.md` |
+| 012 — Autoplay-on-Stop via Claude Code hook (opt-in, global, detached) | `docs/decisions/ADR-012-stop-hook-autoplay.md` |
 
 ---
 
