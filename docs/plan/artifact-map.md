@@ -85,6 +85,7 @@ Per-phase micro-design documents live in `docs/micro-design/`.
 | 14 — Web rewriter via Claude CLI | `docs/micro-design/phase-14-claude-cli-rewriter.md` | `plugin/scripts/python/claude_cli_rewriter.py`, `plugin/prompts/audio_rewrite_prompt.txt`; edits to `web_server.py` (rewrite branch + cache-key mode suffix), `index.html` (checkbox) |
 | 15 — Stop-hook autoplay | `docs/micro-design/phase-15-stop-hook-autoplay.md` | `plugin/scripts/shell/autoplay_hook.sh`, `plugin/scripts/shell/autoplay_worker.sh`, `setup/install-hook.sh`, `setup/uninstall-hook.sh`, `plugin/commands/autoplay-on.md`, `plugin/commands/autoplay-off.md` |
 | 16 — `/auto-speech-app` launcher | `docs/micro-design/phase-16-slash-command-webapp-launcher.md` | `plugin/scripts/shell/start_webapp.sh`, `plugin/commands/auto-speech-app.md`; edits to `setup/install-plugin.sh` |
+| 17 — Fire-and-forget `/api/speak` + job tracker | `docs/micro-design/phase-17-fire-and-forget-speak.md` | `plugin/scripts/python/job_state.py`, `plugin/scripts/python/job_tracker.py`; edits to `web_server.py` and `index.html` |
 
 ### ADRs
 
@@ -97,6 +98,7 @@ Per-phase micro-design documents live in `docs/micro-design/`.
 | 011 — Web rewriter via `claude -p` (CLI subprocess) | `docs/decisions/ADR-011-claude-cli-rewriter.md` |
 | 012 — Autoplay-on-Stop via Claude Code hook (opt-in, global, detached) | `docs/decisions/ADR-012-stop-hook-autoplay.md` |
 | 013 — `/auto-speech-app` slash command starts the localhost web server | `docs/decisions/ADR-013-slash-command-webapp-launcher.md` |
+| 014 — Fire-and-forget `/api/speak` with single-active-job tracking | `docs/decisions/ADR-014-fire-and-forget-speak.md` |
 
 ---
 

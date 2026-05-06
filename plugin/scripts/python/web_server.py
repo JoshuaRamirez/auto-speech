@@ -21,6 +21,8 @@ import argparse
 import hashlib
 import sys
 import threading
+import time
+import traceback
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timezone
 from pathlib import Path
@@ -38,6 +40,12 @@ from claude_cli_rewriter import (
 )
 from config_constants import DEFAULT_SPEED, DEFAULT_VOICE_ID, FALLBACK_CHARS_PER_SEC
 from duration_estimator import DurationEstimator
+from job_state import (
+    PHASE_GENERATING,
+    PHASE_HANDED_OFF,
+    PHASE_REWRITING,
+)
+from job_tracker import JobTracker
 from mpv_controller import MpvController, MpvNotInstalledError, MpvStartupError
 from mpv_ipc import MpvIpc, MpvIpcError
 from pipeline import (
@@ -68,6 +76,24 @@ def _cache_root() -> Path:
 
 def _templates_dir() -> Path:
     return _project_root() / "plugin" / "web" / "templates"
+
+
+def _job_to_dict(job) -> dict | None:
+    """Render a Job as the JSON shape /api/status emits, or None."""
+    if job is None:
+        return None
+    elapsed = max(0.0, time.time() - job.started_at)
+    return {
+        "id": job.id,
+        "phase": job.phase,
+        "started_at": job.started_at,
+        "elapsed_s": elapsed,
+        "mode": job.mode,
+        "source_chars": job.source_chars,
+        "rewrite_chars": job.rewrite_chars,
+        "hash": job.hash,
+        "error": job.error,
+    }
 
 
 def _fallback_profile() -> VoiceProfile:
@@ -101,6 +127,10 @@ class WebServer:
         self._tts_executor = ThreadPoolExecutor(
             max_workers=1, thread_name_prefix="tts-worker"
         )
+
+        # Phase 17: at-most-one fire-and-forget speak job. The HTTP layer
+        # consults the tracker to decide 202 (queued) vs 409 (busy).
+        self._jobs = JobTracker()
 
         # Phase 14: shared 12-rule rewrite prompt + CLI-backed rewriter.
         try:
@@ -212,8 +242,12 @@ class WebServer:
         source_hash = self._compute_hash(
             text, mode="rewrite" if rewrite_mode else "passthrough"
         )
+        # Default 10 min for the rewriter; large pastes legitimately need it.
+        rewrite_timeout = float(body.get("rewrite_timeout_s", 600.0))
 
         with self._lock:
+            # Cache hits stay synchronous — they finish in ~50 ms and don't
+            # need the fire-and-forget round-trip.
             hit = self._cache.lookup(source_hash)
             if hit is not None:
                 wav_path, entry = hit
@@ -231,48 +265,116 @@ class WebServer:
                     }
                 )
 
-            # Miss. Decide what AUDIO_TEXT we're sending to TTS.
-            if rewrite_mode:
-                try:
-                    audio_text = self._rewriter.rewrite(text)
-                except ClaudeCliUnavailable as exc:
-                    return jsonify({"error": str(exc)}), 500
-                except ClaudeCliRewriteError as exc:
-                    return jsonify({"error": f"rewrite failed: {exc}"}), 500
+            # Phase 17: at-most-one in-flight job. If one is still active,
+            # tell the caller to wait — don't kill in-progress work.
+            if self._jobs.is_active():
+                cur = self._jobs.current()
+                return (
+                    jsonify(
+                        {
+                            "error": f"another speak job is in flight ({cur.phase})",
+                            "job": _job_to_dict(cur),
+                        }
+                    ),
+                    409,
+                )
+
+            # Miss + nothing in flight → register a new job and submit it.
+            mode_str = "rewrite" if rewrite_mode else "passthrough"
+            job = self._jobs.begin(
+                mode=mode_str,
+                source_chars=len(text),
+                source_hash=source_hash,
+            )
+
+        # Submit OUTSIDE the lock — the executor's worker is the real
+        # serializer. The lock just protected the begin/check critical region.
+        self._tts_executor.submit(
+            self._run_speak_job, text, mode_str, source_hash, rewrite_timeout
+        )
+
+        return (
+            jsonify(
+                {
+                    "status": "queued",
+                    "job": _job_to_dict(self._jobs.current()),
+                }
+            ),
+            202,
+        )
+
+    def _run_speak_job(
+        self,
+        text: str,
+        mode: str,
+        source_hash: str,
+        rewrite_timeout: float,
+    ) -> None:
+        """Background runner: rewrite (if needed) → TTS → mpv handoff.
+
+        Drives the JobTracker through phase transitions. Any exception
+        becomes a `failed` phase with the error string captured.
+        """
+        try:
+            if mode == "rewrite":
+                self._jobs.transition(PHASE_REWRITING)
                 print(
-                    f"[web] rewrite: {len(text)} → {len(audio_text)} chars",
+                    f"[web] job rewriting  src_chars={len(text)} "
+                    f"timeout={rewrite_timeout:.0f}s",
                     file=sys.stderr,
+                )
+                try:
+                    audio_text = self._rewriter.rewrite(
+                        text, timeout_seconds=rewrite_timeout
+                    )
+                except ClaudeCliUnavailable as exc:
+                    print(f"[web] job FAIL (rewriter unavailable): {exc}", file=sys.stderr)
+                    self._jobs.fail(str(exc))
+                    return
+                except ClaudeCliRewriteError as exc:
+                    print(f"[web] job FAIL (rewrite): {exc}", file=sys.stderr)
+                    self._jobs.fail(f"rewrite failed: {exc}")
+                    return
+                print(
+                    f"[web] job rewrite ok src={len(text)} → out={len(audio_text)} chars",
+                    file=sys.stderr,
+                )
+                self._jobs.transition(
+                    PHASE_GENERATING, rewrite_chars=len(audio_text)
                 )
             else:
                 audio_text = text
+                self._jobs.transition(
+                    PHASE_GENERATING, rewrite_chars=len(text)
+                )
 
-            # Run the TTS pipeline with the held TTSEngine. MLX requires
-            # generate() runs on the same thread that loaded the model —
-            # route through the dedicated worker.
             orchestrator = PipelineOrchestrator(
                 source_hash=source_hash,
                 cache_root=_cache_root(),
                 tts_engine=self._tts,
             )
-            future = self._tts_executor.submit(orchestrator.run, audio_text)
             try:
-                rc = future.result()
+                rc = orchestrator.run(audio_text)
             except Exception as exc:  # noqa: BLE001
-                return jsonify({"error": f"pipeline crashed: {exc}"}), 500
-            if rc != EXIT_OK:
-                return jsonify({"error": f"pipeline exited with code {rc}"}), 500
+                print(f"[web] job CRASH (pipeline): {exc!r}", file=sys.stderr)
+                traceback.print_exc(file=sys.stderr)
+                self._jobs.fail(f"pipeline crashed: {exc!r}")
+                return
 
-            est = DurationEstimator.estimate_seconds(len(audio_text), self._profile)
-            return jsonify(
-                {
-                    "status": "started",
-                    "hash": source_hash,
-                    "mode": "rewrite" if rewrite_mode else "passthrough",
-                    "source_char_count": len(text),
-                    "char_count": len(audio_text),
-                    "estimated_duration_seconds": est,
-                }
-            )
+            if rc != EXIT_OK:
+                print(f"[web] job FAIL pipeline exit={rc}", file=sys.stderr)
+                self._jobs.fail(f"pipeline exited with code {rc}")
+                return
+
+            self._jobs.transition(PHASE_HANDED_OFF)
+            print("[web] job handed_off (mpv playing)", file=sys.stderr)
+        except Exception as exc:  # noqa: BLE001 — guard the worker thread
+            print(f"[web] job CRASH (outer): {exc!r}", file=sys.stderr)
+            traceback.print_exc(file=sys.stderr)
+            try:
+                self._jobs.fail(f"crash: {exc!r}")
+            except Exception:
+                pass
 
     def _handle_replay(self):
         body = request.get_json(silent=True) or {}
@@ -374,26 +476,38 @@ class WebServer:
         return self._send_mpv(["seek", absolute, "absolute"])
 
     def _handle_status(self):
+        # Build the playback half first.
         if not SessionDir.is_mpv_running():
-            return jsonify({"active": False})
-        sock = SessionDir.socket_path()
-        try:
-            time_pos = MpvIpc.send(["get_property", "time-pos"], sock).get("data")
-            duration = MpvIpc.send(["get_property", "duration"], sock).get("data")
-            paused = MpvIpc.send(["get_property", "pause"], sock).get("data")
-        except MpvIpcError:
-            return jsonify({"active": False})
-        wav_path = SessionDir.wav_path_path()
-        wav = wav_path.read_text(encoding="utf-8").strip() if wav_path.is_file() else ""
-        return jsonify(
-            {
-                "active": True,
-                "paused": bool(paused) if paused is not None else False,
-                "position": float(time_pos) if isinstance(time_pos, (int, float)) else 0.0,
-                "duration": float(duration) if isinstance(duration, (int, float)) else 0.0,
-                "wav": wav,
-            }
-        )
+            payload = {"active": False}
+        else:
+            sock = SessionDir.socket_path()
+            try:
+                time_pos = MpvIpc.send(["get_property", "time-pos"], sock).get("data")
+                duration = MpvIpc.send(["get_property", "duration"], sock).get("data")
+                paused = MpvIpc.send(["get_property", "pause"], sock).get("data")
+            except MpvIpcError:
+                payload = {"active": False}
+            else:
+                wav_path = SessionDir.wav_path_path()
+                wav = (
+                    wav_path.read_text(encoding="utf-8").strip()
+                    if wav_path.is_file()
+                    else ""
+                )
+                payload = {
+                    "active": True,
+                    "paused": bool(paused) if paused is not None else False,
+                    "position": float(time_pos)
+                    if isinstance(time_pos, (int, float))
+                    else 0.0,
+                    "duration": float(duration)
+                    if isinstance(duration, (int, float))
+                    else 0.0,
+                    "wav": wav,
+                }
+        # Phase 17: also report the current/last fire-and-forget job.
+        payload["job"] = _job_to_dict(self._jobs.current())
+        return jsonify(payload)
 
     # ----- helpers -----
 

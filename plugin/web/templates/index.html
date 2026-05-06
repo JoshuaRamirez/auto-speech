@@ -179,6 +179,10 @@
 
   let pollHandle = null;
   let pollInterval = 2000;
+  // Phase 17: track our own queued job so the status poll can update the
+  // hint and re-enable the button when it completes.
+  let lastJobId = null;
+  let lastJobPhase = null;
 
   const showToast = (msg, kind = "ok", ms = 3000) => {
     toast.textContent = msg;
@@ -199,16 +203,56 @@
     pollHandle = setInterval(refreshStatus, pollInterval);
   };
 
+  // Apply the `job` field returned from /api/status to the UI: hint text,
+  // button state, toast on completion. Only acts on jobs whose id matches
+  // the one we queued (lastJobId) so unrelated background work doesn't
+  // hijack the UI.
+  const handleJobUpdate = (job) => {
+    if (!job) return;
+    if (lastJobId && job.id === lastJobId) {
+      const elapsed = Math.round(job.elapsed_s || 0);
+      if (job.phase === "queued" || job.phase === "rewriting" || job.phase === "generating") {
+        const label = job.phase === "queued" ? "queued"
+                    : job.phase === "rewriting" ? "rewriting"
+                    : "generating";
+        speakHint.textContent = `${label} · ${elapsed}s`;
+        speakBtn.disabled = true;
+      } else if (job.phase === "handed_off") {
+        if (lastJobPhase !== "handed_off") {
+          const out = job.rewrite_chars ?? job.source_chars;
+          showToast(`spoke ${out} chars`, "ok");
+          speakHint.textContent = `${out} chars (${job.mode})`;
+          speakBtn.disabled = false;
+          lastJobId = null;
+        }
+      } else if (job.phase === "failed") {
+        if (lastJobPhase !== "failed") {
+          const err = job.error || "speak failed";
+          showToast(err, "error", 6000);
+          speakHint.textContent = "";
+          speakBtn.disabled = false;
+          lastJobId = null;
+        }
+      }
+      lastJobPhase = job.phase;
+    }
+  };
+
   const refreshStatus = async () => {
     try {
       const r = await fetch("/api/status");
       const j = await r.json();
+      handleJobUpdate(j.job);
+      const jobActive = j.job && (j.job.phase === "queued"
+                                  || j.job.phase === "rewriting"
+                                  || j.job.phase === "generating");
       if (!j.active) {
         statusRow.className = "status";
         statusText.textContent = "idle";
         progressEl.value = 0; progressEl.max = 1;
         positionText.textContent = "0:00 / 0:00";
-        if (pollInterval !== 2000) setPolling(2000);
+        const desired = jobActive ? 500 : 2000;
+        if (pollInterval !== desired) setPolling(desired);
         return;
       }
       statusRow.className = "status " + (j.paused ? "paused" : "active");
@@ -300,25 +344,59 @@
     if (!text.trim()) { showToast("nothing to speak", "error"); return; }
     const rewrite = rewriteToggle.checked;
     speakBtn.disabled = true;
-    speakHint.textContent = rewrite ? "rewriting…" : "generating…";
+    speakHint.textContent = rewrite ? "submitting…" : "submitting…";
+    let r, j;
     try {
-      const j = await sendControl("/api/speak", { text, rewrite });
+      r = await fetch("/api/speak", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ text, rewrite }),
+      });
+      j = await r.json();
+    } catch (e) {
+      showToast(e.message || String(e), "error");
+      speakHint.textContent = "";
+      speakBtn.disabled = false;
+      return;
+    }
+
+    if (r.status === 200 && j.status === "cache_hit") {
       const modeTag = j.mode === "passthrough" ? " (verbatim)" : "";
-      if (j.status === "cache_hit") {
-        showToast(`cache hit${modeTag} · ${j.duration_seconds.toFixed(1)}s`, "ok");
-        speakHint.textContent = `cache hit${modeTag} · ${fmt(j.duration_seconds)}`;
-      } else {
-        showToast(`spoke ${j.char_count} chars${modeTag}`, "ok");
-        speakHint.textContent = `${j.char_count} chars${modeTag} · ~${fmt(j.estimated_duration_seconds)}`;
-      }
+      showToast(`cache hit${modeTag} · ${j.duration_seconds.toFixed(1)}s`, "ok");
+      speakHint.textContent = `cache hit${modeTag} · ${fmt(j.duration_seconds)}`;
+      speakBtn.disabled = false;
       setPolling(500);
       refreshStatus();
       refreshCache();
-    } catch (e) {
-      speakHint.textContent = "";
-    } finally {
-      speakBtn.disabled = false;
+      return;
     }
+
+    if (r.status === 202 && j.job) {
+      // Queued — own this job so the status poll can update + re-enable.
+      lastJobId = j.job.id;
+      lastJobPhase = j.job.phase;
+      speakHint.textContent = `${j.job.phase} · 0s`;
+      // Button stays disabled; status poll will re-enable on terminal phase.
+      setPolling(500);
+      refreshStatus();
+      refreshCache();
+      return;
+    }
+
+    if (r.status === 409) {
+      const phase = j.job ? j.job.phase : "in progress";
+      showToast(`busy: another speak is ${phase}`, "error");
+      speakHint.textContent = "";
+      speakBtn.disabled = false;
+      setPolling(500);
+      refreshStatus();
+      return;
+    }
+
+    // Any other status: surface the error and re-enable.
+    showToast(j.error || `HTTP ${r.status}`, "error", 6000);
+    speakHint.textContent = "";
+    speakBtn.disabled = false;
   });
 
   clearBtn.addEventListener("click", () => { textArea.value = ""; speakHint.textContent = ""; });

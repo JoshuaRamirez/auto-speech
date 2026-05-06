@@ -263,3 +263,23 @@ the phase's check gate is the final task.
 | 16.8 | Smoke test: stale pidfile cleaned + fresh spawn | gate |
 | 16.9 | Smoke test: detachment survives shell exit | gate |
 | 16.10 | Commit phase 16 | git commit |
+
+---
+
+## Phase 17 — Fire-and-forget `/api/speak`
+
+| # | Task | Artifact |
+|---|---|---|
+| 17.1 | Write ADR-014 (fire-and-forget speak) | `docs/decisions/ADR-014-fire-and-forget-speak.md` |
+| 17.2 | Write micro-design for phase 17 | `docs/micro-design/phase-17-fire-and-forget-speak.md` |
+| 17.3 | Write `job_state.py` (Job dataclass + Phase constants) | `plugin/scripts/python/job_state.py` |
+| 17.4 | Write `job_tracker.py` (thread-safe single-job holder) | `plugin/scripts/python/job_tracker.py` |
+| 17.5 | Refactor `_handle_speak`: cache-hit sync, miss → submit + 202 | edits |
+| 17.6 | Add `_run_speak_job` background runner with phase transitions | edits |
+| 17.7 | Extend `_handle_status` with `job` field | edits |
+| 17.8 | Update `index.html`: 202/409 handling, job phase rendering | edits |
+| 17.9 | Smoke test: cache hit returns 200 unchanged | gate |
+| 17.10 | Smoke test: cache miss returns 202 with job, then status reports phases | gate |
+| 17.11 | Smoke test: concurrent POST returns 409 | gate |
+| 17.12 | Smoke test: failure (claude removed from PATH temporarily) → job → failed | gate |
+| 17.13 | Commit phase 17 | git commit |

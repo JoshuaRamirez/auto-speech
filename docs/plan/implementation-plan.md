@@ -287,6 +287,26 @@ detect-stale-pidfile; survives session exit.
 **Deliverables:** `start_webapp.sh`, `auto-speech-app.md`,
 `install-plugin.sh` edit, micro-design, ADR-013.
 
+### Phase 17 — Fire-and-forget `/api/speak` (post-v0.1)
+**Goal:** large pastes (≥10 KB → multi-minute rewrites) no longer
+hang the browser. POST returns 202 with a job descriptor; UI polls
+extended `/api/status` for phase progression. Single active job —
+concurrent POST returns 409.
+**Micro-process stub:**
+- M1: `Job` (immutable dataclass) + `JobTracker` (thread-safe
+  single-job holder).
+- M2: phases queued → rewriting → generating → handed_off | failed.
+- M3: speak handler decides cache-hit (sync) vs queue (async);
+  executor worker drives the rewrite + pipeline; status reports both
+  mpv state and current job.
+- M4: HTTP 202 / 409 contract + UI polling and ownership tracking
+  via job_id.
+**Check gate:** cache hit unchanged; cache miss queues; status
+reflects phases; second POST returns 409; failure path surfaces
+error string.
+**Deliverables:** `job_state.py`, `job_tracker.py`, `web_server.py`
+edits, `index.html` edits, micro-design, ADR-014.
+
 ## Act (post-completion)
 
 After Phase 9 successfully gated, a single retrospective note in
