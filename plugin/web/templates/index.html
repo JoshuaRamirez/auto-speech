@@ -107,6 +107,58 @@
     .toast.show { transform: translateY(0); opacity: 1; }
     .toast.error { border-color: var(--bad); color: var(--bad); }
     .toast.ok { border-color: var(--good); }
+
+    /* Phase 17: current-job panel */
+    .job-head {
+      display: flex; align-items: center; gap: 10px;
+      font: 13px ui-monospace, SFMono-Regular, Menlo, monospace;
+    }
+    .job-head .dot {
+      width: 8px; height: 8px; border-radius: 50%; background: var(--muted);
+    }
+    .job-head.queued .dot     { background: var(--muted); }
+    .job-head.rewriting .dot  { background: var(--accent); box-shadow: 0 0 6px var(--accent); }
+    .job-head.generating .dot { background: var(--accent); box-shadow: 0 0 6px var(--accent); }
+    .job-head.handed_off .dot { background: var(--good);   box-shadow: 0 0 6px var(--good); }
+    .job-head.failed .dot     { background: var(--bad);    box-shadow: 0 0 6px var(--bad); }
+    .job-head .phase {
+      text-transform: uppercase; letter-spacing: .04em; font-weight: 600;
+      color: var(--text);
+    }
+    .job-head .elapsed { margin-left: auto; color: var(--muted); }
+    .job-bar {
+      margin-top: 10px; height: 6px; background: #0a0d12;
+      border: 1px solid var(--border); border-radius: 4px;
+      overflow: hidden; position: relative;
+    }
+    .job-bar .fill {
+      position: absolute; top: 0; bottom: 0; left: 0;
+      width: 30%; background: var(--accent);
+      transform: translateX(-110%);
+    }
+    .job-bar.active .fill {
+      animation: job-bar-slide 1.6s cubic-bezier(.4,.0,.2,1) infinite;
+    }
+    .job-bar.done .fill { transform: none; width: 100%; background: var(--good); }
+    .job-bar.fail .fill { transform: none; width: 100%; background: var(--bad); }
+    @keyframes job-bar-slide {
+      0%   { transform: translateX(-110%); }
+      50%  { transform: translateX(110%); }
+      100% { transform: translateX(110%); }
+    }
+    .job-details {
+      margin-top: 10px;
+      font: 12px ui-monospace, SFMono-Regular, Menlo, monospace;
+      color: var(--muted);
+      display: flex; flex-wrap: wrap; gap: 12px;
+    }
+    .job-details span strong { color: var(--text); font-weight: 600; }
+    .job-error {
+      margin-top: 10px; padding: 8px 10px;
+      background: #2a1418; border: 1px solid #5a3038; border-radius: 4px;
+      color: var(--bad); font: 12px/1.4 ui-monospace, SFMono-Regular, Menlo, monospace;
+      white-space: pre-wrap; word-break: break-word;
+    }
   </style>
 </head>
 <body>
@@ -130,6 +182,18 @@
         </label>
         <span id="speakHint" class="meta" style="margin-left: auto; color: var(--muted); font-size: 12px;"></span>
       </div>
+    </section>
+
+    <section class="panel" id="jobPanel" hidden>
+      <h2>Current Job</h2>
+      <div class="job-head" id="jobHead">
+        <div class="dot"></div>
+        <span class="phase" id="jobPhase">queued</span>
+        <span class="elapsed" id="jobElapsed">0s</span>
+      </div>
+      <div class="job-bar" id="jobBar"><div class="fill"></div></div>
+      <div class="job-details" id="jobDetails"></div>
+      <div class="job-error" id="jobError" hidden></div>
     </section>
 
     <section class="panel">
@@ -179,10 +243,21 @@
 
   let pollHandle = null;
   let pollInterval = 2000;
-  // Phase 17: track our own queued job so the status poll can update the
-  // hint and re-enable the button when it completes.
+  // Phase 17: track our own queued job so the status poll can issue
+  // success/failure toasts when it completes. The Speak button STAYS
+  // ENABLED — clicking it again while busy yields a 409 toast.
   let lastJobId = null;
   let lastJobPhase = null;
+
+  const jobPanel   = $("jobPanel");
+  const jobHead    = $("jobHead");
+  const jobPhase   = $("jobPhase");
+  const jobElapsed = $("jobElapsed");
+  const jobBar     = $("jobBar");
+  const jobDetails = $("jobDetails");
+  const jobError   = $("jobError");
+
+  const ACTIVE_PHASES = new Set(["queued", "rewriting", "generating"]);
 
   const showToast = (msg, kind = "ok", ms = 3000) => {
     toast.textContent = msg;
@@ -203,39 +278,77 @@
     pollHandle = setInterval(refreshStatus, pollInterval);
   };
 
-  // Apply the `job` field returned from /api/status to the UI: hint text,
-  // button state, toast on completion. Only acts on jobs whose id matches
-  // the one we queued (lastJobId) so unrelated background work doesn't
-  // hijack the UI.
+  // Render the dedicated Current Job tile from the `job` field of /api/status.
+  // Visible whenever a job exists (active or terminal); hidden only when no
+  // job has run since server start.
+  const renderJobTile = (job) => {
+    if (!job) {
+      jobPanel.hidden = true;
+      return;
+    }
+    jobPanel.hidden = false;
+
+    const phase = job.phase;
+    const elapsed = Math.round(job.elapsed_s || 0);
+
+    jobHead.className = `job-head ${phase}`;
+    jobPhase.textContent = phase.toUpperCase();
+    jobElapsed.textContent = `${elapsed}s`;
+
+    if (ACTIVE_PHASES.has(phase)) {
+      jobBar.className = "job-bar active";
+    } else if (phase === "handed_off") {
+      jobBar.className = "job-bar done";
+    } else if (phase === "failed") {
+      jobBar.className = "job-bar fail";
+    } else {
+      jobBar.className = "job-bar";
+    }
+
+    // Details row: build with safe DOM construction.
+    while (jobDetails.firstChild) jobDetails.removeChild(jobDetails.firstChild);
+    const detailItems = [
+      ["mode", job.mode],
+      ["source", `${job.source_chars} chars`],
+    ];
+    if (job.rewrite_chars != null) detailItems.push(["rewrite", `${job.rewrite_chars} chars`]);
+    if (job.hash) detailItems.push(["hash", job.hash.slice(0, 16)]);
+    detailItems.push(["id", job.id]);
+    for (const [k, v] of detailItems) {
+      const span = document.createElement("span");
+      const label = document.createElement("strong");
+      label.textContent = `${k}:`;
+      span.appendChild(label);
+      span.appendChild(document.createTextNode(` ${v}`));
+      jobDetails.appendChild(span);
+    }
+
+    if (phase === "failed" && job.error) {
+      jobError.textContent = job.error;
+      jobError.hidden = false;
+    } else {
+      jobError.textContent = "";
+      jobError.hidden = true;
+    }
+  };
+
+  // Toast on phase transitions for our own queued job. The Speak button is
+  // never disabled — re-clicking while busy returns 409 (handled below).
   const handleJobUpdate = (job) => {
     if (!job) return;
-    if (lastJobId && job.id === lastJobId) {
-      const elapsed = Math.round(job.elapsed_s || 0);
-      if (job.phase === "queued" || job.phase === "rewriting" || job.phase === "generating") {
-        const label = job.phase === "queued" ? "queued"
-                    : job.phase === "rewriting" ? "rewriting"
-                    : "generating";
-        speakHint.textContent = `${label} · ${elapsed}s`;
-        speakBtn.disabled = true;
-      } else if (job.phase === "handed_off") {
-        if (lastJobPhase !== "handed_off") {
-          const out = job.rewrite_chars ?? job.source_chars;
-          showToast(`spoke ${out} chars`, "ok");
-          speakHint.textContent = `${out} chars (${job.mode})`;
-          speakBtn.disabled = false;
-          lastJobId = null;
-        }
-      } else if (job.phase === "failed") {
-        if (lastJobPhase !== "failed") {
-          const err = job.error || "speak failed";
-          showToast(err, "error", 6000);
-          speakHint.textContent = "";
-          speakBtn.disabled = false;
-          lastJobId = null;
-        }
-      }
-      lastJobPhase = job.phase;
+    renderJobTile(job);
+    if (!lastJobId || job.id !== lastJobId) return;
+
+    if (job.phase === "handed_off" && lastJobPhase !== "handed_off") {
+      const out = job.rewrite_chars ?? job.source_chars;
+      showToast(`spoke ${out} chars`, "ok");
+      lastJobId = null;
+    } else if (job.phase === "failed" && lastJobPhase !== "failed") {
+      const err = job.error || "speak failed";
+      showToast(err, "error", 6000);
+      lastJobId = null;
     }
+    lastJobPhase = job.phase;
   };
 
   const refreshStatus = async () => {
@@ -343,8 +456,7 @@
     const text = textArea.value;
     if (!text.trim()) { showToast("nothing to speak", "error"); return; }
     const rewrite = rewriteToggle.checked;
-    speakBtn.disabled = true;
-    speakHint.textContent = rewrite ? "submitting…" : "submitting…";
+    speakHint.textContent = "submitting…";
     let r, j;
     try {
       r = await fetch("/api/speak", {
@@ -356,7 +468,6 @@
     } catch (e) {
       showToast(e.message || String(e), "error");
       speakHint.textContent = "";
-      speakBtn.disabled = false;
       return;
     }
 
@@ -364,7 +475,6 @@
       const modeTag = j.mode === "passthrough" ? " (verbatim)" : "";
       showToast(`cache hit${modeTag} · ${j.duration_seconds.toFixed(1)}s`, "ok");
       speakHint.textContent = `cache hit${modeTag} · ${fmt(j.duration_seconds)}`;
-      speakBtn.disabled = false;
       setPolling(500);
       refreshStatus();
       refreshCache();
@@ -372,11 +482,11 @@
     }
 
     if (r.status === 202 && j.job) {
-      // Queued — own this job so the status poll can update + re-enable.
+      // Queued — own this job; the Current Job tile + toasts give feedback.
+      // Button stays enabled; clicking again while busy → 409 toast.
       lastJobId = j.job.id;
       lastJobPhase = j.job.phase;
-      speakHint.textContent = `${j.job.phase} · 0s`;
-      // Button stays disabled; status poll will re-enable on terminal phase.
+      speakHint.textContent = `queued · see Current Job tile`;
       setPolling(500);
       refreshStatus();
       refreshCache();
@@ -387,16 +497,14 @@
       const phase = j.job ? j.job.phase : "in progress";
       showToast(`busy: another speak is ${phase}`, "error");
       speakHint.textContent = "";
-      speakBtn.disabled = false;
       setPolling(500);
       refreshStatus();
       return;
     }
 
-    // Any other status: surface the error and re-enable.
+    // Any other status: surface the error.
     showToast(j.error || `HTTP ${r.status}`, "error", 6000);
     speakHint.textContent = "";
-    speakBtn.disabled = false;
   });
 
   clearBtn.addEventListener("click", () => { textArea.value = ""; speakHint.textContent = ""; });
