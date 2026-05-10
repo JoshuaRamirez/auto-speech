@@ -1,7 +1,12 @@
 #!/usr/bin/env bash
-# auto-speech — install the /speak slash command as a user-level command.
-# Idempotent: safe to re-run. Creates a symlink so edits to the project
-# propagate automatically.
+# auto-speech — install all auto-speech-* slash commands as user-level
+# commands. Idempotent: safe to re-run. Creates symlinks so edits to the
+# project propagate automatically.
+#
+# Naming convention (see README): every command is prefixed with
+# `auto-speech-` to avoid colliding with built-in Claude Code commands
+# or other plugins. Generic names like /resume, /pause, /end belong to
+# shared namespace and must not be claimed by a single plugin.
 
 set -euo pipefail
 
@@ -38,15 +43,19 @@ install_one() {
     echo "[install-plugin] linked $dst -> $src"
 }
 
-install_one "speak.md"
-install_one "replay.md"
-install_one "pause.md"
-install_one "resume.md"
-install_one "seek.md"
-install_one "restart.md"
-install_one "end.md"
-install_one "autoplay-on.md"
-install_one "autoplay-off.md"
+install_one "auto-speech-speak.md"
+install_one "auto-speech-replay.md"
+install_one "auto-speech-pause.md"
+install_one "auto-speech-resume.md"
+install_one "auto-speech-seek.md"
+install_one "auto-speech-restart.md"
+install_one "auto-speech-end.md"
+install_one "auto-speech-autoplay-on.md"
+install_one "auto-speech-autoplay-off.md"
 install_one "auto-speech-app.md"
 
-echo "[install-plugin] auto-speech commands installed: /speak /replay /pause /resume /seek /restart /end /autoplay-on /autoplay-off /auto-speech-app"
+echo "[install-plugin] auto-speech commands installed:"
+echo "    /auto-speech-speak [n]    /auto-speech-replay [n]    /auto-speech-app"
+echo "    /auto-speech-pause        /auto-speech-resume        /auto-speech-restart"
+echo "    /auto-speech-end          /auto-speech-seek          /auto-speech-autoplay-on"
+echo "    /auto-speech-autoplay-off"

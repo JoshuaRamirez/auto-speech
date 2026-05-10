@@ -24,9 +24,22 @@ DISABLE_MARKER="$HOME/.claude/auto-speech.disabled"
 
 echo "[uninstall] auto-speech project at $PROJECT_ROOT"
 
-# 1. Remove slash command symlinks if (and only if) they point into our project.
+# 1. Remove slash command symlinks if (and only if) they point into our
+# project. We check BOTH the current namespaced names (auto-speech-*) AND
+# the legacy generic names (speak, pause, ...) so an upgrade from before
+# the naming convention still cleans up fully.
+NAMESPACED_CMDS=(
+    auto-speech-app
+    auto-speech-speak auto-speech-replay
+    auto-speech-pause auto-speech-resume auto-speech-restart
+    auto-speech-end auto-speech-seek
+    auto-speech-autoplay-on auto-speech-autoplay-off
+)
+LEGACY_CMDS=(
+    speak replay pause resume seek restart end autoplay-on autoplay-off
+)
 removed_cmds=0
-for cmd in speak replay pause resume seek restart end autoplay-on autoplay-off auto-speech-app; do
+for cmd in "${NAMESPACED_CMDS[@]}" "${LEGACY_CMDS[@]}"; do
     link="$CMD_DIR/$cmd.md"
     if [[ -L "$link" ]]; then
         target="$(readlink "$link")"
