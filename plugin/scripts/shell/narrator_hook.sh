@@ -26,13 +26,20 @@ if [[ "${AUTO_SPEECH_SUPPRESS_HOOKS:-}" == "1" ]]; then
     exit 0
 fi
 
-# Per-session gate. Claude Code exports CLAUDE_CODE_SESSION_ID for every
-# spawned subprocess (including hooks). Each session opts in individually
-# by touching ~/.claude/auto-speech-narrate-sessions/<session_id>. The
-# old per-project marker scheme is gone: a single project may have many
-# concurrent sessions and the user only wants to hear narration for the
-# session they're attending to.
-SESSION_ID="${CLAUDE_CODE_SESSION_ID:-}"
+# Per-session gate. Each session opts in individually by touching
+# ~/.claude/auto-speech-narrate-sessions/<session_id>. The session id
+# comes from the Claude Code hook payload (which always includes it),
+# falling back to the CLAUDE_CODE_SESSION_ID env var if jq is missing
+# or the payload doesn't parse. The env-var path is unreliable across
+# Claude Code versions — some propagate it to hook subprocesses, some
+# don't — so payload is preferred.
+SESSION_ID=""
+if command -v jq >/dev/null 2>&1; then
+    SESSION_ID="$(printf '%s' "$PAYLOAD" | jq -r '.session_id // ""' 2>/dev/null || true)"
+fi
+if [[ -z "$SESSION_ID" ]]; then
+    SESSION_ID="${CLAUDE_CODE_SESSION_ID:-}"
+fi
 if [[ -z "$SESSION_ID" ]]; then
     exit 0
 fi
