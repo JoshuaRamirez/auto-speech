@@ -1,6 +1,7 @@
 """MpvController: spawn mpv detached, own the singleton session lifecycle."""
 from __future__ import annotations
 
+import fcntl
 import os
 import shutil
 import signal
@@ -12,6 +13,18 @@ from pathlib import Path
 
 from mpv_ipc import MpvIpc, MpvIpcError
 from session_dir import SessionDir
+
+
+# Serializes the kill-prior + spawn + await-socket sequence across every
+# process that calls MpvController.start() — autoplay workers, narrator
+# daemon, and the web app. Without this, two callers can race on the
+# same /tmp/auto-speech/{socket, mpv.pid} state: each one's
+# _kill_prior_session() tears down the other's just-spawned mpv, and
+# the user hears audio cut off and restart, or hears nothing at all.
+# Held only for the start sequence (~50-300 ms); playback itself is
+# unaffected. fcntl.flock auto-releases on file close so a crashed
+# holder cannot deadlock the lock.
+_MPV_START_LOCK_PATH = Path("/tmp/auto-speech-mpv-start.lock")
 
 
 class MpvNotInstalledError(RuntimeError):
@@ -38,47 +51,53 @@ class MpvController:
         if not wav_path.is_file():
             raise FileNotFoundError(f"WAV missing: {wav_path}")
 
-        # Invariant I-12.1: kill any prior session first.
-        self._kill_prior_session()
+        # Acquire the start lock — held only for the brief kill/spawn/await
+        # sequence so concurrent callers serialise. See _MPV_START_LOCK_PATH.
+        with open(_MPV_START_LOCK_PATH, "w") as _lock:
+            fcntl.flock(_lock.fileno(), fcntl.LOCK_EX)
 
-        socket_path = SessionDir.socket_path()
-        SessionDir.root().mkdir(parents=True, exist_ok=True)
-        # Ensure the old socket file is gone so mpv can create its own.
-        try:
-            socket_path.unlink()
-        except FileNotFoundError:
-            pass
+            # Invariant I-12.1: kill any prior session first.
+            self._kill_prior_session()
 
-        print(
-            f"[mpv] starting  wav={wav_path}  socket={socket_path}",
-            file=sys.stderr,
-        )
-        proc = subprocess.Popen(
-            [
-                mpv,
-                "--no-video",
-                "--really-quiet",
-                f"--input-ipc-server={socket_path}",
-                str(wav_path),
-            ],
-            start_new_session=True,
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL,
-            stdin=subprocess.DEVNULL,
-            close_fds=True,
-        )
-        started_at = (
-            datetime.now(timezone.utc)
-            .isoformat(timespec="seconds")
-            .replace("+00:00", "Z")
-        )
-        SessionDir.write(proc.pid, wav_path, started_at)
+            socket_path = SessionDir.socket_path()
+            SessionDir.root().mkdir(parents=True, exist_ok=True)
+            # Ensure the old socket file is gone so mpv can create its own.
+            try:
+                socket_path.unlink()
+            except FileNotFoundError:
+                pass
 
-        self._await_socket_ready(socket_path, proc)
-        print(
-            f"[mpv] started   pid={proc.pid}  started_at={started_at}",
-            file=sys.stderr,
-        )
+            print(
+                f"[mpv] starting  wav={wav_path}  socket={socket_path}",
+                file=sys.stderr,
+            )
+            proc = subprocess.Popen(
+                [
+                    mpv,
+                    "--no-video",
+                    "--really-quiet",
+                    f"--input-ipc-server={socket_path}",
+                    str(wav_path),
+                ],
+                start_new_session=True,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                stdin=subprocess.DEVNULL,
+                close_fds=True,
+            )
+            started_at = (
+                datetime.now(timezone.utc)
+                .isoformat(timespec="seconds")
+                .replace("+00:00", "Z")
+            )
+            SessionDir.write(proc.pid, wav_path, started_at)
+
+            self._await_socket_ready(socket_path, proc)
+            print(
+                f"[mpv] started   pid={proc.pid}  started_at={started_at}",
+                file=sys.stderr,
+            )
+            # Lock auto-releases on file close at end of with-block.
 
     def stop(self) -> bool:
         """Send quit to the active session. Returns True if a session existed."""
