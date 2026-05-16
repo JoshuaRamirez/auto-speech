@@ -31,6 +31,28 @@ is_stale() {
     [[ "$current" -gt "$START_BEACON_MTIME" ]]
 }
 
+# Dedup: if another worker is already playing the exact same source hash
+# (which means we'd render the same audio and kill its mpv mid-play —
+# user hears the same line cut off and start over), bail out instead.
+# 120-second age cap so a stale marker from a long-finished play doesn't
+# block a legitimate replay of identical content much later.
+NOW_PLAYING_MARKER="/tmp/auto-speech-now-playing-hash"
+
+already_playing_same_hash() {
+    [[ -f "$NOW_PLAYING_MARKER" ]] || return 1
+    local current_hash
+    current_hash="$(cat "$NOW_PLAYING_MARKER" 2>/dev/null || true)"
+    [[ "$current_hash" == "$SOURCE_HASH" ]] || return 1
+    local marker_mtime now age
+    marker_mtime="$(stat -f %m "$NOW_PLAYING_MARKER" 2>/dev/null || echo 0)"
+    now="$(date +%s)"
+    age=$(( now - marker_mtime ))
+    (( age < 120 )) || return 1
+    local mpv_pid
+    mpv_pid="$(cat /tmp/auto-speech/mpv.pid 2>/dev/null || true)"
+    [[ -n "${mpv_pid:-}" ]] && kill -0 "$mpv_pid" 2>/dev/null
+}
+
 # A second disable check in the worker: the user could have toggled off
 # between hook fire and worker reaching here.
 if [[ -e "$DISABLED_MARKER" ]]; then
@@ -126,6 +148,11 @@ CACHE_WAV="$PROJECT_ROOT/config/cache/$HASH_PREFIX/full.wav"
 if [[ -f "$CACHE_WAV" ]]; then
     log "cache hit; playing"
     if is_stale; then log "stale just before play; bailing"; exit 0; fi
+    if already_playing_same_hash; then
+        log "same hash already playing; skipping duplicate (cache-hit path)"
+        exit 0
+    fi
+    printf '%s' "$SOURCE_HASH" > "$NOW_PLAYING_MARKER" 2>/dev/null || true
     : | "$SPEAK" --source-hash "$SOURCE_HASH" >/dev/null 2>&1 || \
         log "speak.py exit non-zero on cache-hit path"
     exit 0
@@ -168,6 +195,16 @@ log "rewrite chars=$REWRITE_LEN"
 # starts. Net effect: brief truncation of the older audio, newest content
 # wins. Bailing here instead would mean the user hears NOTHING in active
 # multi-turn conversations where rewrites can't outrun the next Stop.
+#
+# But: if the newer worker has the SAME source hash (identical content,
+# happens when multiple Stop events fire for the same assistant turn),
+# we'd just be killing one play of X to start an identical play of X —
+# the user hears the line cut off and restart. Dedup here.
+if already_playing_same_hash; then
+    log "same hash already playing; skipping duplicate (post-rewrite path)"
+    exit 0
+fi
+printf '%s' "$SOURCE_HASH" > "$NOW_PLAYING_MARKER" 2>/dev/null || true
 "$SPEAK" --source-hash "$SOURCE_HASH" < "$REWRITE_FILE" >/dev/null 2>&1
 RC=$?
 if [[ "$RC" -ne 0 ]]; then
