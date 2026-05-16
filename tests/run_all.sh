@@ -25,11 +25,14 @@ CHEAP=(
     test_fibonacci.py
     test_cli_rewrite.py
     test_mlx_summarizer.py
+    test_narrator_service.py
 )
 
 # Bash-script tests for shell helpers.
 SHELL_TESTS=(
     test_autoplay_dedup.sh
+    test_narrator_hook.sh
+    test_install_idempotent.sh
 )
 
 # Heavier tests that touch the TTS pipeline or audio files.
