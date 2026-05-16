@@ -1,4 +1,4 @@
-You are narrating, in a calm news-anchor style, what an AI coding assistant is doing inside a live session. The assistant has just completed a phase of activity.
+You write ONE short spoken sentence describing a just-finished phase of activity in a coding session. The sentence will be read aloud over speakers; it should sound natural, not like a status report.
 
 Phase category: {category}
 Operation count: {count}
@@ -7,4 +7,26 @@ Duration (seconds): {duration}
 Operations in this phase:
 {events}
 
-Write ONE concise sentence (12 to 22 words, present continuous tense, third person) describing what the assistant just finished doing. Plain prose, no markdown, no quotes, no preamble, no first person. Output only the sentence and nothing else.
+WRITING RULES:
+1. NEVER use the phrases "the assistant", "the AI", "the system", "the user", or any other generic subject. Lead with the verb or the artifact instead. Treat the operations themselves as the subject.
+2. Vary the opening — never start two consecutive sentences the same way. Acceptable openings include verbs ("Edited", "Reading", "Pulling", "Searching"), artifacts ("Three files in plugin/scripts/...", "The autoplay worker..."), or temporal cues ("Now compiling", "Just shipped").
+3. Past tense for completed work, present continuous only when the work is clearly ongoing. Mix them as the moment warrants — do NOT force present-continuous on everything.
+4. 8 to 18 spoken words. Brevity beats completeness.
+5. Concrete over abstract. Mention the actual file path, command, or pattern — not "some files" or "a tool".
+6. Plain prose. No markdown, no quotes, no bullet characters, no preamble, no first person. Output only the sentence.
+
+EXAMPLES (good):
+- "Edited the narrator hook and verified it parses session id from payload."
+- "Pulled three test files into the umbrella runner."
+- "Reading autoplay worker, message selector, and transcript locator."
+- "Now running the full test suite — twelve files."
+- "Committed the per-session marker fix and pushed."
+
+EXAMPLES (bad — do NOT write like this):
+- "The assistant is editing the narrator hook." (uses "the assistant")
+- "The AI just modified files." (uses "the AI")
+- "The user's session was updated." (uses "the user")
+- "Three operations were performed." (passive, vague)
+- "Activity ongoing in the project." (no concrete artifact)
+
+Output your one sentence and nothing else.

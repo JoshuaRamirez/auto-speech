@@ -67,6 +67,33 @@ def test_mock_multi_event_includes_count_and_first() -> None:
     assert "Edit: Edit:" not in line
 
 
+def test_mock_NEVER_uses_canned_assistant_or_ai_subject() -> None:
+    """User feedback: "the assistant is ..." sounds canned.
+    Mock output must lead with the verb or the artifact — never with
+    a generic narrator subject. Regression-pin all four categories,
+    both single- and multi-event variants."""
+    summ = MockSummarizer()
+    banned = ("the assistant", "the ai", "the system", "the user")
+    cases: list[Phase] = []
+    for cat, events in [
+        (Category.EDIT, ["Edit: a.py"]),
+        (Category.EDIT, ["Edit: a.py", "Edit: b.py", "Edit: c.py"]),
+        (Category.EXPLORE, ["Read: x.py"]),
+        (Category.EXPLORE, ["Read: x.py", "Grep: foo"]),
+        (Category.RUN, ["Bash: ls"]),
+        (Category.RUN, ["Bash: ls", "Bash: pwd"]),
+        (Category.DELEGATE, ["Agent: deep-dive"]),
+    ]:
+        cases.append(_phase(cat, events))
+    for p in cases:
+        line = summ.summarize(p).lower()
+        for phrase in banned:
+            assert phrase not in line, (
+                f"mock summary leaked the canned narrator subject "
+                f"{phrase!r}: {line!r}"
+            )
+
+
 def test_mock_unknown_category_falls_back_to_performing() -> None:
     summ = MockSummarizer()
     phase = _phase(Category.OTHER, ["mcp__threads__add_progress"])
@@ -124,6 +151,7 @@ def main() -> int:
         test_mock_single_event_strips_tool_prefix,
         test_mock_single_event_each_category,
         test_mock_multi_event_includes_count_and_first,
+        test_mock_NEVER_uses_canned_assistant_or_ai_subject,
         test_mock_unknown_category_falls_back_to_performing,
         test_mock_strip_tool_prefix_handles_no_colon,
         test_factory_returns_mock_when_provider_is_mock,

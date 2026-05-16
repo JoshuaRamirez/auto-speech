@@ -29,6 +29,14 @@ class MockSummarizer(Summarizer):
         "reason": "reasoning through",
         "other": "performing",
     }
+    _PAST = {
+        "explore": "explored",
+        "edit": "edited",
+        "run": "ran",
+        "delegate": "delegated to",
+        "reason": "reasoned through",
+        "other": "performed",
+    }
 
     @staticmethod
     def _strip_tool_prefix(summary: str) -> str:
@@ -40,15 +48,15 @@ class MockSummarizer(Summarizer):
         return summary
 
     def summarize(self, phase: Phase) -> str:
-        verb = self._PRESENT_PROGRESSIVE.get(phase.category.value, "performing")
+        # Single-event phase: gerund + the actual artifact, no narrator subject.
         if len(phase.events) == 1:
+            verb = self._PRESENT_PROGRESSIVE.get(phase.category.value, "performing")
             arg = self._strip_tool_prefix(phase.events[0].summary)
             return f"{verb.capitalize()} {arg}"
+        # Multi-event phase: past tense, count-led, no "the assistant".
+        past = self._PAST.get(phase.category.value, "performed")
         first = self._strip_tool_prefix(phase.events[0].summary)
-        return (
-            f"The assistant is {verb} {len(phase.events)} items — "
-            f"starting with {first}."
-        )
+        return f"{past.capitalize()} {len(phase.events)} items, starting with {first}"
 
 
 def load_summarizer(config: dict) -> Summarizer:
