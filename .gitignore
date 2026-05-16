@@ -22,3 +22,7 @@ tests/outputs/**/*.wav
 
 # macOS
 .DS_Store
+
+# Per-developer Claude Code project state (settings.local.json, narrator
+# enable marker, etc.) — never project-wide.
+.claude/
