@@ -89,6 +89,7 @@ class NarratorService:
         signal.signal(signal.SIGINT, self._on_signal)
         _log(f"started pid={os.getpid()} provider={self._config['provider']}")
         self._update_depth(0)
+        _sweep_stale_session_markers()
 
         # Eagerly load the summarizer at boot so the first phase doesn't
         # eat a 3-6 s MLX-load latency at speak time. Failures here
@@ -311,6 +312,32 @@ class NarratorService:
                 return
             time.sleep(0.25)
         _log(f"mpv still running after {max_seconds}s; moving on")
+
+
+_STALE_MARKER_DAYS = 30
+
+
+def _sweep_stale_session_markers() -> None:
+    """Remove per-session marker files older than _STALE_MARKER_DAYS in
+    both narrate-sessions and autoplay-sessions dirs. Each new Claude
+    Code session creates a marker if its user opts in; they accumulate
+    over time without this. 30-day window is conservative — sessions
+    that old are almost certainly gone."""
+    cutoff = time.time() - (_STALE_MARKER_DAYS * 86400)
+    for sub in ("auto-speech-narrate-sessions", "auto-speech-autoplay-sessions"):
+        d = Path.home() / ".claude" / sub
+        if not d.is_dir():
+            continue
+        removed = 0
+        for marker in d.iterdir():
+            try:
+                if marker.is_file() and marker.stat().st_mtime < cutoff:
+                    marker.unlink()
+                    removed += 1
+            except OSError:
+                pass
+        if removed:
+            _log(f"swept {removed} stale marker(s) from {d}")
 
 
 def main() -> int:

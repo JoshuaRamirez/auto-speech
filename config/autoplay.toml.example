@@ -18,3 +18,16 @@ mode = "summary"
 # medium — 3 to 5 sentences, ~60-100 words, gist + load-bearing artifact + open question
 # large  — 6 to 10 sentences, ~180-240 words, preserves nuance and named artifacts
 summary_size = "medium"
+
+# Coalesce window for back-to-back Stop events. The autoplay worker
+# sleeps this many seconds at start; if a newer Stop arrives during
+# the sleep, older workers bail. Tune up if you see fragmented audio
+# during tool-heavy turns. Was hardcoded as AUTO_SPEECH_AUTOPLAY_COALESCE
+# env var before; that env var still overrides this config field.
+coalesce_seconds = 1.0
+
+# How long the end-of-turn autoplay worker waits for the narrator FIFO
+# to drain before reading the final response. Past this cap, autoplay
+# proceeds regardless. Was hardcoded as AUTO_SPEECH_NARRATION_WAIT_MAX
+# env var before; that env var still overrides this config field.
+narration_wait_max_seconds = 90.0

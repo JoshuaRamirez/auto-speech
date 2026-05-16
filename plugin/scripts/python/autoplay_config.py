@@ -93,11 +93,16 @@ def load_config() -> dict:
         )
         size = "medium"
 
+    coalesce = float(section.get("coalesce_seconds", 1.0))
+    narration_wait_max = float(section.get("narration_wait_max_seconds", 90.0))
+
     return {
         "config_path": str(config_path) if config_path else None,
         "mode": mode,
         "summary_size": size,
         "prompt_path": str(_resolve_prompt(mode, size)),
+        "coalesce_seconds": coalesce,
+        "narration_wait_max_seconds": narration_wait_max,
     }
 
 

@@ -19,7 +19,19 @@ MIN_LEN="${AUTO_SPEECH_AUTOPLAY_MIN_LEN:-20}"
 # only the newest spawned worker survives its early stale check, the rest
 # bail before doing any rewrite/TTS work. Tuned to be short enough that
 # autoplay still feels prompt, long enough to absorb a tool-call burst.
-COALESCE_SECONDS="${AUTO_SPEECH_AUTOPLAY_COALESCE:-1}"
+# Load coalesce + narration-wait from autoplay.toml (via autoplay_config.py).
+# Env vars still take precedence so existing callers don't break.
+# PLUGIN_SCRIPTS_DIR / VENV are set above.
+COALESCE_FROM_CONFIG=""
+NARRATION_WAIT_FROM_CONFIG=""
+if [[ -x "$VENV/bin/python" ]]; then
+    CFG_JSON="$("$VENV/bin/python" "$PLUGIN_SCRIPTS_DIR/python/autoplay_config.py" 2>/dev/null || true)"
+    if [[ -n "$CFG_JSON" ]]; then
+        COALESCE_FROM_CONFIG="$(printf '%s' "$CFG_JSON" | "$VENV/bin/python" -c 'import json,sys; d=json.load(sys.stdin); print(d.get("coalesce_seconds",""))' 2>/dev/null || true)"
+        NARRATION_WAIT_FROM_CONFIG="$(printf '%s' "$CFG_JSON" | "$VENV/bin/python" -c 'import json,sys; d=json.load(sys.stdin); print(d.get("narration_wait_max_seconds",""))' 2>/dev/null || true)"
+    fi
+fi
+COALESCE_SECONDS="${AUTO_SPEECH_AUTOPLAY_COALESCE:-${COALESCE_FROM_CONFIG:-1}}"
 
 START_BEACON_MTIME="${1:-0}"
 # Optional second arg: transcript_path from the hook payload, threaded
@@ -81,7 +93,7 @@ fi
 # stuck daemon never silently swallows the autoplay forever.
 NARRATION_DEPTH_FILE="/tmp/auto-speech-narration-depth"
 NARRATION_DAEMON_PID_FILE="/tmp/auto-speech-narrator-daemon.pid"
-NARRATION_WAIT_MAX="${AUTO_SPEECH_NARRATION_WAIT_MAX:-90}"
+NARRATION_WAIT_MAX="${AUTO_SPEECH_NARRATION_WAIT_MAX:-${NARRATION_WAIT_FROM_CONFIG:-90}}"
 if [[ -f "$NARRATION_DAEMON_PID_FILE" ]] && [[ -f "$NARRATION_DEPTH_FILE" ]]; then
     NARR_PID="$(cat "$NARRATION_DAEMON_PID_FILE" 2>/dev/null || true)"
     if [[ -n "${NARR_PID:-}" ]] && kill -0 "$NARR_PID" 2>/dev/null; then
