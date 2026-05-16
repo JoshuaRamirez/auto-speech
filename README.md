@@ -19,8 +19,8 @@ Playback (per-response autoplay + manual replay):
 /auto-speech-restart        # mpv seek to 0
 /auto-speech-seek           # mpv seek by +N, -N, N, or 'end'
 /auto-speech-end            # stop mpv playback
-/auto-speech-autoplay-on    # remove the autoplay disable marker
-/auto-speech-autoplay-off   # touch the autoplay disable marker
+/auto-speech-autoplay-on    # enable autoplay for THIS session (per-session opt-in)
+/auto-speech-autoplay-off   # disable autoplay for THIS session
 /auto-speech-autoplay-mode [verbatim|small|medium|large]  # set or show end-of-turn read mode
 ```
 

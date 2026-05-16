@@ -114,6 +114,10 @@ if [[ -d "$HOME/.claude/auto-speech-narrate-sessions" ]]; then
     rm -rf "$HOME/.claude/auto-speech-narrate-sessions"
     echo "[uninstall] removed per-session narrate markers ($HOME/.claude/auto-speech-narrate-sessions)"
 fi
+if [[ -d "$HOME/.claude/auto-speech-autoplay-sessions" ]]; then
+    rm -rf "$HOME/.claude/auto-speech-autoplay-sessions"
+    echo "[uninstall] removed per-session autoplay markers ($HOME/.claude/auto-speech-autoplay-sessions)"
+fi
 
 echo "[uninstall] done."
 echo
