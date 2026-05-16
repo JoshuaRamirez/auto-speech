@@ -86,4 +86,24 @@ def load_summarizer(config: dict) -> Summarizer:
             )
             return MockSummarizer()
 
+    if provider == "ollama":
+        try:
+            from narrator_ollama_summarizer import OllamaSummarizer
+
+            return OllamaSummarizer(
+                model=config["model"],
+                prompt_template_path=config["prompt_template_path"],
+                max_tokens=int(config.get("max_tokens", 60)),
+                host=config.get("ollama_host"),
+            )
+        except Exception as exc:
+            import sys
+
+            print(
+                f"[narrator] ollama provider unavailable ({exc}); "
+                f"falling back to MockSummarizer",
+                file=sys.stderr,
+            )
+            return MockSummarizer()
+
     raise ValueError(f"unknown narrator provider: {provider!r}")

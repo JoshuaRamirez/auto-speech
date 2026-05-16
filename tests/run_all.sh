@@ -23,6 +23,8 @@ CHEAP=(
     test_message_selector.py
     test_transcript_locator.py
     test_fibonacci.py
+    test_cli_rewrite.py
+    test_mlx_summarizer.py
 )
 
 # Bash-script tests for shell helpers.

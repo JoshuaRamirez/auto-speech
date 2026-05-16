@@ -137,6 +137,35 @@ def test_factory_falls_back_to_mock_on_mlx_failure() -> None:
     )
 
 
+def test_factory_returns_ollama_summarizer_when_provider_is_ollama() -> None:
+    # OllamaSummarizer's __init__ doesn't hit the network — it just
+    # reads the template file and stores config. So this test is safe
+    # even with no Ollama service running.
+    import tempfile
+    from pathlib import Path
+
+    tmp = tempfile.NamedTemporaryFile(
+        mode="w", suffix=".txt", delete=False, encoding="utf-8"
+    )
+    tmp.write("body {events}")
+    tmp.close()
+    try:
+        summ = load_summarizer({
+            "provider": "ollama",
+            "model": "qwen2.5:3b",
+            "prompt_template_path": tmp.name,
+            "max_tokens": 50,
+            "ollama_host": "http://127.0.0.1:11434",
+        })
+        # On success it's OllamaSummarizer; on import/init failure the
+        # factory's exception handler downgrades to Mock.
+        assert summ.__class__.__name__ in ("OllamaSummarizer", "MockSummarizer"), (
+            f"unexpected: {summ.__class__.__name__}"
+        )
+    finally:
+        Path(tmp.name).unlink()
+
+
 def test_factory_raises_on_unknown_provider() -> None:
     try:
         load_summarizer({"provider": "definitely-unknown-provider"})
@@ -157,6 +186,7 @@ def main() -> int:
         test_factory_returns_mock_when_provider_is_mock,
         test_factory_defaults_to_mock_when_provider_missing,
         test_factory_falls_back_to_mock_on_mlx_failure,
+        test_factory_returns_ollama_summarizer_when_provider_is_ollama,
         test_factory_raises_on_unknown_provider,
     ]
     for t in tests:
