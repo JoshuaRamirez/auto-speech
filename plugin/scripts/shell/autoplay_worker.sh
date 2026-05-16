@@ -46,6 +46,47 @@ if is_stale; then
     exit 0
 fi
 
+# Narrator coexistence (Phase 22): if a narrator daemon is running and
+# its FIFO has pending phases, wait until it drains before reading the
+# final response. The user's spec: "end of turn autoplayer occurs once
+# the in process narration finishes. natural."
+#
+# Capped at AUTO_SPEECH_NARRATION_WAIT_MAX seconds (default 90) so a
+# stuck daemon never silently swallows the autoplay forever.
+NARRATION_DEPTH_FILE="/tmp/auto-speech-narration-depth"
+NARRATION_DAEMON_PID_FILE="/tmp/auto-speech-narrator-daemon.pid"
+NARRATION_WAIT_MAX="${AUTO_SPEECH_NARRATION_WAIT_MAX:-90}"
+if [[ -f "$NARRATION_DAEMON_PID_FILE" ]] && [[ -f "$NARRATION_DEPTH_FILE" ]]; then
+    NARR_PID="$(cat "$NARRATION_DAEMON_PID_FILE" 2>/dev/null || true)"
+    if [[ -n "${NARR_PID:-}" ]] && kill -0 "$NARR_PID" 2>/dev/null; then
+        WAITED=0
+        while (( WAITED < NARRATION_WAIT_MAX )); do
+            DEPTH="$(cat "$NARRATION_DEPTH_FILE" 2>/dev/null || echo 0)"
+            MPV_PID="$(cat /tmp/auto-speech/mpv.pid 2>/dev/null || true)"
+            MPV_RUNNING=0
+            if [[ -n "${MPV_PID:-}" ]] && kill -0 "$MPV_PID" 2>/dev/null; then
+                MPV_RUNNING=1
+            fi
+            if [[ "${DEPTH:-0}" -eq 0 ]] && [[ "$MPV_RUNNING" -eq 0 ]]; then
+                break
+            fi
+            sleep 0.5
+            WAITED=$((WAITED + 1))
+            # Newer Stop event during the wait? Bail — let the newer
+            # worker handle the autoplay once the queue eventually drains.
+            if is_stale; then
+                log "stale while waiting for narration drain; bailing"
+                exit 0
+            fi
+        done
+        if (( WAITED >= NARRATION_WAIT_MAX )); then
+            log "narration drain wait hit cap (${NARRATION_WAIT_MAX}s); proceeding anyway"
+        else
+            log "narration drained after ${WAITED} half-second polls"
+        fi
+    fi
+fi
+
 if [[ ! -x "$EXTRACT" ]]; then
     log "extract wrapper missing or not executable: $EXTRACT"
     exit 0
