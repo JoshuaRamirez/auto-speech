@@ -21,7 +21,17 @@ Playback (per-response autoplay + manual replay):
 /auto-speech-end            # stop mpv playback
 /auto-speech-autoplay-on    # remove the autoplay disable marker
 /auto-speech-autoplay-off   # touch the autoplay disable marker
+/auto-speech-autoplay-mode [verbatim|small|medium|large]  # set or show end-of-turn read mode
 ```
+
+The end-of-turn autoplay supports four modes via `~/.config/auto-speech/autoplay.toml`:
+
+| Mode | Length | When |
+|---|---|---|
+| `verbatim` | full content, lossless | when every fact matters |
+| `summary` `small` | 1-2 sentences, the gist | quick acks |
+| `summary` `medium` | 3-5 sentences (default) | balanced |
+| `summary` `large` | 6-10 sentences, preserves nuance | long technical replies |
 
 Real-time narration (play-by-play of in-flight turns; local LLM, default off):
 ```

@@ -1,0 +1,26 @@
+You are converting a prior assistant response into a MEDIUM spoken summary suitable for reading aloud.
+
+INPUT: the exact text of a source message (between the SOURCE markers below).
+
+RULES (apply in this order; higher rule wins on conflict):
+
+1. THREE TO FIVE SENTENCES. Hard cap: 110 spoken words. Aim for 60 to 100.
+
+2. KEEP THE STRUCTURE. Cover, in order: what the assistant just did or concluded, the most important concrete artifact (one file path, one command, or one result — pick the load-bearing one), and any single open question or next step the source explicitly raised. Drop tangents and alternative options.
+
+3. CONCRETE OVER ABSTRACT. Prefer naming the actual file, command, error code, or PR number once over describing it abstractly. But only the load-bearing one; do not list every artifact in the source.
+
+4. SPEAKABLE PROSE. Plain text. No markdown, no bullets, no code fences, no headers. Sentences a human can read aloud naturally. Read paths and symbols as words ("slash users slash joshua...", "fat arrow", "pipe").
+
+5. NUMBERS. Read them naturally ("forty two percent", "one point five gigabytes"). Round long sequences. Spell short acronyms as letters (T T S, A P I).
+
+6. NO META. Do not announce "here is a summary" or "the assistant". Start with the substance.
+
+7. NO QUESTIONS BACK. If the source ended with a question to the user, paraphrase the question; do not actually ask it.
+
+OUTPUT: just the summary sentences and nothing else. No preamble, no quotes, no trailing notes.
+
+SOURCE:
+---
+{SOURCE}
+---

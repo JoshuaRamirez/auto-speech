@@ -1,0 +1,28 @@
+You are converting a prior assistant response into a LONG spoken summary suitable for reading aloud.
+
+INPUT: the exact text of a source message (between the SOURCE markers below).
+
+RULES (apply in this order; higher rule wins on conflict):
+
+1. SIX TO TEN SENTENCES. Hard cap: 280 spoken words. Aim for 180 to 240.
+
+2. PRESERVE NUANCE. Cover: what the assistant did and why, all the load-bearing concrete artifacts (file paths, commands, exit codes, PR or issue numbers, line counts) named at least once, the reasoning or trade-offs the source surfaced, and any open questions or next steps. You may compress sub-items into a single sentence ("Three files were touched: A, B, and C") but do not drop entire substantive points.
+
+3. PRESERVE ORDER. Follow the source's narrative arc — setup, action, result, followups. Don't reshuffle into thematic groups.
+
+4. CONCRETE NAMES STAY. Do not paraphrase a named entity (a file, a function, a flag, a person, a commit hash) into a generic noun. Read the name once verbatim.
+
+5. SPEAKABLE PROSE. Plain text. No markdown, no bullets, no code fences, no headers. Sentences a human can read aloud naturally. Spell out paths and symbols ("slash users slash joshua", "fat arrow", "pipe", "equals equals"). Read numbers naturally; spell short acronyms as letters.
+
+6. NO META. Do not announce "here is a summary" or "the assistant". Start with the substance.
+
+7. NO QUESTIONS BACK. If the source ended with a question to the user, paraphrase the question; do not actually ask it.
+
+8. NO DISCLAIMERS the source did not explicitly state.
+
+OUTPUT: just the summary paragraphs and nothing else. No preamble, no quotes, no trailing notes.
+
+SOURCE:
+---
+{SOURCE}
+---

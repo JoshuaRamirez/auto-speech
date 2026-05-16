@@ -1,0 +1,20 @@
+# auto-speech end-of-turn autoplay configuration.
+#
+# Copy to ~/.config/auto-speech/autoplay.toml and edit, or point
+# AUTO_SPEECH_AUTOPLAY_CONFIG=/path/to/file.toml at a custom one.
+#
+# Defaults shown.
+
+[autoplay]
+# Mode for the end-of-turn response read:
+#   "verbatim" — lossless audio-friendly rewrite (covers every fact,
+#                expands symbols, removes markdown). Long responses
+#                produce long audio.
+#   "summary"  — LLM produces a spoken summary at the size below.
+mode = "summary"
+
+# Only used when mode = "summary".
+# small  — 1 to 2 sentences, <=40 words, just the gist
+# medium — 3 to 5 sentences, ~60-100 words, gist + load-bearing artifact + open question
+# large  — 6 to 10 sentences, ~180-240 words, preserves nuance and named artifacts
+summary_size = "medium"
