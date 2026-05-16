@@ -32,6 +32,17 @@ def main(argv: list[str] | None = None) -> int:
             "the Claude Code Stop payload."
         ),
     )
+    p.add_argument(
+        "--session-id",
+        type=str,
+        default=None,
+        help=(
+            "Session id to look up <session_id>.jsonl in the project slug dir. "
+            "Less specific than --transcript-path but more specific than "
+            "the locator's newest-mtime fallback. Useful from CLI callers "
+            "that have a session id but not a full path."
+        ),
+    )
     args = p.parse_args(argv)
 
     if args.transcript_path is not None:
@@ -44,7 +55,7 @@ def main(argv: list[str] | None = None) -> int:
         path = args.transcript_path
     else:
         try:
-            path = TranscriptLocator().locate(args.cwd)
+            path = TranscriptLocator().locate(args.cwd, session_id=args.session_id)
         except TranscriptNotFoundError as exc:
             print(f"error: {exc}", file=sys.stderr)
             return EXIT_NO_TRANSCRIPT

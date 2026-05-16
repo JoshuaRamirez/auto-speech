@@ -23,7 +23,7 @@ class TranscriptLocator:
 
     PROJECTS_ROOT = Path.home() / ".claude" / "projects"
 
-    def locate(self, cwd: Path | None = None) -> Path:
+    def locate(self, cwd: Path | None = None, session_id: str | None = None) -> Path:
         cwd = (cwd or Path.cwd()).resolve()
         slug = str(cwd).replace("/", "-")
         slug_dir = self.PROJECTS_ROOT / slug
@@ -34,14 +34,21 @@ class TranscriptLocator:
                 f"no project directory at {slug_dir}; run Claude Code in this cwd first"
             )
 
-        sid = os.environ.get("CLAUDE_SESSION_ID")
+        # Precedence: explicit session_id arg → CLAUDE_SESSION_ID env →
+        # CLAUDE_CODE_SESSION_ID env (newer Claude Code) → newest-mtime
+        # fallback. The arg form lets callers pass the session_id from
+        # the hook payload directly (more reliable than env propagation,
+        # which broke between Claude Code versions — see commit 03301c8).
+        sid = session_id or os.environ.get("CLAUDE_SESSION_ID") or os.environ.get(
+            "CLAUDE_CODE_SESSION_ID"
+        )
         if sid:
             candidate = slug_dir / f"{sid}.jsonl"
             if candidate.exists():
-                print(f"[locator] using CLAUDE_SESSION_ID file {candidate}", file=sys.stderr)
+                print(f"[locator] using session_id file {candidate}", file=sys.stderr)
                 return candidate
             print(
-                f"[locator] CLAUDE_SESSION_ID={sid} set but {candidate} missing; "
+                f"[locator] session_id={sid} but {candidate} missing; "
                 f"falling back to newest-jsonl",
                 file=sys.stderr,
             )

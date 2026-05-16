@@ -48,6 +48,68 @@ def _slug_for(cwd: Path) -> str:
     return str(cwd.resolve()).replace("/", "-")
 
 
+def test_session_id_kwarg_wins_over_env_and_mtime() -> None:
+    with tempfile.TemporaryDirectory() as project_root_str:
+        with tempfile.TemporaryDirectory() as cwd_str:
+            project_root = Path(project_root_str)
+            cwd = Path(cwd_str)
+            slug_dir = project_root / _slug_for(cwd)
+            slug_dir.mkdir()
+            target = slug_dir / "arg-session.jsonl"
+            env_target = slug_dir / "env-session.jsonl"
+            newer = slug_dir / "newer.jsonl"
+            _make_jsonl(target)
+            _make_jsonl(env_target, mtime_offset=50)
+            _make_jsonl(newer, mtime_offset=100)
+
+            loc = _patched_locator(project_root)
+            prev = os.environ.get("CLAUDE_SESSION_ID")
+            os.environ["CLAUDE_SESSION_ID"] = "env-session"
+            try:
+                # Explicit kwarg should win over both the env var and mtime.
+                result = loc.locate(cwd, session_id="arg-session")
+            finally:
+                if prev is None:
+                    os.environ.pop("CLAUDE_SESSION_ID", None)
+                else:
+                    os.environ["CLAUDE_SESSION_ID"] = prev
+
+            assert result == target, f"kwarg should win; got {result}"
+
+
+def test_claude_code_session_id_env_is_also_honored() -> None:
+    # Newer Claude Code uses CLAUDE_CODE_SESSION_ID rather than the
+    # older CLAUDE_SESSION_ID. The locator now accepts either.
+    with tempfile.TemporaryDirectory() as project_root_str:
+        with tempfile.TemporaryDirectory() as cwd_str:
+            project_root = Path(project_root_str)
+            cwd = Path(cwd_str)
+            slug_dir = project_root / _slug_for(cwd)
+            slug_dir.mkdir()
+            cc_target = slug_dir / "cc-session.jsonl"
+            newer = slug_dir / "newer.jsonl"
+            _make_jsonl(cc_target)
+            _make_jsonl(newer, mtime_offset=100)
+
+            loc = _patched_locator(project_root)
+            prev_old = os.environ.pop("CLAUDE_SESSION_ID", None)
+            prev_new = os.environ.get("CLAUDE_CODE_SESSION_ID")
+            os.environ["CLAUDE_CODE_SESSION_ID"] = "cc-session"
+            try:
+                result = loc.locate(cwd)
+            finally:
+                if prev_old is not None:
+                    os.environ["CLAUDE_SESSION_ID"] = prev_old
+                if prev_new is None:
+                    os.environ.pop("CLAUDE_CODE_SESSION_ID", None)
+                else:
+                    os.environ["CLAUDE_CODE_SESSION_ID"] = prev_new
+
+            assert result == cc_target, (
+                f"CLAUDE_CODE_SESSION_ID should be honored; got {result}"
+            )
+
+
 def test_session_id_env_picks_named_file_when_present() -> None:
     with tempfile.TemporaryDirectory() as project_root_str:
         with tempfile.TemporaryDirectory() as cwd_str:
@@ -170,6 +232,8 @@ def test_raises_when_slug_dir_empty() -> None:
 
 def main() -> int:
     tests = [
+        test_session_id_kwarg_wins_over_env_and_mtime,
+        test_claude_code_session_id_env_is_also_honored,
         test_session_id_env_picks_named_file_when_present,
         test_env_var_set_but_file_missing_falls_back_to_newest,
         test_no_env_var_uses_newest_jsonl,
