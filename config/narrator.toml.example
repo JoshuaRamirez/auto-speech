@@ -34,3 +34,9 @@ silence_seconds = 8.0
 
 # Daemon auto-shuts-down after this many seconds with no events.
 idle_shutdown_seconds = 600.0
+
+# Minimum tool calls in a phase before we narrate it. Default 1
+# (narrate everything except suppressed categories). Raise to 2 or 3
+# if the narration is too chatty for your workflow. Raising it past
+# the typical per-turn tool count will silence the narrator entirely.
+min_events_per_phase = 1

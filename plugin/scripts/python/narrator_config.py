@@ -62,6 +62,7 @@ def load_config() -> dict:
         "max_tokens": int(section.get("max_tokens", 60)),
         "silence_seconds": float(section.get("silence_seconds", 8.0)),
         "idle_shutdown_seconds": float(section.get("idle_shutdown_seconds", 600.0)),
+        "min_events_per_phase": int(section.get("min_events_per_phase", 1)),
     }
 
 

@@ -18,20 +18,36 @@ class Summarizer(ABC):
 
 class MockSummarizer(Summarizer):
     """Templated fallback. Used when no provider is configured or the
-    configured provider's deps are missing."""
+    configured provider's deps are missing. Less rich than an LLM
+    summary but at least it's a complete sentence."""
+
+    _PRESENT_PROGRESSIVE = {
+        "explore": "exploring",
+        "edit": "editing",
+        "run": "running",
+        "delegate": "delegating to",
+        "reason": "reasoning through",
+        "other": "performing",
+    }
+
+    @staticmethod
+    def _strip_tool_prefix(summary: str) -> str:
+        # Event summaries are formatted as "ToolName: arg" by the
+        # classifier. For mock narration we voice the action verb
+        # ourselves, so trim the redundant tool prefix.
+        if ": " in summary:
+            return summary.split(": ", 1)[1]
+        return summary
 
     def summarize(self, phase: Phase) -> str:
-        verb = {
-            "explore": "examined",
-            "edit": "modified",
-            "run": "executed",
-            "delegate": "delegated to",
-            "reason": "reasoned through",
-            "other": "performed",
-        }.get(phase.category.value, "performed")
+        verb = self._PRESENT_PROGRESSIVE.get(phase.category.value, "performing")
+        if len(phase.events) == 1:
+            arg = self._strip_tool_prefix(phase.events[0].summary)
+            return f"{verb.capitalize()} {arg}"
+        first = self._strip_tool_prefix(phase.events[0].summary)
         return (
-            f"The assistant {verb} {len(phase.events)} {phase.category.value} "
-            f"operations over {phase.duration_s:.0f} seconds."
+            f"The assistant is {verb} {len(phase.events)} items — "
+            f"starting with {first}."
         )
 
 

@@ -36,11 +36,6 @@ WATERMARK_FILE = Path("/tmp/auto-speech-narrator-daemon.watermark")
 
 POLL_INTERVAL_S = 0.25
 
-# Don't narrate phases smaller than this — a "phase" of one or two tool
-# calls almost never carries enough signal to be worth a spoken line,
-# and narrating them turns into play-by-play.
-MIN_EVENTS_PER_PHASE = 3
-
 # Categories we never narrate. Single MCP calls and stray uncategorised
 # tools land in OTHER and produce noise.
 SUPPRESSED_CATEGORIES = {Category.OTHER}
@@ -198,10 +193,11 @@ class NarratorService:
                 f"(suppressed)"
             )
             return
-        if len(phase.events) < MIN_EVENTS_PER_PHASE:
+        min_events = int(self._config.get("min_events_per_phase", 1))
+        if len(phase.events) < min_events:
             _log(
                 f"skipping phase category={phase.category.value} "
-                f"events={len(phase.events)} (< {MIN_EVENTS_PER_PHASE})"
+                f"events={len(phase.events)} (< {min_events})"
             )
             return
         self._tts_queue.put(phase)
