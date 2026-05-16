@@ -110,6 +110,10 @@ rm -f /tmp/auto-speech-narrator-daemon.log 2>/dev/null && echo "[uninstall] remo
 rm -f /tmp/auto-speech-narrator-daemon.pid 2>/dev/null && echo "[uninstall] removed /tmp/auto-speech-narrator-daemon.pid"
 rm -f /tmp/auto-speech-narrator-daemon.watermark 2>/dev/null && echo "[uninstall] removed /tmp/auto-speech-narrator-daemon.watermark"
 rm -f /tmp/auto-speech-narration-depth 2>/dev/null && echo "[uninstall] removed /tmp/auto-speech-narration-depth"
+if [[ -d "$HOME/.claude/auto-speech-narrate-sessions" ]]; then
+    rm -rf "$HOME/.claude/auto-speech-narrate-sessions"
+    echo "[uninstall] removed per-session narrate markers ($HOME/.claude/auto-speech-narrate-sessions)"
+fi
 
 echo "[uninstall] done."
 echo

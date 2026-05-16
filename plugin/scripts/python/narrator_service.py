@@ -158,16 +158,25 @@ class NarratorService:
                 continue
             self._last_event_ts = time.time()
 
-            # Per-cwd marker recheck. The hook gates on PWD at fire time,
-            # but the daemon is global — without this check, a stray
-            # event from another project's session (or a stale event
-            # whose marker has since been removed) would still narrate.
-            # The hook is cheap; the speak path is not. Filter here.
-            cwd = ev.get("cwd") or ""
-            if cwd:
-                marker = Path(cwd) / ".claude" / "narrate.enabled"
-                if not marker.exists():
-                    continue
+            # Per-session marker recheck. The hook gates by CLAUDE_CODE_
+            # SESSION_ID at fire time, but the daemon is global — without
+            # this check, a stale event from a session whose marker has
+            # since been removed would still narrate. Look up the
+            # event's session_id (Claude Code includes it in every hook
+            # payload) and require the corresponding marker to still
+            # exist. The hook check is cheap; the speak path is not.
+            payload = ev.get("payload") or {}
+            session_id = payload.get("session_id") or ""
+            if not session_id:
+                continue
+            session_marker = (
+                Path.home()
+                / ".claude"
+                / "auto-speech-narrate-sessions"
+                / session_id
+            )
+            if not session_marker.exists():
+                continue
 
             # Stop event → flush in-flight phase but SUPPRESS narration.
             # The end-of-turn autoplay owns the final read; we don't want

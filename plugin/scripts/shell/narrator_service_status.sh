@@ -6,10 +6,27 @@ set -uo pipefail
 PID_FILE="/tmp/auto-speech-narrator-daemon.pid"
 DEPTH_FILE="/tmp/auto-speech-narration-depth"
 LOG_FILE="/tmp/auto-speech-narrator-daemon.log"
-MARKER="$PWD/.claude/narrate.enabled"
+SESSION_ID="${CLAUDE_CODE_SESSION_ID:-}"
+MARKER_DIR="$HOME/.claude/auto-speech-narrate-sessions"
+SESSION_MARKER="$MARKER_DIR/${SESSION_ID:-NO_SESSION_ID}"
+LEGACY_MARKER="$PWD/.claude/narrate.enabled"
 
 echo "narrator status"
-echo "  marker:    $([[ -e "$MARKER" ]] && echo "ON   ($MARKER)" || echo "OFF  ($MARKER)")"
+echo "  session:   ${SESSION_ID:-<unset>}"
+if [[ -n "$SESSION_ID" ]]; then
+    echo "  marker:    $([[ -e "$SESSION_MARKER" ]] && echo "ON   ($SESSION_MARKER)" || echo "OFF  ($SESSION_MARKER)")"
+else
+    echo "  marker:    cannot check — CLAUDE_CODE_SESSION_ID not set"
+fi
+if [[ -e "$LEGACY_MARKER" ]]; then
+    echo "  legacy:    DEPRECATED per-project marker still present at $LEGACY_MARKER (run /auto-speech-narrate-off to clean)"
+fi
+if [[ -d "$MARKER_DIR" ]]; then
+    OTHER_SESSIONS=$(ls "$MARKER_DIR" 2>/dev/null | grep -v "^${SESSION_ID:-}$" | wc -l | tr -d ' ')
+    if [[ "$OTHER_SESSIONS" -gt 0 ]]; then
+        echo "  others:    $OTHER_SESSIONS other session(s) also opted in"
+    fi
+fi
 
 if [[ -f "$PID_FILE" ]]; then
     PID="$(cat "$PID_FILE" 2>/dev/null || true)"

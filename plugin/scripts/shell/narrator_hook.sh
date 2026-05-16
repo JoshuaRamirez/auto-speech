@@ -26,8 +26,17 @@ if [[ "${AUTO_SPEECH_SUPPRESS_HOOKS:-}" == "1" ]]; then
     exit 0
 fi
 
-# Per-project gate. Cheap test, runs before anything else.
-MARKER="$PWD/.claude/narrate.enabled"
+# Per-session gate. Claude Code exports CLAUDE_CODE_SESSION_ID for every
+# spawned subprocess (including hooks). Each session opts in individually
+# by touching ~/.claude/auto-speech-narrate-sessions/<session_id>. The
+# old per-project marker scheme is gone: a single project may have many
+# concurrent sessions and the user only wants to hear narration for the
+# session they're attending to.
+SESSION_ID="${CLAUDE_CODE_SESSION_ID:-}"
+if [[ -z "$SESSION_ID" ]]; then
+    exit 0
+fi
+MARKER="$HOME/.claude/auto-speech-narrate-sessions/$SESSION_ID"
 if [[ ! -e "$MARKER" ]]; then
     exit 0
 fi

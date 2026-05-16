@@ -56,9 +56,14 @@ existing TTS pipeline in strict FIFO order.
 End-of-turn autoplay waits for the narration FIFO to drain before reading
 the final response, so the two pipelines never overlap.
 
-Gating is **per-project** via a marker file (`<cwd>/.claude/narrate.enabled`).
-A project never participates by default — you opt in once with
-`/auto-speech-narrate-on`.
+Gating is **per-session** via a marker file
+(`~/.claude/auto-speech-narrate-sessions/<session_id>`). Each Claude Code
+session opts in independently — running `/auto-speech-narrate-on` in one
+window does not turn on narration for a parallel Claude Code session in
+the same project. The per-project marker scheme from the original Phase
+23 was deprecated: a single project may have many concurrent sessions
+and the user only wants to hear narration for the session they're
+attending to.
 
 Provider is pluggable. The shipped default is `mock` (templated, no deps);
 `/auto-speech-narrate-install` flips it to `mlx` and pulls a 4-bit Qwen 3B
