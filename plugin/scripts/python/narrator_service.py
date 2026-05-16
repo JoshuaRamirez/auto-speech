@@ -287,11 +287,19 @@ class NarratorService:
         self._wait_mpv_idle(max_seconds=120.0, initial_sleep=0.0)
         _log(f"speak: {line[:80]}")
         speak = _speak_script()
+        # Pass SUPPRESS_HOOKS=1 through to the TTS subprocess as a belt
+        # for the suspenders. Today's speak.py path doesn't spawn any
+        # Claude Code hooks (it's pure local TTS + mpv), so this is
+        # purely defensive — if a future TTS engine ever invokes claude
+        # internally, recursion is pre-empted. See cli_rewrite's use of
+        # the same env var (commit 5cff691).
+        env = {**os.environ, "AUTO_SPEECH_SUPPRESS_HOOKS": "1"}
         proc = subprocess.run(
             [str(speak)],
             input=line.encode("utf-8"),
             capture_output=True,
             timeout=120,
+            env=env,
         )
         if proc.returncode != 0:
             _log(f"speak rc={proc.returncode} stderr={proc.stderr.decode(errors='replace')[:200]}")
