@@ -22,13 +22,32 @@ def main(argv: list[str] | None = None) -> int:
     p = argparse.ArgumentParser(description="Extract the Nth-most-recent assistant message text.")
     p.add_argument("--ordinal", type=int, default=1)
     p.add_argument("--cwd", type=Path, default=None)
+    p.add_argument(
+        "--transcript-path",
+        type=Path,
+        default=None,
+        help=(
+            "Explicit session jsonl. When set, skips TranscriptLocator's "
+            "newest-mtime heuristic. The autoplay hook threads this from "
+            "the Claude Code Stop payload."
+        ),
+    )
     args = p.parse_args(argv)
 
-    try:
-        path = TranscriptLocator().locate(args.cwd)
-    except TranscriptNotFoundError as exc:
-        print(f"error: {exc}", file=sys.stderr)
-        return EXIT_NO_TRANSCRIPT
+    if args.transcript_path is not None:
+        if not args.transcript_path.exists() or not args.transcript_path.is_file():
+            print(
+                f"error: --transcript-path {args.transcript_path} does not exist",
+                file=sys.stderr,
+            )
+            return EXIT_NO_TRANSCRIPT
+        path = args.transcript_path
+    else:
+        try:
+            path = TranscriptLocator().locate(args.cwd)
+        except TranscriptNotFoundError as exc:
+            print(f"error: {exc}", file=sys.stderr)
+            return EXIT_NO_TRANSCRIPT
 
     try:
         msg = MessageSelector().select(path, args.ordinal)

@@ -22,6 +22,10 @@ MIN_LEN="${AUTO_SPEECH_AUTOPLAY_MIN_LEN:-20}"
 COALESCE_SECONDS="${AUTO_SPEECH_AUTOPLAY_COALESCE:-1}"
 
 START_BEACON_MTIME="${1:-0}"
+# Optional second arg: transcript_path from the hook payload, threaded
+# through autoplay_hook.sh so extract reads from the EXACT session that
+# fired this Stop event rather than guessing by jsonl mtime.
+TRANSCRIPT_PATH="${2:-}"
 
 log() { printf '[%s] [worker pid=%d] %s\n' "$(date -u +%FT%TZ)" $$ "$*"; }
 
@@ -118,7 +122,11 @@ fi
 SRC_FILE="$(mktemp -t auto-speech-autoplay-XXXXXX)"
 trap 'rm -f "$SRC_FILE" "$SRC_FILE.rewrite"' EXIT
 
-if ! "$EXTRACT" --ordinal 1 > "$SRC_FILE" 2>/dev/null; then
+EXTRACT_ARGS=(--ordinal 1)
+if [[ -n "$TRANSCRIPT_PATH" ]]; then
+    EXTRACT_ARGS+=(--transcript-path "$TRANSCRIPT_PATH")
+fi
+if ! "$EXTRACT" "${EXTRACT_ARGS[@]}" > "$SRC_FILE" 2>/dev/null; then
     log "extract failed (no qualifying message?); skipping"
     exit 0
 fi

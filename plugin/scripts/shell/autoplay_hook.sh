@@ -13,8 +13,18 @@ DISABLED_MARKER="$HOME/.claude/auto-speech.disabled"
 BEACON="/tmp/auto-speech-last-stop"
 LOG="/tmp/auto-speech-autoplay.log"
 
-# Always consume stdin so Claude Code's hook payload doesn't break the pipe.
-cat > /dev/null
+# Capture the hook payload. Claude Code passes a JSON document with
+# {session_id, transcript_path, cwd, hook_event_name, ...}; we want the
+# transcript_path so the worker reads from the EXACT session that fired
+# this Stop event, instead of relying on TranscriptLocator's "newest
+# .jsonl in slug dir" heuristic — which is wrong any time the user
+# runs two Claude sessions in the same project, or any time `claude -p`
+# briefly leaves a newer-mtime jsonl in the slug dir.
+PAYLOAD="$(cat)"
+TRANSCRIPT_PATH=""
+if command -v jq >/dev/null 2>&1; then
+    TRANSCRIPT_PATH="$(printf '%s' "$PAYLOAD" | jq -r '.transcript_path // ""' 2>/dev/null || true)"
+fi
 
 # Nested-claude-p guard: the autoplay's own cli_rewrite spawns `claude -p`,
 # which fires Stop hooks against this script. Without this, every rewrite
@@ -39,9 +49,9 @@ BEACON_MTIME="$(stat -f %m "$BEACON" 2>/dev/null || echo 0)"
 # Spawn the worker fully detached. macOS lacks GNU `setsid`, so we use
 # python3 to do a double-fork + setsid into a new session. The hook
 # itself returns in well under 100 ms.
-python3 - "$WORKER" "$BEACON_MTIME" "$LOG" <<'PY' &
+python3 - "$WORKER" "$BEACON_MTIME" "$LOG" "$TRANSCRIPT_PATH" <<'PY' &
 import os, sys
-worker, beacon_mtime, log = sys.argv[1], sys.argv[2], sys.argv[3]
+worker, beacon_mtime, log, transcript_path = sys.argv[1], sys.argv[2], sys.argv[3], sys.argv[4]
 # First fork: parent returns immediately; child continues.
 if os.fork() != 0:
     os._exit(0)
@@ -57,7 +67,11 @@ os.dup2(fd_log, 1)
 os.dup2(fd_log, 2)
 os.close(fd_null)
 os.close(fd_log)
-os.execvp("bash", ["bash", worker, beacon_mtime])
+# Worker accepts: beacon_mtime [transcript_path]
+argv = ["bash", worker, beacon_mtime]
+if transcript_path:
+    argv.append(transcript_path)
+os.execvp("bash", argv)
 PY
 disown 2>/dev/null || true
 
