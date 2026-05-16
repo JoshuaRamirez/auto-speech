@@ -48,6 +48,28 @@ if [[ ! -e "$MARKER" ]]; then
     exit 0
 fi
 
+# Auto-spawn the daemon if the user opted this session in but the daemon
+# has since exited (idle-shutdown after 10 min, or crashed, or never
+# started after a fresh boot). Without this, the user runs
+# /auto-speech-narrate-on once, comes back hours later, and hears
+# silence with no obvious diagnostic.
+PID_FILE="/tmp/auto-speech-narrator-daemon.pid"
+DAEMON_ALIVE=0
+if [[ -f "$PID_FILE" ]]; then
+    DAEMON_PID="$(cat "$PID_FILE" 2>/dev/null || true)"
+    if [[ -n "${DAEMON_PID:-}" ]] && kill -0 "$DAEMON_PID" 2>/dev/null; then
+        DAEMON_ALIVE=1
+    fi
+fi
+if [[ "$DAEMON_ALIVE" -eq 0 ]]; then
+    PLUGIN_SCRIPTS_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+    START_SCRIPT="$PLUGIN_SCRIPTS_DIR/narrator_service_start.sh"
+    if [[ -x "$START_SCRIPT" ]]; then
+        # Spawn detached so we don't block the hook. Stderr to err log.
+        ( "$START_SCRIPT" >/dev/null 2>>"$ERR_LOG" & ) 2>/dev/null
+    fi
+fi
+
 if ! command -v jq >/dev/null 2>&1; then
     printf '[%s] jq missing on PATH\n' "$(date -u +%FT%TZ)" >> "$ERR_LOG"
     exit 0

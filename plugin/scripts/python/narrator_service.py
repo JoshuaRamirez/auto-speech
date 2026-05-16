@@ -90,6 +90,13 @@ class NarratorService:
         _log(f"started pid={os.getpid()} provider={self._config['provider']}")
         self._update_depth(0)
 
+        # Eagerly load the summarizer at boot so the first phase doesn't
+        # eat a 3-6 s MLX-load latency at speak time. Failures here
+        # silently fall back to Mock via load_summarizer's downgrade
+        # path (the user gets robotic narration but no daemon crash).
+        eager_thread = threading.Thread(target=self._eager_load, daemon=True)
+        eager_thread.start()
+
         tts_thread = threading.Thread(target=self._tts_worker, daemon=True)
         tts_thread.start()
 
@@ -230,6 +237,17 @@ class NarratorService:
                 self._summarizer = load_summarizer(self._config)
                 _log(f"summarizer loaded in {time.time() - t0:.1f}s: {type(self._summarizer).__name__}")
             return self._summarizer
+
+    def _eager_load(self) -> None:
+        """Triggered at daemon boot. Pays the model-load cost once at
+        startup so the first real phase doesn't lag. Errors are logged
+        but never raised — load_summarizer downgrades to Mock on its
+        own, and a failed eager load just means the lazy path runs
+        later instead."""
+        try:
+            self._get_summarizer()
+        except Exception as exc:
+            _log(f"eager-load failed (will retry lazily on first phase): {exc!r}")
 
     def _tts_worker(self) -> None:
         while True:
