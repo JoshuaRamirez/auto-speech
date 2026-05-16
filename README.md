@@ -19,10 +19,45 @@ Playback (per-response autoplay + manual replay):
 /auto-speech-restart        # mpv seek to 0
 /auto-speech-seek           # mpv seek by +N, -N, N, or 'end'
 /auto-speech-end            # stop mpv playback
-/auto-speech-autoplay-on    # enable autoplay for THIS session (per-session opt-in)
-/auto-speech-autoplay-off   # disable autoplay for THIS session
-/auto-speech-autoplay-mode [verbatim|small|medium|large]  # set or show end-of-turn read mode
+/auto-speech-autoplay-on        # opt THIS session in for end-of-turn read
+/auto-speech-autoplay-off       # opt THIS session out
+/auto-speech-autoplay-mode      # set or show summary mode (verbatim|small|medium|large)
+/auto-speech-autoplay-status    # show session marker, opt-in dir, mpv, log tail
 ```
+
+## Autoplay
+
+The end-of-turn autoplay reads each completed assistant response aloud.
+Gating is **per-session**, mirroring narration: each Claude Code session
+opts in independently by touching its own marker file:
+
+```
+~/.claude/auto-speech-autoplay-sessions/<session_id>
+```
+
+Behaviour with the per-session marker dir:
+
+| State of `auto-speech-autoplay-sessions/` | Effect |
+|---|---|
+| absent or empty | Legacy default — autoplay fires for ALL sessions. |
+| has any markers | Strict mode — only sessions with their own marker fire. Other sessions are silenced. |
+
+A global panic mute at `~/.claude/auto-speech.disabled` takes precedence over
+everything and silences every session regardless of opt-in.
+
+The end-of-turn read shape is controlled by `~/.config/auto-speech/autoplay.toml`
+(four modes — see the table below), tunable also via `/auto-speech-autoplay-mode`:
+
+| Mode | Length | When |
+|---|---|---|
+| `verbatim` | full content, lossless | when every fact matters |
+| `summary` `small` | 1-2 sentences, the gist | quick acks |
+| `summary` `medium` | 3-5 sentences (default) | balanced |
+| `summary` `large` | 6-10 sentences, preserves nuance | long technical replies |
+
+Plus `coalesce_seconds` (default 1) and `narration_wait_max_seconds`
+(default 90) in the same config — formerly hardcoded as env vars,
+now overridable both in the config file and via the legacy env vars.
 
 The end-of-turn autoplay supports four modes via `~/.config/auto-speech/autoplay.toml`:
 
