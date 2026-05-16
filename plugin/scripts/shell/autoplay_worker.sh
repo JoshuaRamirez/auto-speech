@@ -15,6 +15,11 @@ VENV="$PROJECT_ROOT/.venv"
 BEACON="/tmp/auto-speech-last-stop"
 DISABLED_MARKER="$HOME/.claude/auto-speech.disabled"
 MIN_LEN="${AUTO_SPEECH_AUTOPLAY_MIN_LEN:-20}"
+# Coalesce window: rapid-fire Stops within this many seconds collapse —
+# only the newest spawned worker survives its early stale check, the rest
+# bail before doing any rewrite/TTS work. Tuned to be short enough that
+# autoplay still feels prompt, long enough to absorb a tool-call burst.
+COALESCE_SECONDS="${AUTO_SPEECH_AUTOPLAY_COALESCE:-1}"
 
 START_BEACON_MTIME="${1:-0}"
 
@@ -30,6 +35,14 @@ is_stale() {
 # between hook fire and worker reaching here.
 if [[ -e "$DISABLED_MARKER" ]]; then
     log "disable marker present; bailing"
+    exit 0
+fi
+
+# Coalesce: sleep briefly, then bail if a newer Stop has fired. This
+# collapses bursts of Stop events (tool-heavy turns) down to one survivor.
+sleep "$COALESCE_SECONDS"
+if is_stale; then
+    log "stale during coalesce window; bailing (newer worker will handle)"
     exit 0
 fi
 
@@ -108,12 +121,12 @@ if [[ -z "$REWRITE_LEN" || "$REWRITE_LEN" -lt 1 ]]; then
 fi
 log "rewrite chars=$REWRITE_LEN"
 
-if is_stale; then
-    log "stale after rewrite; bailing (cache not promoted)"
-    exit 0
-fi
-
-if is_stale; then log "stale before speak; bailing"; exit 0; fi
+# Intentionally no staleness check here. If a newer Stop fired during the
+# rewrite, that newer worker is also running; when it reaches speak.py,
+# MpvController._kill_prior_session() tears down whatever mpv this worker
+# starts. Net effect: brief truncation of the older audio, newest content
+# wins. Bailing here instead would mean the user hears NOTHING in active
+# multi-turn conversations where rewrites can't outrun the next Stop.
 "$SPEAK" --source-hash "$SOURCE_HASH" < "$REWRITE_FILE" >/dev/null 2>&1
 RC=$?
 if [[ "$RC" -ne 0 ]]; then
