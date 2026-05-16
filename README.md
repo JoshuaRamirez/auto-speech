@@ -146,3 +146,26 @@ auto-speech/
 ## Read first
 - [docs/specification/README.md](docs/specification/README.md) — the spec
 - [docs/plan/implementation-plan.md](docs/plan/implementation-plan.md) — the plan
+
+## Known deferred work
+
+Two items from the hardening pass were intentionally left undone:
+
+- **End-to-end integration test** (full Stop-hook → autoplay worker
+  → cli_rewrite → speak.py → mpv → audible WAV). Doing this properly
+  requires a fake `claude` binary on PATH AND a mock mpv that records
+  start invocations without actually playing audio. The current
+  17-file suite covers each link in the chain individually, so the
+  marginal value of a true end-to-end run is low relative to the
+  fixture cost. Re-evaluate if a future regression spans multiple
+  components.
+- **`REASON` phase category** is declared in
+  `narrator_phase_classifier.Category` and the MockSummarizer's verb
+  tables, but never assigned. The intent was to narrate assistant
+  text-only chunks (no tool call) as a "thinking" phase. Claude Code
+  doesn't emit such chunks through any of the hook events we use
+  (PreToolUse / PostToolUse / Stop / UserPromptSubmit), so wiring
+  the category needs a different signal source — e.g., tailing the
+  transcript JSONL — which we don't currently have a clean place
+  for. The category is left in the enum so a future implementation
+  doesn't need a migration.
