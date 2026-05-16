@@ -25,7 +25,7 @@ import time
 from pathlib import Path
 
 from narrator_config import load_config
-from narrator_phase_classifier import Phase, PhaseClassifier
+from narrator_phase_classifier import Category, Phase, PhaseClassifier
 from narrator_summarizer import Summarizer, load_summarizer
 
 EVENTS_LOG = Path("/tmp/auto-speech-narrator-events.jsonl")
@@ -35,6 +35,15 @@ DEPTH_FILE = Path("/tmp/auto-speech-narration-depth")
 WATERMARK_FILE = Path("/tmp/auto-speech-narrator-daemon.watermark")
 
 POLL_INTERVAL_S = 0.25
+
+# Don't narrate phases smaller than this — a "phase" of one or two tool
+# calls almost never carries enough signal to be worth a spoken line,
+# and narrating them turns into play-by-play.
+MIN_EVENTS_PER_PHASE = 3
+
+# Categories we never narrate. Single MCP calls and stray uncategorised
+# tools land in OTHER and produce noise.
+SUPPRESSED_CATEGORIES = {Category.OTHER}
 
 
 def _log(msg: str) -> None:
@@ -153,14 +162,54 @@ class NarratorService:
             except json.JSONDecodeError:
                 continue
             self._last_event_ts = time.time()
-            closed = self._classifier.feed(ev)
-            if closed is not None and closed.events:
-                self._enqueue(closed)
 
-    def _enqueue(self, phase: Phase) -> None:
+            # Per-cwd marker recheck. The hook gates on PWD at fire time,
+            # but the daemon is global — without this check, a stray
+            # event from another project's session (or a stale event
+            # whose marker has since been removed) would still narrate.
+            # The hook is cheap; the speak path is not. Filter here.
+            cwd = ev.get("cwd") or ""
+            if cwd:
+                marker = Path(cwd) / ".claude" / "narrate.enabled"
+                if not marker.exists():
+                    continue
+
+            # Stop event → flush in-flight phase but SUPPRESS narration.
+            # The end-of-turn autoplay owns the final read; we don't want
+            # the narrator's post-Stop flush competing with it (and
+            # killing autoplay's mpv via _kill_prior_session).
+            event_type = ev.get("event", "")
+            if event_type == "Stop":
+                self._classifier.flush()  # discard, don't enqueue
+                continue
+
+            closed = self._classifier.feed(ev)
+            if closed is not None:
+                self._maybe_enqueue(closed)
+
+    def _maybe_enqueue(self, phase: Phase) -> None:
+        """Apply chattiness filters then enqueue. Drops phases that are
+        too small or in a suppressed category."""
+        if not phase.events:
+            return
+        if phase.category in SUPPRESSED_CATEGORIES:
+            _log(
+                f"skipping phase category={phase.category.value} "
+                f"(suppressed)"
+            )
+            return
+        if len(phase.events) < MIN_EVENTS_PER_PHASE:
+            _log(
+                f"skipping phase category={phase.category.value} "
+                f"events={len(phase.events)} (< {MIN_EVENTS_PER_PHASE})"
+            )
+            return
         self._tts_queue.put(phase)
         self._update_depth(self._tts_queue.qsize())
-        _log(f"enqueued phase={phase.category.value} events={len(phase.events)} depth={self._tts_queue.qsize()}")
+        _log(
+            f"enqueued phase={phase.category.value} "
+            f"events={len(phase.events)} depth={self._tts_queue.qsize()}"
+        )
 
     def _update_depth(self, depth: int) -> None:
         try:
