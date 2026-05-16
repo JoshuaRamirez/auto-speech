@@ -9,6 +9,7 @@ time-to-first-audio and seamless streaming.
 All commands are namespaced with `auto-speech-` so they don't collide with
 built-in Claude Code commands or other plugins (see "Naming convention" below).
 
+Playback (per-response autoplay + manual replay):
 ```
 /auto-speech-speak [n]      # speak the n-th most recent assistant message (default 1)
 /auto-speech-replay [n]     # replay the n-th most recent cached entry
@@ -21,6 +22,38 @@ built-in Claude Code commands or other plugins (see "Naming convention" below).
 /auto-speech-autoplay-on    # remove the autoplay disable marker
 /auto-speech-autoplay-off   # touch the autoplay disable marker
 ```
+
+Real-time narration (play-by-play of in-flight turns; local LLM, default off):
+```
+/auto-speech-narrate-install [model]  # install mlx-lm + pull a default model, write user config
+/auto-speech-narrate-on               # enable narration in this project, start daemon
+/auto-speech-narrate-off              # disable narration in this project (daemon idle-exits)
+/auto-speech-narrate-stop             # stop the daemon immediately
+/auto-speech-narrate-status           # marker / pid / queue depth / recent log
+/auto-speech-narrate-config [show|edit|path]  # inspect or edit ~/.config/auto-speech/narrator.toml
+```
+
+## Narration
+
+A separate pipeline (independent of end-of-turn autoplay) summarises what
+Claude is doing **while it happens** and speaks the summary aloud in
+newscaster voice. PreToolUse / PostToolUse / Stop / UserPromptSubmit hooks
+feed an event stream; a phase classifier groups consecutive tool calls of
+the same category (Explore / Edit / Run / Delegate); on each phase
+transition a local LLM produces one sentence; the line plays through the
+existing TTS pipeline in strict FIFO order.
+
+End-of-turn autoplay waits for the narration FIFO to drain before reading
+the final response, so the two pipelines never overlap.
+
+Gating is **per-project** via a marker file (`<cwd>/.claude/narrate.enabled`).
+A project never participates by default — you opt in once with
+`/auto-speech-narrate-on`.
+
+Provider is pluggable. The shipped default is `mock` (templated, no deps);
+`/auto-speech-narrate-install` flips it to `mlx` and pulls a 4-bit Qwen 3B
+model (configurable). Ollama / OpenAI / Anthropic providers are reserved
+slots for future implementations.
 
 ## Naming convention
 

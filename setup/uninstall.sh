@@ -34,6 +34,9 @@ NAMESPACED_CMDS=(
     auto-speech-pause auto-speech-resume auto-speech-restart
     auto-speech-end auto-speech-seek
     auto-speech-autoplay-on auto-speech-autoplay-off
+    auto-speech-narrate-on auto-speech-narrate-off
+    auto-speech-narrate-status auto-speech-narrate-stop
+    auto-speech-narrate-install auto-speech-narrate-config
 )
 LEGACY_CMDS=(
     speak replay pause resume seek restart end autoplay-on autoplay-off
@@ -64,6 +67,18 @@ else
     echo "[uninstall] uninstall-hook.sh missing; skipping Stop hook removal"
 fi
 
+# 2b. Remove narrator hooks (Pre/PostToolUse/Stop/UserPromptSubmit).
+if [[ -x "$PROJECT_ROOT/setup/uninstall-narrator-hooks.sh" ]]; then
+    "$PROJECT_ROOT/setup/uninstall-narrator-hooks.sh" || true
+else
+    echo "[uninstall] uninstall-narrator-hooks.sh missing; skipping narrator hooks"
+fi
+
+# 2c. Stop the narrator daemon if running.
+if [[ -x "$PROJECT_ROOT/plugin/scripts/shell/narrator_service_stop.sh" ]]; then
+    "$PROJECT_ROOT/plugin/scripts/shell/narrator_service_stop.sh" || true
+fi
+
 # 3. Remove autoplay disable marker.
 if [[ -e "$DISABLE_MARKER" ]]; then
     rm -f "$DISABLE_MARKER"
@@ -89,6 +104,12 @@ rm -f /tmp/auto-speech-webapp.log 2>/dev/null && echo "[uninstall] removed /tmp/
 rm -f /tmp/auto-speech-autoplay.log 2>/dev/null && echo "[uninstall] removed /tmp/auto-speech-autoplay.log"
 rm -f /tmp/auto-speech-claude-stderr.log 2>/dev/null && echo "[uninstall] removed /tmp/auto-speech-claude-stderr.log"
 rm -f /tmp/auto-speech-last-stop 2>/dev/null && echo "[uninstall] removed /tmp/auto-speech-last-stop"
+rm -f /tmp/auto-speech-narrator-events.jsonl 2>/dev/null && echo "[uninstall] removed /tmp/auto-speech-narrator-events.jsonl"
+rm -f /tmp/auto-speech-narrator-hook.err 2>/dev/null && echo "[uninstall] removed /tmp/auto-speech-narrator-hook.err"
+rm -f /tmp/auto-speech-narrator-daemon.log 2>/dev/null && echo "[uninstall] removed /tmp/auto-speech-narrator-daemon.log"
+rm -f /tmp/auto-speech-narrator-daemon.pid 2>/dev/null && echo "[uninstall] removed /tmp/auto-speech-narrator-daemon.pid"
+rm -f /tmp/auto-speech-narrator-daemon.watermark 2>/dev/null && echo "[uninstall] removed /tmp/auto-speech-narrator-daemon.watermark"
+rm -f /tmp/auto-speech-narration-depth 2>/dev/null && echo "[uninstall] removed /tmp/auto-speech-narration-depth"
 
 echo "[uninstall] done."
 echo
