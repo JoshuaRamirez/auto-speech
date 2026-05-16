@@ -249,8 +249,23 @@ class NarratorService:
 
     def _speak(self, line: str) -> None:
         """Block until the spoken WAV plays to completion so we get true
-        FIFO. We use run_speak.sh and then wait for the resulting mpv to
-        exit before pulling the next phase off the queue."""
+        FIFO. Two waits are needed:
+
+          PRE-wait: any mpv that's currently playing — whether ours from
+          a previous phase OR the end-of-turn autoplay's response read —
+          must finish first. Otherwise speak.py's MpvController.start()
+          kills it (newest-wins is what we DON'T want here). This is
+          the autoplay-interruption fix.
+
+          POST-wait: wait for our own mpv to finish so the next phase's
+          speak doesn't kill it.
+
+        Both use the same SessionDir.is_mpv_running() probe; the
+        pre-wait doesn't sleep first since we want to detect the
+        currently-running mpv immediately.
+        """
+        # PRE: don't interrupt an in-progress play.
+        self._wait_mpv_idle(max_seconds=120.0, initial_sleep=0.0)
         _log(f"speak: {line[:80]}")
         speak = _speak_script()
         proc = subprocess.run(
@@ -262,15 +277,17 @@ class NarratorService:
         if proc.returncode != 0:
             _log(f"speak rc={proc.returncode} stderr={proc.stderr.decode(errors='replace')[:200]}")
             return
-        # Wait for mpv to finish so the next narration doesn't kill this one.
-        self._wait_mpv_idle(max_seconds=120.0)
+        # POST: wait for our mpv to finish before pulling the next phase.
+        self._wait_mpv_idle(max_seconds=120.0, initial_sleep=0.3)
 
-    def _wait_mpv_idle(self, max_seconds: float) -> None:
+    def _wait_mpv_idle(self, max_seconds: float, initial_sleep: float = 0.3) -> None:
         from session_dir import SessionDir  # local import; project module
 
         deadline = time.monotonic() + max_seconds
-        # Give mpv a moment to start before we check
-        time.sleep(0.3)
+        # Optional initial sleep — useful AFTER we start mpv (let it spin
+        # up before checking), pointless BEFORE we'd start a new one.
+        if initial_sleep > 0:
+            time.sleep(initial_sleep)
         while time.monotonic() < deadline:
             if not SessionDir.is_mpv_running():
                 return
