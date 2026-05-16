@@ -16,6 +16,15 @@ LOG="/tmp/auto-speech-autoplay.log"
 # Always consume stdin so Claude Code's hook payload doesn't break the pipe.
 cat > /dev/null
 
+# Nested-claude-p guard: the autoplay's own cli_rewrite spawns `claude -p`,
+# which fires Stop hooks against this script. Without this, every rewrite
+# triggers a NEW autoplay worker that reads from the rewrite's transcript
+# and recursively re-rewrites its own output. cli_rewrite sets this var
+# in its subprocess env so we can bail here.
+if [[ "${AUTO_SPEECH_SUPPRESS_HOOKS:-}" == "1" ]]; then
+    exit 0
+fi
+
 # Disable marker — exit 0 fast.
 if [[ -e "$DISABLED_MARKER" ]]; then
     exit 0

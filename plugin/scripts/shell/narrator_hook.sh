@@ -20,6 +20,12 @@ ERR_LOG="/tmp/auto-speech-narrator-hook.err"
 # Always consume stdin so Claude Code's hook payload doesn't break the pipe.
 PAYLOAD="$(cat)"
 
+# Nested-claude-p guard: cli_rewrite spawns `claude -p` which fires its
+# own hooks. Those events are noise, not narratable activity. Bail.
+if [[ "${AUTO_SPEECH_SUPPRESS_HOOKS:-}" == "1" ]]; then
+    exit 0
+fi
+
 # Per-project gate. Cheap test, runs before anything else.
 MARKER="$PWD/.claude/narrate.enabled"
 if [[ ! -e "$MARKER" ]]; then

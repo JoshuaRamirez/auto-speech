@@ -9,6 +9,7 @@ See docs/decisions/ADR-011-claude-cli-rewriter.md.
 """
 from __future__ import annotations
 
+import os
 import shutil
 import subprocess
 from pathlib import Path
@@ -62,6 +63,15 @@ class ClaudeCliRewriter:
             "--allowed-tools",
             "",
         ]
+        # The `claude -p` subprocess starts its own Claude Code session,
+        # which fires its OWN Stop / PreToolUse / PostToolUse hooks against
+        # this plugin's autoplay_hook.sh and narrator_hook.sh. Without
+        # this guard, every rewrite would trigger a NEW autoplay worker
+        # that reads from the rewrite's session jsonl (newest-mtime in
+        # the project slug dir) and recursively re-rewrites its own
+        # output. Set an env var that both hooks check up front; nested
+        # invocations bail with exit 0.
+        env = {**os.environ, "AUTO_SPEECH_SUPPRESS_HOOKS": "1"}
         try:
             result = subprocess.run(
                 cmd,
@@ -70,6 +80,7 @@ class ClaudeCliRewriter:
                 text=True,
                 timeout=timeout_seconds,
                 check=True,
+                env=env,
             )
         except subprocess.TimeoutExpired as exc:
             raise ClaudeCliRewriteError(
