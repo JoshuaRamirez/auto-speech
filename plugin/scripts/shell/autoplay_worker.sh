@@ -28,7 +28,9 @@ if [[ -x "$VENV/bin/python" ]]; then
     CFG_JSON="$("$VENV/bin/python" "$PLUGIN_SCRIPTS_DIR/python/autoplay_config.py" 2>/dev/null || true)"
     if [[ -n "$CFG_JSON" ]]; then
         COALESCE_FROM_CONFIG="$(printf '%s' "$CFG_JSON" | "$VENV/bin/python" -c 'import json,sys; d=json.load(sys.stdin); print(d.get("coalesce_seconds",""))' 2>/dev/null || true)"
-        NARRATION_WAIT_FROM_CONFIG="$(printf '%s' "$CFG_JSON" | "$VENV/bin/python" -c 'import json,sys; d=json.load(sys.stdin); print(d.get("narration_wait_max_seconds",""))' 2>/dev/null || true)"
+        # int(float(...)) so bash's (( ... )) arithmetic doesn't choke
+        # on a decimal value from the TOML (which is float by spec).
+        NARRATION_WAIT_FROM_CONFIG="$(printf '%s' "$CFG_JSON" | "$VENV/bin/python" -c 'import json,sys; d=json.load(sys.stdin); v=d.get("narration_wait_max_seconds"); print(int(float(v)) if v is not None else "")' 2>/dev/null || true)"
     fi
 fi
 COALESCE_SECONDS="${AUTO_SPEECH_AUTOPLAY_COALESCE:-${COALESCE_FROM_CONFIG:-1}}"
