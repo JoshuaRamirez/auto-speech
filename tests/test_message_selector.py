@@ -153,6 +153,66 @@ def test_select_raises_when_not_enough_messages() -> None:
         path.unlink()
 
 
+def test_exclude_regex_skips_matching_assistant_messages() -> None:
+    """Regression for the /auto-speech-speak self-reference loop: a
+    repeated invocation was extracting its own previous status line
+    ("spoke message #1 — ...") instead of the real prior content."""
+    path = _write_jsonl([
+        _assistant("real technical answer with the actual content"),
+        _assistant("spoke message #1 — 28 source chars, 48 rewrite chars"),
+    ])
+    try:
+        # Without the filter, ordinal=1 = the speak status echo.
+        msg = MessageSelector().select(path, 1)
+        assert msg.text.startswith("spoke message #1"), (
+            f"sanity: without filter, status is most recent. Got: {msg.text!r}"
+        )
+
+        # With the filter, ordinal=1 = the real content (status is skipped).
+        msg = MessageSelector().select(
+            path, 1, exclude_regex=r"^spoke message #\d+"
+        )
+        assert msg.text == "real technical answer with the actual content", (
+            f"filter should have skipped the speak echo. Got: {msg.text!r}"
+        )
+    finally:
+        path.unlink()
+
+
+def test_exclude_regex_consecutive_echoes_all_skipped() -> None:
+    """Two prior /speak invocations, only one real message. ordinal=1
+    with the filter still hits the real message."""
+    path = _write_jsonl([
+        _assistant("real content"),
+        _assistant("spoke message #1 — 50 source chars, 80 rewrite chars"),
+        _assistant("spoke message #1 — 80 source chars, 95 rewrite chars"),
+    ])
+    try:
+        msg = MessageSelector().select(
+            path, 1, exclude_regex=r"^spoke message #\d+"
+        )
+        assert msg.text == "real content"
+    finally:
+        path.unlink()
+
+
+def test_exclude_regex_raises_when_all_messages_match() -> None:
+    """If every qualifying message matches the filter, ordinal=1 should
+    raise NoSuchAssistantTurn (filtered count is zero)."""
+    path = _write_jsonl([
+        _assistant("spoke message #1 — first"),
+        _assistant("spoke message #1 — second"),
+    ])
+    try:
+        try:
+            MessageSelector().select(path, 1, exclude_regex=r"^spoke message")
+        except NoSuchAssistantTurn:
+            return
+        raise AssertionError("expected NoSuchAssistantTurn when all messages filtered")
+    finally:
+        path.unlink()
+
+
 def test_select_raises_on_zero_or_negative_n() -> None:
     path = _write_jsonl([_assistant("x")])
     try:
@@ -210,6 +270,9 @@ def main() -> int:
         test_select_skips_blank_text_blocks,
         test_select_joins_multiple_text_blocks,
         test_select_raises_when_not_enough_messages,
+        test_exclude_regex_skips_matching_assistant_messages,
+        test_exclude_regex_consecutive_echoes_all_skipped,
+        test_exclude_regex_raises_when_all_messages_match,
         test_select_raises_on_zero_or_negative_n,
         test_transcript_reader_skips_blank_lines,
         test_transcript_reader_raises_on_malformed_line_with_line_number,

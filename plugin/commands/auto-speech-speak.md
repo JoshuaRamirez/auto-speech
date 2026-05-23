@@ -30,8 +30,15 @@ REWRITE_FILE=$(mktemp -t auto-speech-rewrite-XXXX)
 trap 'rm -f "$SRC_FILE" "$REWRITE_FILE"' EXIT
 
 # 1. Extract the Nth-most-recent assistant message text from the
-#    current session transcript.
-"$PROJECT_ROOT/plugin/scripts/shell/run_extract.sh" --ordinal ORDINAL > "$SRC_FILE"
+#    current session transcript. --exclude-regex skips the slash
+#    command's own status echoes (e.g. "spoke message #1 — 28 source
+#    chars, 48 rewrite chars") so repeated /auto-speech-speak
+#    invocations target the real prior content, not the previous
+#    /speak's own status line.
+"$PROJECT_ROOT/plugin/scripts/shell/run_extract.sh" \
+    --ordinal ORDINAL \
+    --exclude-regex '^(spoke message #[0-9]+|speak failed:|speak: argument must)' \
+    > "$SRC_FILE"
 SRC_CHARS=$(wc -c < "$SRC_FILE" | tr -d ' ')
 SOURCE_HASH=$("$PROJECT_ROOT/plugin/scripts/shell/compute_hash.sh" < "$SRC_FILE")
 

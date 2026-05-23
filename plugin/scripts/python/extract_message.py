@@ -43,6 +43,16 @@ def main(argv: list[str] | None = None) -> int:
             "that have a session id but not a full path."
         ),
     )
+    p.add_argument(
+        "--exclude-regex",
+        type=str,
+        default=None,
+        help=(
+            "Skip assistant messages whose text matches this regex. "
+            "Used by /auto-speech-speak to avoid re-targeting its own "
+            "prior status echo when invoked repeatedly in the same session."
+        ),
+    )
     args = p.parse_args(argv)
 
     if args.transcript_path is not None:
@@ -61,7 +71,9 @@ def main(argv: list[str] | None = None) -> int:
             return EXIT_NO_TRANSCRIPT
 
     try:
-        msg = MessageSelector().select(path, args.ordinal)
+        msg = MessageSelector().select(
+            path, args.ordinal, exclude_regex=args.exclude_regex
+        )
     except NoSuchAssistantTurn as exc:
         print(f"error: {exc}", file=sys.stderr)
         return EXIT_NO_SUCH_TURN
