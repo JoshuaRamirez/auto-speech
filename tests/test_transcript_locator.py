@@ -200,12 +200,57 @@ def test_raises_when_slug_dir_missing() -> None:
                 try:
                     loc.locate(cwd)
                 except TranscriptNotFoundError as exc:
-                    assert "no project directory" in str(exc).lower() or "project" in str(exc).lower()
+                    msg = str(exc).lower()
+                    assert "no project directory" in msg or "matched cwd" in msg
                     return
                 raise AssertionError("expected TranscriptNotFoundError")
             finally:
                 if prev is not None:
                     os.environ["CLAUDE_SESSION_ID"] = prev
+
+
+def test_dot_in_cwd_basename_maps_to_dash_in_slug() -> None:
+    """Regression for a real user-reported bug: a path like
+    /Users/me/Developer/AspenESS/BusinessLogic.Transformation lives
+    under -Users-me-...-BusinessLogic-Transformation (dot → dash).
+    The old slug-only-replaces-slash logic missed this."""
+    with tempfile.TemporaryDirectory() as project_root_str:
+        project_root = Path(project_root_str)
+        # Synthesize the slug Claude Code would create.
+        cwd = Path("/Users/me/Developer/Some-Project/BusinessLogic.Transformation")
+        # Substitute dots AND slashes with dashes — that's what we
+        # expect the locator to look for.
+        slug_dir = project_root / "-Users-me-Developer-Some-Project-BusinessLogic-Transformation"
+        slug_dir.mkdir(parents=True)
+        target = slug_dir / "session-x.jsonl"
+        _make_jsonl(target)
+
+        loc = _patched_locator(project_root)
+        prev = os.environ.pop("CLAUDE_SESSION_ID", None)
+        try:
+            # We can't actually cwd into a fake /Users/me path; pass cwd
+            # explicitly. The locator will .resolve() it but since it
+            # doesn't exist on disk, resolve() leaves it as-is on macOS.
+            # Pass it as-is.
+            with _patch_resolve_to_self(cwd):
+                result = loc.locate(cwd)
+        finally:
+            if prev is not None:
+                os.environ["CLAUDE_SESSION_ID"] = prev
+        assert result == target, f"expected {target}, got {result}"
+
+
+from contextlib import contextmanager  # noqa: E402
+
+
+@contextmanager
+def _patch_resolve_to_self(target: Path):
+    """Make Path.resolve() return the path unchanged so a synthetic
+    /Users/me/... path doesn't get rewritten on macOS via /private/var
+    or similar symlinks."""
+    from unittest.mock import patch
+    with patch.object(Path, "resolve", lambda self, strict=False: target):
+        yield
 
 
 def test_raises_when_slug_dir_empty() -> None:
@@ -239,6 +284,7 @@ def main() -> int:
         test_no_env_var_uses_newest_jsonl,
         test_raises_when_slug_dir_missing,
         test_raises_when_slug_dir_empty,
+        test_dot_in_cwd_basename_maps_to_dash_in_slug,
     ]
     for t in tests:
         t()
