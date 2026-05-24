@@ -10,8 +10,13 @@ set -uo pipefail
 PLUGIN_SCRIPTS_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 WORKER="$PLUGIN_SCRIPTS_DIR/shell/autoplay_worker.sh"
 DISABLED_MARKER="$HOME/.claude/auto-speech.disabled"
-BEACON="/tmp/auto-speech-last-stop"
 LOG="/tmp/auto-speech-autoplay.log"
+# Beacon is per-session (set after we parse session_id from the payload).
+# Used by is_stale() in the worker to detect a newer Stop event from
+# the SAME session. Per-session-keyed so a Stop in session B doesn't
+# false-stale session A's in-flight worker during the cross-session
+# playback queue wait.
+BEACON_DEFAULT="/tmp/auto-speech-last-stop"
 
 # Capture the hook payload. Claude Code passes a JSON document with
 # {session_id, transcript_path, cwd, hook_event_name, ...}; we want the
@@ -22,8 +27,10 @@ LOG="/tmp/auto-speech-autoplay.log"
 # briefly leaves a newer-mtime jsonl in the slug dir.
 PAYLOAD="$(cat)"
 TRANSCRIPT_PATH=""
+SESSION_ID=""
 if command -v jq >/dev/null 2>&1; then
     TRANSCRIPT_PATH="$(printf '%s' "$PAYLOAD" | jq -r '.transcript_path // ""' 2>/dev/null || true)"
+    SESSION_ID="$(printf '%s' "$PAYLOAD" | jq -r '.session_id // ""' 2>/dev/null || true)"
 fi
 
 # Nested-claude-p guard: the autoplay's own cli_rewrite spawns `claude -p`,
@@ -47,16 +54,23 @@ fi
 # absent or empty, autoplay fires for all sessions (legacy default).
 SESSION_OPTIN_DIR="$HOME/.claude/auto-speech-autoplay-sessions"
 if [[ -d "$SESSION_OPTIN_DIR" ]] && [[ -n "$(ls -A "$SESSION_OPTIN_DIR" 2>/dev/null)" ]]; then
-    SESSION_ID=""
-    if command -v jq >/dev/null 2>&1; then
-        SESSION_ID="$(printf '%s' "$PAYLOAD" | jq -r '.session_id // ""' 2>/dev/null || true)"
-    fi
     if [[ -z "$SESSION_ID" ]] || [[ ! -e "$SESSION_OPTIN_DIR/$SESSION_ID" ]]; then
         exit 0
     fi
 fi
 
-# Update the beacon so workers can detect they've been superseded.
+# Per-session beacon path. Falls back to the legacy global beacon when
+# we couldn't parse a session_id from the payload (jq missing or
+# malformed JSON). The worker derives the same path from its $3 arg.
+if [[ -n "$SESSION_ID" ]]; then
+    BEACON="$BEACON_DEFAULT.$SESSION_ID"
+else
+    BEACON="$BEACON_DEFAULT"
+fi
+
+# Update the beacon so workers can detect they've been superseded BY
+# A NEWER STOP IN THE SAME SESSION. Cross-session Stops touch their own
+# beacon files and don't false-stale us.
 : > "$BEACON" 2>/dev/null || true
 
 # Capture the beacon mtime to hand to the worker.
@@ -65,9 +79,11 @@ BEACON_MTIME="$(stat -f %m "$BEACON" 2>/dev/null || echo 0)"
 # Spawn the worker fully detached. macOS lacks GNU `setsid`, so we use
 # python3 to do a double-fork + setsid into a new session. The hook
 # itself returns in well under 100 ms.
-python3 - "$WORKER" "$BEACON_MTIME" "$LOG" "$TRANSCRIPT_PATH" <<'PY' &
+python3 - "$WORKER" "$BEACON_MTIME" "$LOG" "$TRANSCRIPT_PATH" "$SESSION_ID" <<'PY' &
 import os, sys
-worker, beacon_mtime, log, transcript_path = sys.argv[1], sys.argv[2], sys.argv[3], sys.argv[4]
+worker, beacon_mtime, log, transcript_path, session_id = (
+    sys.argv[1], sys.argv[2], sys.argv[3], sys.argv[4], sys.argv[5]
+)
 # First fork: parent returns immediately; child continues.
 if os.fork() != 0:
     os._exit(0)
@@ -83,11 +99,10 @@ os.dup2(fd_log, 1)
 os.dup2(fd_log, 2)
 os.close(fd_null)
 os.close(fd_log)
-# Worker accepts: beacon_mtime [transcript_path]
-argv = ["bash", worker, beacon_mtime]
-if transcript_path:
-    argv.append(transcript_path)
-os.execvp("bash", argv)
+# Worker accepts: beacon_mtime [transcript_path] [session_id]. We always
+# pass three args; empty strings for missing pieces so positional parsing
+# stays simple in the worker.
+os.execvp("bash", ["bash", worker, beacon_mtime, transcript_path or "", session_id or ""])
 PY
 disown 2>/dev/null || true
 

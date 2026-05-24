@@ -12,7 +12,7 @@ EXTRACT="$PLUGIN_SCRIPTS_DIR/shell/run_extract.sh"
 COMPUTE_HASH="$PLUGIN_SCRIPTS_DIR/shell/compute_hash.sh"
 SPEAK="$PLUGIN_SCRIPTS_DIR/shell/run_speak.sh"
 VENV="$PROJECT_ROOT/.venv"
-BEACON="/tmp/auto-speech-last-stop"
+BEACON_DEFAULT="/tmp/auto-speech-last-stop"
 DISABLED_MARKER="$HOME/.claude/auto-speech.disabled"
 MIN_LEN="${AUTO_SPEECH_AUTOPLAY_MIN_LEN:-20}"
 # Coalesce window: rapid-fire Stops within this many seconds collapse —
@@ -36,17 +36,71 @@ fi
 COALESCE_SECONDS="${AUTO_SPEECH_AUTOPLAY_COALESCE:-${COALESCE_FROM_CONFIG:-1}}"
 
 START_BEACON_MTIME="${1:-0}"
-# Optional second arg: transcript_path from the hook payload, threaded
-# through autoplay_hook.sh so extract reads from the EXACT session that
-# fired this Stop event rather than guessing by jsonl mtime.
+# $2: transcript_path from the hook payload, threaded through
+# autoplay_hook.sh so extract reads from the EXACT session that fired
+# this Stop event rather than guessing by jsonl mtime.
 TRANSCRIPT_PATH="${2:-}"
+# $3: session_id from the hook payload. Used to derive a per-session
+# beacon path so a Stop in session B doesn't false-stale session A's
+# in-flight worker during the cross-session playback queue wait.
+SESSION_ID="${3:-}"
 
-log() { printf '[%s] [worker pid=%d] %s\n' "$(date -u +%FT%TZ)" $$ "$*"; }
+# Derive the beacon path consistently with autoplay_hook.sh. If we have
+# no session_id (jq missing or malformed payload), use the legacy
+# global beacon — preserves single-session behaviour, only loses the
+# cross-session false-stale protection.
+if [[ -n "$SESSION_ID" ]]; then
+    BEACON="$BEACON_DEFAULT.$SESSION_ID"
+else
+    BEACON="$BEACON_DEFAULT"
+fi
+
+log() { printf '[%s] [worker pid=%d sid=%.8s] %s\n' "$(date -u +%FT%TZ)" $$ "${SESSION_ID:-no-sid}" "$*"; }
 
 is_stale() {
     local current
     current="$(stat -f %m "$BEACON" 2>/dev/null || echo 0)"
     [[ "$current" -gt "$START_BEACON_MTIME" ]]
+}
+
+# Unconditional mpv-busy wait. Always wait for any in-flight mpv (from
+# our session OR from another session's autoplay OR from the narrator
+# daemon) to finish before we'd start ours. Without this, two sessions
+# running autoplay end up interrupting each other — user complaint:
+# "the summary of the above interrupted what i was listening to from
+# the cli". Capped same as the narrator-drain wait. Returns 0 if mpv
+# went idle, 1 if we hit the cap or got staled out.
+wait_for_mpv_idle() {
+    local cap_seconds="$1"
+    local waited=0
+    while (( waited < cap_seconds )); do
+        local mpv_pid mpv_running=0
+        mpv_pid="$(cat /tmp/auto-speech/mpv.pid 2>/dev/null || true)"
+        if [[ -n "${mpv_pid:-}" ]] && kill -0 "$mpv_pid" 2>/dev/null; then
+            mpv_running=1
+        fi
+        # Also wait for the narrator FIFO to drain if its daemon is
+        # alive (matches the original Phase 22 semantic).
+        local depth=0
+        if [[ -f "$NARRATION_DAEMON_PID_FILE" ]] && [[ -f "$NARRATION_DEPTH_FILE" ]]; then
+            local narr_pid
+            narr_pid="$(cat "$NARRATION_DAEMON_PID_FILE" 2>/dev/null || true)"
+            if [[ -n "${narr_pid:-}" ]] && kill -0 "$narr_pid" 2>/dev/null; then
+                depth="$(cat "$NARRATION_DEPTH_FILE" 2>/dev/null || echo 0)"
+            fi
+        fi
+        if [[ "$mpv_running" -eq 0 ]] && [[ "${depth:-0}" -eq 0 ]]; then
+            return 0
+        fi
+        sleep 0.5
+        waited=$((waited + 1))
+        if is_stale; then
+            log "stale while waiting for playback queue (mpv=$mpv_running depth=$depth); bailing"
+            return 1
+        fi
+    done
+    log "playback wait hit cap (${cap_seconds}s, mpv=$mpv_running depth=$depth); proceeding anyway"
+    return 0
 }
 
 # Dedup: if another worker is already playing the exact same source hash
@@ -86,46 +140,13 @@ if is_stale; then
     exit 0
 fi
 
-# Narrator coexistence (Phase 22): if a narrator daemon is running and
-# its FIFO has pending phases, wait until it drains before reading the
-# final response. The user's spec: "end of turn autoplayer occurs once
-# the in process narration finishes. natural."
-#
-# Capped at AUTO_SPEECH_NARRATION_WAIT_MAX seconds (default 90) so a
-# stuck daemon never silently swallows the autoplay forever.
+# EARLY wait: don't bother rewriting if another mpv (any session's
+# autoplay OR the narrator) is currently playing — wait first. Reduces
+# wasted work (rewrite + TTS) when there's an obvious queue ahead of us.
 NARRATION_DEPTH_FILE="/tmp/auto-speech-narration-depth"
 NARRATION_DAEMON_PID_FILE="/tmp/auto-speech-narrator-daemon.pid"
 NARRATION_WAIT_MAX="${AUTO_SPEECH_NARRATION_WAIT_MAX:-${NARRATION_WAIT_FROM_CONFIG:-90}}"
-if [[ -f "$NARRATION_DAEMON_PID_FILE" ]] && [[ -f "$NARRATION_DEPTH_FILE" ]]; then
-    NARR_PID="$(cat "$NARRATION_DAEMON_PID_FILE" 2>/dev/null || true)"
-    if [[ -n "${NARR_PID:-}" ]] && kill -0 "$NARR_PID" 2>/dev/null; then
-        WAITED=0
-        while (( WAITED < NARRATION_WAIT_MAX )); do
-            DEPTH="$(cat "$NARRATION_DEPTH_FILE" 2>/dev/null || echo 0)"
-            MPV_PID="$(cat /tmp/auto-speech/mpv.pid 2>/dev/null || true)"
-            MPV_RUNNING=0
-            if [[ -n "${MPV_PID:-}" ]] && kill -0 "$MPV_PID" 2>/dev/null; then
-                MPV_RUNNING=1
-            fi
-            if [[ "${DEPTH:-0}" -eq 0 ]] && [[ "$MPV_RUNNING" -eq 0 ]]; then
-                break
-            fi
-            sleep 0.5
-            WAITED=$((WAITED + 1))
-            # Newer Stop event during the wait? Bail — let the newer
-            # worker handle the autoplay once the queue eventually drains.
-            if is_stale; then
-                log "stale while waiting for narration drain; bailing"
-                exit 0
-            fi
-        done
-        if (( WAITED >= NARRATION_WAIT_MAX )); then
-            log "narration drain wait hit cap (${NARRATION_WAIT_MAX}s); proceeding anyway"
-        else
-            log "narration drained after ${WAITED} half-second polls"
-        fi
-    fi
-fi
+wait_for_mpv_idle "$NARRATION_WAIT_MAX" || exit 0
 
 if [[ ! -x "$EXTRACT" ]]; then
     log "extract wrapper missing or not executable: $EXTRACT"
@@ -174,6 +195,9 @@ if [[ -f "$CACHE_WAV" ]]; then
         log "same hash already playing; skipping duplicate (cache-hit path)"
         exit 0
     fi
+    # LATE wait: between the early wait and now, another session's
+    # autoplay may have started mpv. Re-wait so we queue properly.
+    wait_for_mpv_idle "$NARRATION_WAIT_MAX" || exit 0
     printf '%s' "$SOURCE_HASH" > "$NOW_PLAYING_MARKER" 2>/dev/null || true
     : | "$SPEAK" --source-hash "$SOURCE_HASH" >/dev/null 2>&1 || \
         log "speak.py exit non-zero on cache-hit path"
@@ -226,6 +250,9 @@ if already_playing_same_hash; then
     log "same hash already playing; skipping duplicate (post-rewrite path)"
     exit 0
 fi
+# LATE wait: rewrite took several seconds — another session may have
+# started mpv during it. Wait so we queue cleanly behind them.
+wait_for_mpv_idle "$NARRATION_WAIT_MAX" || exit 0
 printf '%s' "$SOURCE_HASH" > "$NOW_PLAYING_MARKER" 2>/dev/null || true
 "$SPEAK" --source-hash "$SOURCE_HASH" < "$REWRITE_FILE" >/dev/null 2>&1
 RC=$?
