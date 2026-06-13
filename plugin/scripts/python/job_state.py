@@ -10,6 +10,8 @@ from __future__ import annotations
 
 from dataclasses import dataclass, asdict
 
+from state_machine import StateMachine
+
 
 PHASE_QUEUED = "queued"
 PHASE_REWRITING = "rewriting"
@@ -56,3 +58,11 @@ class Job:
 def is_legal_transition(from_phase: str, to_phase: str) -> bool:
     """True iff `from_phase` may move to `to_phase` per the state machine."""
     return to_phase in _LEGAL_NEXT.get(from_phase, set())
+
+
+def new_state_machine() -> StateMachine:
+    """A StateMachine seeded at PHASE_QUEUED over the canonical phase
+    table. The JobTracker drives one per job in lockstep with the
+    immutable Job, so transition legality lives in exactly one place
+    (_LEGAL_NEXT, shared with is_legal_transition)."""
+    return StateMachine(PHASE_QUEUED, _LEGAL_NEXT, terminal=TERMINAL_PHASES)

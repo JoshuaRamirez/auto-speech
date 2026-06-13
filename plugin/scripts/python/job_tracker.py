@@ -17,8 +17,9 @@ from job_state import (
     PHASE_FAILED,
     PHASE_QUEUED,
     Job,
-    is_legal_transition,
+    new_state_machine,
 )
+from state_machine import IllegalTransition, StateMachine
 
 
 class JobTracker:
@@ -27,6 +28,9 @@ class JobTracker:
     def __init__(self) -> None:
         self._lock = threading.Lock()
         self._current: Job | None = None
+        # Drives transition legality in lockstep with `_current`. A fresh
+        # machine is created per job by `begin`. None when no job exists.
+        self._machine: StateMachine | None = None
 
     def current(self) -> Job | None:
         with self._lock:
@@ -63,6 +67,7 @@ class JobTracker:
                 hash=source_hash,
             )
             self._current = job
+            self._machine = new_state_machine()  # seeded at PHASE_QUEUED
             return job
 
     def transition(self, new_phase: str, **fields) -> Job:
@@ -75,7 +80,11 @@ class JobTracker:
             cur = self._current
             if cur is None:
                 raise RuntimeError(f"transition({new_phase!r}) with no current job")
-            if not is_legal_transition(cur.phase, new_phase):
+            # Drive the shared FSM; translate its IllegalTransition into the
+            # ValueError this public API has always raised.
+            try:
+                self._machine.transition(new_phase)  # type: ignore[union-attr]
+            except IllegalTransition:
                 raise ValueError(
                     f"illegal phase transition {cur.phase!r} → {new_phase!r}"
                 )
@@ -87,11 +96,24 @@ class JobTracker:
             return new_job
 
     def fail(self, error: str) -> Job:
-        """Move current job to PHASE_FAILED with the given error string."""
+        """Move current job to PHASE_FAILED with the given error string.
+
+        Unconditional (as it has always been) — failure is allowed from
+        any phase. The FSM is driven when the move is legal; otherwise it
+        is reseeded so it stays consistent with `_current` without
+        changing this method's observable behavior.
+        """
         with self._lock:
             cur = self._current
             if cur is None:
                 raise RuntimeError(f"fail({error!r}) with no current job")
+            if self._machine is not None and self._machine.can(PHASE_FAILED):
+                self._machine.transition(PHASE_FAILED)
+            else:
+                # Forced transition (e.g. already terminal): resync the FSM.
+                self._machine = new_state_machine()
+                if self._machine.can(PHASE_FAILED):
+                    self._machine.transition(PHASE_FAILED)
             data = cur.to_dict()
             data["phase"] = PHASE_FAILED
             data["error"] = error
