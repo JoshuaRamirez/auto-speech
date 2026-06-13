@@ -19,6 +19,12 @@ CHEAP=(
     test_state_machine.py
     test_playback_state.py
     test_narrator_state.py
+    test_worker_lifecycle.py
+    test_staleness_beacon.py
+    test_playback_fifo.py
+    test_dedup_guard.py
+    test_autoplay_gate.py
+    test_autoplay_worker.py
     test_job_tracker.py
     test_narrator_phase_classifier.py
     test_narrator_summarizer.py
@@ -35,8 +41,7 @@ CHEAP=(
 
 # Bash-script tests for shell helpers.
 SHELL_TESTS=(
-    test_autoplay_dedup.sh
-    test_autoplay_queue.sh
+    test_autoplay_shim.sh
     test_narrator_hook.sh
     test_install_idempotent.sh
 )
