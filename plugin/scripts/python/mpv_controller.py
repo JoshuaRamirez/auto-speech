@@ -12,6 +12,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from mpv_ipc import MpvIpc, MpvIpcError
+from playback_state import IDLE, READY, STARTING, STOPPING, PlaybackStateMachine
 from session_dir import SessionDir
 
 
@@ -49,6 +50,13 @@ class MpvController:
     _PRIOR_PLAYBACK_WAIT_SECONDS = 600.0
     _PRIOR_PLAYBACK_POLL_SECONDS = 0.25
 
+    def __init__(self) -> None:
+        # Per-process lifecycle record. The cross-process truth still lives
+        # in SessionDir; this machine reflects only THIS process's view of
+        # the session it started, and guards against illegal internal
+        # sequencing (e.g. a second start() without an intervening stop()).
+        self._fsm = PlaybackStateMachine()
+
     def start(self, wav_path: Path) -> None:
         mpv = shutil.which("mpv")
         if not mpv:
@@ -79,6 +87,7 @@ class MpvController:
                 f"[mpv] starting  wav={wav_path}  socket={socket_path}",
                 file=sys.stderr,
             )
+            self._fsm.transition(STARTING)  # IDLE → STARTING (before spawn)
             proc = subprocess.Popen(
                 [
                     mpv,
@@ -100,7 +109,14 @@ class MpvController:
             )
             SessionDir.write(proc.pid, wav_path, started_at)
 
-            self._await_socket_ready(socket_path, proc)
+            try:
+                self._await_socket_ready(socket_path, proc)
+            except MpvStartupError:
+                # Startup failed/aborted: return the machine to rest so a
+                # subsequent start() on this instance is legal.
+                self._fsm.transition(IDLE)  # STARTING → IDLE
+                raise
+            self._fsm.transition(READY)  # STARTING → READY (socket answered IPC)
             print(
                 f"[mpv] started   pid={proc.pid}  started_at={started_at}",
                 file=sys.stderr,
@@ -110,14 +126,25 @@ class MpvController:
     def stop(self) -> bool:
         """Send quit to the active session. Returns True if a session existed."""
         if not SessionDir.is_mpv_running():
+            # Either nothing was playing, or our READY process exited on its
+            # own. Reflect the latter (READY → IDLE) if applicable.
+            if self._fsm.can(IDLE):
+                self._fsm.transition(IDLE)  # READY → IDLE (exited itself)
             SessionDir.clear()
             return False
+        # READY → STOPPING when this instance owns the READY session. Guarded
+        # because stop() may target a session another process started, in
+        # which case this per-process machine is still at IDLE.
+        if self._fsm.can(STOPPING):
+            self._fsm.transition(STOPPING)
         try:
             MpvIpc.send(["quit"], SessionDir.socket_path())
         except MpvIpcError as exc:
             print(f"[mpv] stop: IPC failed: {exc}", file=sys.stderr)
             # Fall through to signal-based kill.
         self._kill_prior_session()
+        if self._fsm.can(IDLE):
+            self._fsm.transition(IDLE)  # STOPPING → IDLE
         return True
 
     def _wait_for_prior_session(self) -> None:

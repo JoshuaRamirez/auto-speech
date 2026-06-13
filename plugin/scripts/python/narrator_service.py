@@ -26,6 +26,14 @@ from pathlib import Path
 
 from narrator_config import load_config
 from narrator_phase_classifier import Category, Phase, PhaseClassifier
+from narrator_state import (
+    IDLE_SHUTDOWN,
+    NOT_RUNNING,
+    RUNNING,
+    SIGNAL_SHUTDOWN,
+    STARTING,
+    NarratorStateMachine,
+)
 from narrator_summarizer import Summarizer, load_summarizer
 
 EVENTS_LOG = Path("/tmp/auto-speech-narrator-events.jsonl")
@@ -82,9 +90,14 @@ class NarratorService:
         self._last_event_ts = time.time()
         self._idle_shutdown = float(self._config["idle_shutdown_seconds"])
         self._stop = threading.Event()
+        # Records and guards the daemon lifecycle. Reflects reality; does
+        # not replace the tail/queue/watermark logic.
+        self._fsm = NarratorStateMachine()
 
     def run(self) -> int:
+        self._fsm.transition(STARTING)  # NOT_RUNNING → STARTING
         PID_FILE.write_text(str(os.getpid()))
+        self._fsm.transition(RUNNING)   # STARTING → RUNNING (pid file written)
         signal.signal(signal.SIGTERM, self._on_signal)
         signal.signal(signal.SIGINT, self._on_signal)
         _log(f"started pid={os.getpid()} provider={self._config['provider']}")
@@ -104,17 +117,25 @@ class NarratorService:
         try:
             self._tail_events()
         finally:
+            # If neither shutdown path recorded a reason (e.g. tail_events
+            # raised), treat it as a signal-style shutdown so the machine
+            # reaches a legal pre-rest state before NOT_RUNNING.
+            if self._fsm.can(SIGNAL_SHUTDOWN):
+                self._fsm.transition(SIGNAL_SHUTDOWN)
             self._tts_queue.put(None)  # sentinel
             tts_thread.join(timeout=5.0)
             try:
                 PID_FILE.unlink()
             except OSError:
                 pass
+            self._fsm.transition(NOT_RUNNING)  # *_SHUTDOWN → NOT_RUNNING
             _log("shutdown")
         return 0
 
     def _on_signal(self, signum, frame):  # noqa: ARG002
         _log(f"signal {signum} → shutting down")
+        if self._fsm.can(SIGNAL_SHUTDOWN):
+            self._fsm.transition(SIGNAL_SHUTDOWN)  # RUNNING → SIGNAL_SHUTDOWN
         self._stop.set()
 
     def _tail_events(self) -> None:
@@ -148,6 +169,8 @@ class NarratorService:
             # Idle shutdown
             if time.time() - self._last_event_ts > self._idle_shutdown:
                 _log(f"idle for >{self._idle_shutdown}s → shutting down")
+                if self._fsm.can(IDLE_SHUTDOWN):
+                    self._fsm.transition(IDLE_SHUTDOWN)  # RUNNING → IDLE_SHUTDOWN
                 return
 
             self._stop.wait(POLL_INTERVAL_S)
