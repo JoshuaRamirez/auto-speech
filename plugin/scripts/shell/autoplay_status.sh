@@ -1,33 +1,33 @@
 #!/usr/bin/env bash
-# auto-speech — report autoplay status: per-session marker, opt-in
-# dir presence, global disable marker, currently-playing mpv.
+# auto-speech — report autoplay status: per-session opt-out marker,
+# opt-out dir contents, global disable marker, currently-playing mpv.
+# Autoplay is ON by default; markers silence individual sessions.
 
 set -uo pipefail
 
 SESSION_ID="${CLAUDE_CODE_SESSION_ID:-}"
-OPTIN_DIR="$HOME/.claude/auto-speech-autoplay-sessions"
-SESSION_MARKER="$OPTIN_DIR/${SESSION_ID:-NO_SESSION_ID}"
+OPTOUT_DIR="$HOME/.claude/auto-speech-autoplay-sessions"
+SESSION_MARKER="$OPTOUT_DIR/${SESSION_ID:-NO_SESSION_ID}"
 DISABLE_MARKER="$HOME/.claude/auto-speech.disabled"
 
-echo "autoplay status"
+echo "autoplay status (default ON; markers are per-session opt-OUTs)"
 echo "  session:        ${SESSION_ID:-<unset>}"
 if [[ -n "$SESSION_ID" ]]; then
     if [[ -e "$SESSION_MARKER" ]]; then
-        echo "  this session:   ON   ($SESSION_MARKER)"
+        echo "  this session:   OFF  (opt-out marker $SESSION_MARKER)"
     else
-        echo "  this session:   OFF  ($SESSION_MARKER not present)"
+        echo "  this session:   ON   (no opt-out marker; default)"
     fi
 else
-    echo "  this session:   cannot check — CLAUDE_CODE_SESSION_ID not set"
+    echo "  this session:   ON by default — CLAUDE_CODE_SESSION_ID not set, cannot be opted out"
 fi
 
-if [[ -d "$OPTIN_DIR" ]] && [[ -n "$(ls -A "$OPTIN_DIR" 2>/dev/null)" ]]; then
-    COUNT=$(ls "$OPTIN_DIR" 2>/dev/null | wc -l | tr -d ' ')
+if [[ -d "$OPTOUT_DIR" ]] && [[ -n "$(ls -A "$OPTOUT_DIR" 2>/dev/null)" ]]; then
+    COUNT=$(ls "$OPTOUT_DIR" 2>/dev/null | wc -l | tr -d ' ')
     OTHER=$((COUNT - $([[ -e "$SESSION_MARKER" ]] && echo 1 || echo 0)))
-    echo "  opt-in dir:     present, $COUNT session(s) total ($OTHER other than this one)"
-    echo "                  → autoplay is in STRICT mode: only opted-in sessions fire"
+    echo "  opt-out dir:    $COUNT session(s) opted out ($OTHER other than this one)"
 else
-    echo "  opt-in dir:     absent or empty → autoplay fires for ALL sessions (legacy default)"
+    echo "  opt-out dir:    absent or empty → no session has opted out"
 fi
 
 if [[ -e "$DISABLE_MARKER" ]]; then

@@ -1,5 +1,5 @@
 ---
-description: Show autoplay status — session marker, opt-in dir, global disable, currently-playing mpv, log tail.
+description: Show autoplay status — per-session opt-out marker, opt-out dir, global disable, currently-playing mpv, log tail.
 allowed-tools: Bash
 ---
 

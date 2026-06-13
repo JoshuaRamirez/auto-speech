@@ -1,5 +1,5 @@
 ---
-description: Enable autoplay for THIS Claude session. Creates a per-session opt-in marker and clears the global mute. Other sessions without their own marker are silenced.
+description: Re-enable autoplay for THIS Claude session. Removes the per-session opt-out marker and clears the global mute. Autoplay is ON by default; this undoes a prior /auto-speech-autoplay-off.
 allowed-tools: Bash
 ---
 
@@ -8,23 +8,29 @@ Run this single Bash command:
 ```
 set -euo pipefail
 SESSION_ID="${CLAUDE_CODE_SESSION_ID:-}"
-if [ -z "$SESSION_ID" ]; then
-    echo "no-session"
-    exit 1
-fi
-# Clear the global mute if set.
+# Clear the global mute if set — autoplay-on always means "I want sound".
 rm -f "$HOME/.claude/auto-speech.disabled"
-# Opt this session in. Once ANY session has opted in, the autoplay hook
-# switches to strict mode: only opted-in sessions fire.
-mkdir -p "$HOME/.claude/auto-speech-autoplay-sessions"
-touch "$HOME/.claude/auto-speech-autoplay-sessions/$SESSION_ID"
-echo "on $SESSION_ID"
+if [ -z "$SESSION_ID" ]; then
+    echo "on-global-only"
+    exit 0
+fi
+# Autoplay is opt-out: remove this session's opt-out marker if present.
+MARKER="$HOME/.claude/auto-speech-autoplay-sessions/$SESSION_ID"
+if [ -e "$MARKER" ]; then
+    rm -f "$MARKER"
+    echo "on $SESSION_ID"
+else
+    echo "on-already $SESSION_ID"
+fi
 ```
 
 If the output is `on <id>`, respond with one line:
-`autoplay enabled for session <id> (other sessions silenced unless opted in)`.
+`autoplay re-enabled for session <id> (opt-out marker removed)`.
 
-If the output is `no-session`, respond with one line:
-`autoplay-on: CLAUDE_CODE_SESSION_ID not set; cannot register this session`.
+If the output is `on-already <id>`, respond with one line:
+`autoplay was already enabled for session <id> (autoplay is on by default)`.
+
+If the output is `on-global-only`, respond with one line:
+`global mute cleared; CLAUDE_CODE_SESSION_ID not set, but autoplay is on by default anyway`.
 
 On any other output, respond with the output verbatim.

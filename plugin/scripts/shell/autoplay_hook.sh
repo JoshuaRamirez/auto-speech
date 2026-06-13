@@ -48,15 +48,14 @@ if [[ -e "$DISABLED_MARKER" ]]; then
     exit 0
 fi
 
-# Per-session opt-in scoping. If the dir exists with any markers, only
-# the sessions listed there get autoplay — matches the narrator's
-# per-session model (CLAUDE_CODE_SESSION_ID keyed). If the dir is
-# absent or empty, autoplay fires for all sessions (legacy default).
-SESSION_OPTIN_DIR="$HOME/.claude/auto-speech-autoplay-sessions"
-if [[ -d "$SESSION_OPTIN_DIR" ]] && [[ -n "$(ls -A "$SESSION_OPTIN_DIR" 2>/dev/null)" ]]; then
-    if [[ -z "$SESSION_ID" ]] || [[ ! -e "$SESSION_OPTIN_DIR/$SESSION_ID" ]]; then
-        exit 0
-    fi
+# Per-session OPT-OUT scoping. Autoplay is ON by default for every
+# session. A marker file in this dir (CLAUDE_CODE_SESSION_ID keyed,
+# written by /auto-speech-autoplay-off) silences just that session;
+# all other sessions keep playing. The global mute above still
+# overrides everything.
+SESSION_OPTOUT_DIR="$HOME/.claude/auto-speech-autoplay-sessions"
+if [[ -n "$SESSION_ID" ]] && [[ -e "$SESSION_OPTOUT_DIR/$SESSION_ID" ]]; then
+    exit 0
 fi
 
 # Per-session beacon path. Falls back to the legacy global beacon when

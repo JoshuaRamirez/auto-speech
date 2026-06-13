@@ -1,5 +1,5 @@
 ---
-description: Disable autoplay for THIS Claude session. Removes the per-session opt-in marker. Other sessions keep their own settings. To globally mute all sessions, use the disable marker (touch ~/.claude/auto-speech.disabled).
+description: Disable autoplay for THIS Claude session. Creates a per-session opt-out marker. Other sessions keep playing (autoplay is on by default). To globally mute all sessions, use the disable marker (touch ~/.claude/auto-speech.disabled).
 allowed-tools: Bash
 ---
 
@@ -16,13 +16,14 @@ if [ -z "$SESSION_ID" ]; then
     echo "off-global"
     exit 0
 fi
-# Remove the per-session marker. Other opted-in sessions are unaffected.
+# Create the per-session opt-out marker. Other sessions are unaffected.
+mkdir -p "$HOME/.claude/auto-speech-autoplay-sessions"
 MARKER="$HOME/.claude/auto-speech-autoplay-sessions/$SESSION_ID"
 if [ -e "$MARKER" ]; then
-    rm -f "$MARKER"
-    echo "off $SESSION_ID"
-else
     echo "off-already $SESSION_ID"
+else
+    touch "$MARKER"
+    echo "off $SESSION_ID"
 fi
 ```
 
