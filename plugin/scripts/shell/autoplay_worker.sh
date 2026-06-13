@@ -63,25 +63,68 @@ is_stale() {
     [[ "$current" -gt "$START_BEACON_MTIME" ]]
 }
 
-# Unconditional mpv-busy wait. Always wait for any in-flight mpv (from
-# our session OR from another session's autoplay OR from the narrator
-# daemon) to finish before we'd start ours. Without this, two sessions
-# running autoplay end up interrupting each other — user complaint:
-# "the summary of the above interrupted what i was listening to from
-# the cli". Capped same as the narrator-drain wait. Returns 0 if mpv
-# went idle, 1 if we hit the cap or got staled out.
-wait_for_mpv_idle() {
+# ---- Strict FIFO playback queue (cross-session) -------------------------
+# Playbacks must NEVER cut each other off. Each worker enqueues a ticket
+# (sortable nanosecond-timestamp filename, owner pid inside) and only
+# proceeds to speak when (a) its ticket is the oldest live one AND
+# (b) mpv is idle AND (c) the narrator FIFO is drained. The ticket is
+# held until the worker exits (EXIT trap), so arrival order is preserved
+# even across the multi-second rewrite step. Lives OUTSIDE
+# /tmp/auto-speech because SessionDir.clear() rmtree's that dir.
+QUEUE_DIR="/tmp/auto-speech-playback-queue"
+QUEUE_TICKET=""
+
+enqueue_ticket() {
+    mkdir -p "$QUEUE_DIR"
+    local stamp
+    stamp="$(python3 -c 'import time; print(f"{time.time_ns():020d}")' 2>/dev/null || date +%s)"
+    QUEUE_TICKET="$QUEUE_DIR/$stamp.$$"
+    printf '%d\n' $$ > "$QUEUE_TICKET"
+    log "enqueued ticket $(basename "$QUEUE_TICKET")"
+}
+
+remove_ticket() {
+    [[ -n "$QUEUE_TICKET" ]] && rm -f "$QUEUE_TICKET"
+}
+
+# Is our ticket the oldest LIVE ticket? Tickets whose owner pid is dead
+# (crashed worker, kill -9 — EXIT trap never ran) are garbage-collected
+# here so they can't wedge the queue.
+ticket_is_head() {
+    local t owner
+    for t in "$QUEUE_DIR"/*; do
+        [[ -e "$t" ]] || return 0   # empty dir — we must have been cleaned up; proceed
+        if [[ "$t" == "$QUEUE_TICKET" ]]; then
+            return 0
+        fi
+        owner="$(cat "$t" 2>/dev/null || true)"
+        if [[ -z "${owner:-}" ]] || ! kill -0 "$owner" 2>/dev/null; then
+            rm -f "$t"
+            continue
+        fi
+        return 1   # an older live ticket is ahead of us
+    done
+    return 0
+}
+
+# Wait until it is OUR turn to play: head of the queue, mpv idle, and
+# narrator FIFO drained. Never kills anything. Generous cap so a wedged
+# mpv or leaked state cannot block playback forever; on cap expiry we
+# proceed (MpvController also refuses to kill and does its own bounded
+# wait). Returns 0 to proceed, 1 if staled out by a newer Stop in our
+# own session (cancellation BEFORE playback starts — not a cut-off).
+wait_for_queue_turn() {
     local cap_seconds="$1"
-    local waited=0
-    while (( waited < cap_seconds )); do
-        local mpv_pid mpv_running=0
+    local waited=0 mpv_running=0 depth=0
+    while (( waited < cap_seconds * 2 )); do
+        local mpv_pid
+        mpv_running=0
         mpv_pid="$(cat /tmp/auto-speech/mpv.pid 2>/dev/null || true)"
         if [[ -n "${mpv_pid:-}" ]] && kill -0 "$mpv_pid" 2>/dev/null; then
             mpv_running=1
         fi
-        # Also wait for the narrator FIFO to drain if its daemon is
-        # alive (matches the original Phase 22 semantic).
-        local depth=0
+        # Narrator FIFO drain (matches the original Phase 22 semantic).
+        depth=0
         if [[ -f "$NARRATION_DAEMON_PID_FILE" ]] && [[ -f "$NARRATION_DEPTH_FILE" ]]; then
             local narr_pid
             narr_pid="$(cat "$NARRATION_DAEMON_PID_FILE" 2>/dev/null || true)"
@@ -89,17 +132,17 @@ wait_for_mpv_idle() {
                 depth="$(cat "$NARRATION_DEPTH_FILE" 2>/dev/null || echo 0)"
             fi
         fi
-        if [[ "$mpv_running" -eq 0 ]] && [[ "${depth:-0}" -eq 0 ]]; then
+        if [[ "$mpv_running" -eq 0 ]] && [[ "${depth:-0}" -eq 0 ]] && ticket_is_head; then
             return 0
         fi
         sleep 0.5
         waited=$((waited + 1))
         if is_stale; then
-            log "stale while waiting for playback queue (mpv=$mpv_running depth=$depth); bailing"
+            log "stale while queued (mpv=$mpv_running depth=$depth); bailing (newer worker queued behind)"
             return 1
         fi
     done
-    log "playback wait hit cap (${cap_seconds}s, mpv=$mpv_running depth=$depth); proceeding anyway"
+    log "queue wait hit cap (${cap_seconds}s, mpv=$mpv_running depth=$depth); proceeding anyway (never killing)"
     return 0
 }
 
@@ -140,13 +183,17 @@ if is_stale; then
     exit 0
 fi
 
-# EARLY wait: don't bother rewriting if another mpv (any session's
-# autoplay OR the narrator) is currently playing — wait first. Reduces
-# wasted work (rewrite + TTS) when there's an obvious queue ahead of us.
+# Take our place in the cross-session FIFO queue NOW — arrival order is
+# Stop-event order (post-coalesce). The ticket is held through the
+# rewrite so later arrivals queue strictly behind us.
 NARRATION_DEPTH_FILE="/tmp/auto-speech-narration-depth"
 NARRATION_DAEMON_PID_FILE="/tmp/auto-speech-narrator-daemon.pid"
 NARRATION_WAIT_MAX="${AUTO_SPEECH_NARRATION_WAIT_MAX:-${NARRATION_WAIT_FROM_CONFIG:-90}}"
-wait_for_mpv_idle "$NARRATION_WAIT_MAX" || exit 0
+# Queue wait is deliberately more generous than the narrator-drain cap:
+# several queued playbacks may each take a while to read out.
+QUEUE_WAIT_MAX="${AUTO_SPEECH_QUEUE_WAIT_MAX:-600}"
+enqueue_ticket
+trap 'remove_ticket' EXIT
 
 if [[ ! -x "$EXTRACT" ]]; then
     log "extract wrapper missing or not executable: $EXTRACT"
@@ -155,7 +202,7 @@ fi
 
 # Extract last assistant message to a temp file.
 SRC_FILE="$(mktemp -t auto-speech-autoplay-XXXXXX)"
-trap 'rm -f "$SRC_FILE" "$SRC_FILE.rewrite"' EXIT
+trap 'rm -f "$SRC_FILE" "$SRC_FILE.rewrite"; remove_ticket' EXIT
 
 EXTRACT_ARGS=(--ordinal 1)
 if [[ -n "$TRANSCRIPT_PATH" ]]; then
@@ -195,9 +242,8 @@ if [[ -f "$CACHE_WAV" ]]; then
         log "same hash already playing; skipping duplicate (cache-hit path)"
         exit 0
     fi
-    # LATE wait: between the early wait and now, another session's
-    # autoplay may have started mpv. Re-wait so we queue properly.
-    wait_for_mpv_idle "$NARRATION_WAIT_MAX" || exit 0
+    # FIFO turn: wait until we're head of the queue and mpv is idle.
+    wait_for_queue_turn "$QUEUE_WAIT_MAX" || exit 0
     printf '%s' "$SOURCE_HASH" > "$NOW_PLAYING_MARKER" 2>/dev/null || true
     : | "$SPEAK" --source-hash "$SOURCE_HASH" >/dev/null 2>&1 || \
         log "speak.py exit non-zero on cache-hit path"
@@ -235,24 +281,18 @@ if [[ -z "$REWRITE_LEN" || "$REWRITE_LEN" -lt 1 ]]; then
 fi
 log "rewrite chars=$REWRITE_LEN"
 
-# Intentionally no staleness check here. If a newer Stop fired during the
-# rewrite, that newer worker is also running; when it reaches speak.py,
-# MpvController._kill_prior_session() tears down whatever mpv this worker
-# starts. Net effect: brief truncation of the older audio, newest content
-# wins. Bailing here instead would mean the user hears NOTHING in active
-# multi-turn conversations where rewrites can't outrun the next Stop.
-#
-# But: if the newer worker has the SAME source hash (identical content,
-# happens when multiple Stop events fire for the same assistant turn),
-# we'd just be killing one play of X to start an identical play of X —
-# the user hears the line cut off and restart. Dedup here.
+# Dedup: if a play of the SAME source hash is already in flight
+# (multiple Stop events for the same assistant turn), playing it again
+# would just repeat the identical line. Skip the duplicate.
 if already_playing_same_hash; then
     log "same hash already playing; skipping duplicate (post-rewrite path)"
     exit 0
 fi
-# LATE wait: rewrite took several seconds — another session may have
-# started mpv during it. Wait so we queue cleanly behind them.
-wait_for_mpv_idle "$NARRATION_WAIT_MAX" || exit 0
+# FIFO turn: we still hold our ticket from before the rewrite, so we
+# kept our arrival-order slot. Wait until we're head of the queue and
+# mpv is idle — an in-flight playback always finishes before ours
+# starts (never cut off).
+wait_for_queue_turn "$QUEUE_WAIT_MAX" || exit 0
 printf '%s' "$SOURCE_HASH" > "$NOW_PLAYING_MARKER" 2>/dev/null || true
 "$SPEAK" --source-hash "$SOURCE_HASH" < "$REWRITE_FILE" >/dev/null 2>&1
 RC=$?

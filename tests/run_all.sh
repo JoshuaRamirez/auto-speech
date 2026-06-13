@@ -24,6 +24,7 @@ CHEAP=(
     test_transcript_locator.py
     test_fibonacci.py
     test_cli_rewrite.py
+    test_mpv_wait.py
     test_mlx_summarizer.py
     test_narrator_service.py
 )
@@ -31,6 +32,7 @@ CHEAP=(
 # Bash-script tests for shell helpers.
 SHELL_TESTS=(
     test_autoplay_dedup.sh
+    test_autoplay_queue.sh
     test_narrator_hook.sh
     test_install_idempotent.sh
 )

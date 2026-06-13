@@ -15,15 +15,16 @@ from mpv_ipc import MpvIpc, MpvIpcError
 from session_dir import SessionDir
 
 
-# Serializes the kill-prior + spawn + await-socket sequence across every
-# process that calls MpvController.start() — autoplay workers, narrator
-# daemon, and the web app. Without this, two callers can race on the
-# same /tmp/auto-speech/{socket, mpv.pid} state: each one's
-# _kill_prior_session() tears down the other's just-spawned mpv, and
-# the user hears audio cut off and restart, or hears nothing at all.
-# Held only for the start sequence (~50-300 ms); playback itself is
-# unaffected. fcntl.flock auto-releases on file close so a crashed
-# holder cannot deadlock the lock.
+# Serializes the wait-for-prior + spawn + await-socket sequence across
+# every process that calls MpvController.start() — autoplay workers,
+# narrator daemon, and the web app. Without this, two callers can race
+# on the same /tmp/auto-speech/{socket, mpv.pid} state and the user
+# hears overlapping audio, or hears nothing at all. The lock is held
+# while waiting for the prior playback to finish, so concurrent
+# starters queue strictly behind each other (FIFO playback contract:
+# a new playback NEVER cuts off an active one). fcntl.flock
+# auto-releases on file close so a crashed holder cannot deadlock
+# the lock.
 _MPV_START_LOCK_PATH = Path("/tmp/auto-speech-mpv-start.lock")
 
 
@@ -41,6 +42,12 @@ class MpvController:
     _STARTUP_DEADLINE_SECONDS = 2.0
     _STARTUP_POLL_SECONDS = 0.05
     _TERMINATE_GRACE_SECONDS = 1.0
+    # Generous cap on waiting for an in-flight playback to finish before
+    # starting ours. Long enough for any realistic summary read; bounded
+    # so a wedged mpv cannot block playback forever. We proceed (never
+    # kill) when the cap expires.
+    _PRIOR_PLAYBACK_WAIT_SECONDS = 600.0
+    _PRIOR_PLAYBACK_POLL_SECONDS = 0.25
 
     def start(self, wav_path: Path) -> None:
         mpv = shutil.which("mpv")
@@ -51,13 +58,14 @@ class MpvController:
         if not wav_path.is_file():
             raise FileNotFoundError(f"WAV missing: {wav_path}")
 
-        # Acquire the start lock — held only for the brief kill/spawn/await
+        # Acquire the start lock — held across the wait/spawn/await
         # sequence so concurrent callers serialise. See _MPV_START_LOCK_PATH.
         with open(_MPV_START_LOCK_PATH, "w") as _lock:
             fcntl.flock(_lock.fileno(), fcntl.LOCK_EX)
 
-            # Invariant I-12.1: kill any prior session first.
-            self._kill_prior_session()
+            # FIFO playback contract: never cut off an active playback.
+            # Wait (bounded) for any prior session to finish on its own.
+            self._wait_for_prior_session()
 
             socket_path = SessionDir.socket_path()
             SessionDir.root().mkdir(parents=True, exist_ok=True)
@@ -111,6 +119,33 @@ class MpvController:
             # Fall through to signal-based kill.
         self._kill_prior_session()
         return True
+
+    def _wait_for_prior_session(self) -> None:
+        """Block until the prior mpv session (if any) exits naturally.
+
+        Never terminates the prior playback. Bounded by
+        _PRIOR_PLAYBACK_WAIT_SECONDS; on cap expiry we log and proceed
+        so a wedged mpv cannot wedge every future playback.
+        """
+        if not SessionDir.is_mpv_running():
+            SessionDir.clear()
+            return
+        pid = SessionDir.read_pid()
+        print(
+            f"[mpv] waiting for prior session pid={pid} to finish",
+            file=sys.stderr,
+        )
+        deadline = time.monotonic() + self._PRIOR_PLAYBACK_WAIT_SECONDS
+        while time.monotonic() < deadline:
+            if not SessionDir.is_mpv_running():
+                SessionDir.clear()
+                return
+            time.sleep(self._PRIOR_PLAYBACK_POLL_SECONDS)
+        print(
+            f"[mpv] prior session pid={pid} still alive after "
+            f"{self._PRIOR_PLAYBACK_WAIT_SECONDS:.0f}s; proceeding without killing it",
+            file=sys.stderr,
+        )
 
     def _kill_prior_session(self) -> None:
         pid = SessionDir.read_pid()
