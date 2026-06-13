@@ -5,8 +5,8 @@ ClaudeCliRewriter (Phase 14) — same flags, same timeout handling.
 
 The prompt template is chosen by autoplay_config:
   mode=verbatim                  → audio_rewrite_prompt.txt (lossless)
-  mode=summary, size=small       → audio_summary_small_prompt.txt
-  mode=summary, size=medium      → audio_summary_medium_prompt.txt  (default)
+  mode=summary, size=small       → audio_summary_small_prompt.txt   (default)
+  mode=summary, size=medium      → audio_summary_medium_prompt.txt
   mode=summary, size=large       → audio_summary_large_prompt.txt
 
 Usage:

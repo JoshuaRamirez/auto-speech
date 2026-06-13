@@ -8,7 +8,7 @@ Search order:
   1. $AUTO_SPEECH_AUTOPLAY_CONFIG (explicit override)
   2. ~/.config/auto-speech/autoplay.toml (user-level)
   3. <plugin>/config/autoplay.toml.example (shipped default)
-  4. hardcoded defaults (mode=summary, summary_size=medium)
+  4. hardcoded defaults (mode=summary, summary_size=small)
 
 Returns a dict with: mode, summary_size, prompt_path, config_path.
 Mode is one of "verbatim" | "summary".
@@ -85,13 +85,13 @@ def load_config() -> dict:
         )
         mode = "summary"
 
-    size = str(section.get("summary_size", "medium")).lower()
+    size = str(section.get("summary_size", "small")).lower()
     if size not in VALID_SIZES:
         print(
-            f"[autoplay] invalid summary_size {size!r}; falling back to 'medium'",
+            f"[autoplay] invalid summary_size {size!r}; falling back to 'small'",
             file=sys.stderr,
         )
-        size = "medium"
+        size = "small"
 
     coalesce = float(section.get("coalesce_seconds", 1.0))
     narration_wait_max = float(section.get("narration_wait_max_seconds", 90.0))

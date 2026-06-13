@@ -79,13 +79,12 @@ def test_empty_stdin_returns_failure() -> None:
     assert out == ""
 
 
-def test_config_default_picks_summary_medium_prompt() -> None:
+def test_config_default_picks_summary_small_prompt() -> None:
     with _with_autoplay_override("") as _:
         rc, out = _run([], stdin_text="hello world")
     assert rc == cli_rewrite.EXIT_OK
-    assert "audio_summary_medium_prompt" in _StubRewriter.last_template or \
-        "MEDIUM" in _StubRewriter.last_template, (
-        f"expected medium prompt loaded; got: {_StubRewriter.last_template[:200]}"
+    assert "ONE TO THREE SENTENCES" in _StubRewriter.last_template, (
+        f"expected small (1-3 sentence) prompt loaded; got: {_StubRewriter.last_template[:200]}"
     )
 
 
@@ -146,7 +145,7 @@ def test_rewriter_error_returns_failure() -> None:
 def main() -> int:
     tests = [
         test_empty_stdin_returns_failure,
-        test_config_default_picks_summary_medium_prompt,
+        test_config_default_picks_summary_small_prompt,
         test_mode_flag_overrides_config_to_verbatim,
         test_size_flag_overrides_config,
         test_each_summary_size_uses_distinct_prompt,

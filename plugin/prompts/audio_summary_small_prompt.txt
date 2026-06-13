@@ -4,9 +4,9 @@ INPUT: the exact text of a source message (between the SOURCE markers below).
 
 RULES (apply in this order; higher rule wins on conflict):
 
-1. ONE TO TWO SENTENCES TOTAL. Hard cap: 40 spoken words. No more.
+1. ONE TO THREE SENTENCES TOTAL. Hard cap: 60 spoken words. No more.
 
-2. THE GIST. Capture only the single most important outcome, decision, or finding. Drop everything else — file paths, command names, line numbers, caveats, follow-ups, alternative options, exact numbers (round or omit).
+2. WHAT HAPPENED. Summarize what was done or found — the most important outcome, decision, or finding. Drop everything else — file paths, command names, line numbers, caveats, follow-ups, alternative options, exact numbers (round or omit).
 
 3. SPEAKABLE PROSE. Plain text. No markdown, no bullets, no code fences, no headers. A sentence a human can read naturally.
 

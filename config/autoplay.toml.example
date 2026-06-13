@@ -14,10 +14,10 @@
 mode = "summary"
 
 # Only used when mode = "summary".
-# small  — 1 to 2 sentences, <=40 words, just the gist
+# small  — 1 to 3 sentences, <=60 words, what happened (default)
 # medium — 3 to 5 sentences, ~60-100 words, gist + load-bearing artifact + open question
 # large  — 6 to 10 sentences, ~180-240 words, preserves nuance and named artifacts
-summary_size = "medium"
+summary_size = "small"
 
 # Coalesce window for back-to-back Stop events. The autoplay worker
 # sleeps this many seconds at start; if a newer Stop arrives during

@@ -48,7 +48,7 @@ echo "wrote $CONFIG_FILE: mode=$NEW_MODE summary_size=$NEW_SIZE"
 
 When setting `verbatim`, you still need a value for `NEW_SIZE` (it's
 ignored by the rewriter when mode=verbatim, but the config file needs
-something valid). Use `medium` if the existing config didn't have one
+something valid). Use `small` if the existing config didn't have one
 or you can't determine it cheaply — that way switching back to summary
 later picks the conventional default.
 
