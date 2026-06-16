@@ -294,6 +294,10 @@ class AutoplayWorker:
         if not self._wait_turn():
             self._machine.transition(BAILED)
             return 0
+        if not self._dedup.try_claim(source_hash):
+            self._log("same hash claimed by a sibling worker; skipping duplicate (cache-hit path)")
+            self._machine.transition(BAILED)
+            return 0
         self._speak(source_hash, stdin_text="", path_label="cache-hit path")
         return 0
 
@@ -335,13 +339,18 @@ class AutoplayWorker:
         if not self._wait_turn():
             self._machine.transition(BAILED)
             return 0
+        if not self._dedup.try_claim(source_hash):
+            self._log("same hash claimed by a sibling worker; skipping duplicate (post-rewrite path)")
+            self._machine.transition(BAILED)
+            return 0
         self._speak(source_hash, stdin_text=rewrite, path_label="after rewrite")
         return 0
 
     def _speak(self, source_hash: str, *, stdin_text: str, path_label: str) -> None:
+        # The now-playing marker was already stamped atomically by
+        # try_claim() before this point (see _play_cache_* paths).
         self._machine.transition(SPEAKING)
         self._fifo.mark_playing()
-        self._dedup.write_now_playing(source_hash)
         rc, _ = self._runner(
             ["bash", str(SPEAK), "--source-hash", source_hash],
             stdin_text=stdin_text,

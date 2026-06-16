@@ -46,12 +46,19 @@ class _StubBeacon:
 
 
 class _StubDedup:
-    def __init__(self, already: bool) -> None:
+    def __init__(self, already: bool, claim: bool = True) -> None:
         self._already = already
+        self._claim = claim
         self.written = None
 
     def already_playing(self, h) -> bool:
         return self._already
+
+    def try_claim(self, h) -> bool:
+        if self._claim:
+            self.written = h
+            return True
+        return False
 
     def write_now_playing(self, h) -> None:
         self.written = h
@@ -196,6 +203,33 @@ def test_dedup_bails_on_cache_hit_path() -> None:
     assert w.machine.state == BAILED
 
 
+def test_claim_lost_bails_after_wait() -> None:
+    """A sibling won the atomic claim during our queue wait → bail, no speak."""
+    long_msg = "x" * 40
+    full_hash = "c" * 64
+    tmp = Path(tempfile.mkdtemp(prefix="auto-speech-worker-test-"))
+    _with_cache(tmp, full_hash[:16])
+
+    def script(argv, stdin):
+        prog = argv[1] if argv[0] == "bash" else argv[0]
+        if str(prog).endswith("run_extract.sh"):
+            return 0, long_msg
+        if str(prog).endswith("compute_hash.sh"):
+            return 0, full_hash + "\n"
+        raise AssertionError("must not speak when the claim was lost")
+
+    orig_root = awmod._PROJECT_ROOT
+    awmod._PROJECT_ROOT = tmp
+    try:
+        # already_playing False (passes the early check + the wait), but the
+        # atomic try_claim loses the race → False.
+        w = _worker(runner=_Recorder(script), dedup=_StubDedup(False, claim=False))
+        assert w.run() == 0
+    finally:
+        awmod._PROJECT_ROOT = orig_root
+    assert w.machine.state == BAILED
+
+
 def main() -> int:
     tests = [
         test_global_disable_bails,
@@ -203,6 +237,7 @@ def main() -> int:
         test_source_too_short_bails,
         test_cache_hit_success_path,
         test_dedup_bails_on_cache_hit_path,
+        test_claim_lost_bails_after_wait,
     ]
     for t in tests:
         t()

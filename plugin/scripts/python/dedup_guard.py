@@ -17,11 +17,13 @@ autoplay_worker.sh.
 """
 from __future__ import annotations
 
+import fcntl
 import os
 import time
 from pathlib import Path
 
 NOW_PLAYING_MARKER = Path("/tmp/auto-speech-now-playing-hash")
+NOW_PLAYING_LOCK = Path("/tmp/auto-speech-now-playing.lock")
 AGE_CAP_SECONDS = 120
 MPV_PID_PATH = Path("/tmp/auto-speech/mpv.pid")
 
@@ -49,10 +51,12 @@ class DedupGuard:
         self,
         marker_path: Path = NOW_PLAYING_MARKER,
         mpv_pid_path: Path = MPV_PID_PATH,
+        lock_path: Path = NOW_PLAYING_LOCK,
         now=time.time,
     ) -> None:
         self._marker = Path(marker_path)
         self._mpv_pid_path = Path(mpv_pid_path)
+        self._lock = Path(lock_path)
         self._now = now
 
     def _mpv_alive(self) -> bool:
@@ -84,6 +88,58 @@ class DedupGuard:
         if not age < AGE_CAP_SECONDS:
             return False
         return self._mpv_alive()
+
+    def _fresh_same_hash(self, source_hash: str) -> bool:
+        """True iff the marker holds `source_hash` younger than the age cap.
+
+        This is `already_playing` WITHOUT the mpv-alive requirement. In the
+        FIFO, a sibling worker for the same turn becomes head only after the
+        prior mpv has gone idle, so by the time it claims, the first play's
+        mpv has already exited — an mpv-alive test would wrongly let the
+        duplicate through. Freshness within the 120s window is the correct
+        signal that this audio was just (or is being) played by a sibling.
+        """
+        try:
+            current = self._marker.read_text(encoding="utf-8").strip()
+        except OSError:
+            return False
+        if current != source_hash:
+            return False
+        try:
+            marker_mtime = self._marker.stat().st_mtime
+        except OSError:
+            return False
+        return (self._now() - marker_mtime) < AGE_CAP_SECONDS
+
+    def try_claim(self, source_hash: str) -> bool:
+        """Atomically claim the now-playing slot for `source_hash`.
+
+        Returns True (and stamps the marker) iff no fresh same-hash claim
+        exists; returns False if a sibling worker in the same burst already
+        claimed/played this exact audio within the age cap. The
+        check-and-set runs under an exclusive fcntl lock so two same-hash
+        workers reaching the head of the FIFO sequentially cannot both
+        claim — closing the dedup-check → wait → write race that the
+        non-atomic already_playing()/write_now_playing() pair left open.
+
+        Lock acquisition failure degrades to a best-effort claim (write +
+        True) rather than deadlocking playback — matching the pre-fix
+        behavior on the rare path where /tmp is not writable.
+        """
+        try:
+            lock_fd = open(self._lock, "w")
+        except OSError:
+            self.write_now_playing(source_hash)
+            return True
+        try:
+            fcntl.flock(lock_fd.fileno(), fcntl.LOCK_EX)
+            if self._fresh_same_hash(source_hash):
+                return False
+            self.write_now_playing(source_hash)
+            return True
+        finally:
+            fcntl.flock(lock_fd.fileno(), fcntl.LOCK_UN)
+            lock_fd.close()
 
     def write_now_playing(self, source_hash: str) -> None:
         """Stamp the now-playing marker with our source hash (best effort)."""
