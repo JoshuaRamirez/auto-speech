@@ -370,8 +370,11 @@ class WebServer:
             traceback.print_exc(file=sys.stderr)
             try:
                 self._jobs.fail(f"crash: {exc!r}")
-            except Exception:
-                pass
+            except Exception as exc2:
+                # The crash is already logged above; this only guards the
+                # state update from masking it. Still surface the secondary
+                # failure rather than swallowing it entirely.
+                print(f"[web] could not record job failure: {exc2!r}", file=sys.stderr)
 
     def _handle_replay(self):
         body = request.get_json(silent=True) or {}

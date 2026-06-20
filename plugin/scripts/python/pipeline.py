@@ -262,8 +262,11 @@ class PipelineOrchestrator:
         producer = SegmentProducer(tts_engine, profile, tmpdir, queue, stop_event)
         try:
             producer.run(plan)
-        except Exception:
-            # SegmentProducer.run records the error before re-raising.
+        except Exception as exc:
+            # SegmentProducer.run records the error (producer.error) before
+            # re-raising; surface a one-line trail here too so the failure is
+            # visible in the log, not just inferable from the exit code.
+            print(f"[pipeline] producer raised: {exc!r}", file=sys.stderr)
             return EXIT_TTS_FAIL
 
         if producer.error is not None:

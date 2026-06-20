@@ -88,8 +88,14 @@ def resolve_config() -> dict:
         nw = cfg.get("narration_wait_max_seconds")
         # bash does int(float(...)) so arithmetic doesn't choke on a decimal.
         narration_cfg = int(float(nw)) if nw is not None else None
-    except Exception:
-        pass
+    except Exception as exc:
+        # Don't crash the worker on a bad/unreadable config (e.g. a wrong-
+        # typed narration_wait value): fall back to env/defaults below. But
+        # log it — silent fallback hides a misconfiguration from the operator.
+        print(
+            f"[worker] autoplay config load failed; using env/defaults: {exc!r}",
+            file=sys.stderr,
+        )
 
     coalesce_env = os.environ.get("AUTO_SPEECH_AUTOPLAY_COALESCE")
     if coalesce_env not in (None, ""):

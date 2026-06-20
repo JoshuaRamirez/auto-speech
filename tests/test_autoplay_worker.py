@@ -230,6 +230,45 @@ def test_claim_lost_bails_after_wait() -> None:
     assert w.machine.state == BAILED
 
 
+def test_resolve_config_logs_and_falls_back_on_config_error() -> None:
+    """A failing/unreadable config must not crash the worker: resolve_config
+    falls back to env/defaults AND logs the failure (no silent swallow)."""
+    import contextlib
+    import io
+
+    import autoplay_config
+
+    def _boom() -> dict:
+        raise RuntimeError("malformed config")
+
+    saved_attr = autoplay_config.load_config
+    saved_env = {
+        k: os.environ.pop(k)
+        for k in (
+            "AUTO_SPEECH_AUTOPLAY_COALESCE",
+            "AUTO_SPEECH_NARRATION_WAIT_MAX",
+            "AUTO_SPEECH_QUEUE_WAIT_MAX",
+            "AUTO_SPEECH_AUTOPLAY_MIN_LEN",
+        )
+        if k in os.environ
+    }
+    autoplay_config.load_config = _boom
+    try:
+        buf = io.StringIO()
+        with contextlib.redirect_stderr(buf):
+            cfg = awmod.resolve_config()
+        # Fell back to the documented defaults...
+        assert cfg["coalesce_seconds"] == 1.0
+        assert cfg["narration_wait_max"] == 90
+        assert cfg["queue_wait_max"] == 600
+        assert cfg["min_len"] == 20
+        # ...and the failure was surfaced, not swallowed.
+        assert "config" in buf.getvalue().lower()
+    finally:
+        autoplay_config.load_config = saved_attr
+        os.environ.update(saved_env)
+
+
 def main() -> int:
     tests = [
         test_global_disable_bails,
@@ -238,6 +277,7 @@ def main() -> int:
         test_cache_hit_success_path,
         test_dedup_bails_on_cache_hit_path,
         test_claim_lost_bails_after_wait,
+        test_resolve_config_logs_and_falls_back_on_config_error,
     ]
     for t in tests:
         t()
