@@ -25,9 +25,15 @@ if [[ ! -x "$VENV/bin/python" ]]; then
     exit 1
 fi
 
+# shellcheck source=daemon_pid.sh
+source "$PLUGIN_SCRIPTS_DIR/shell/daemon_pid.sh"
+
 if [[ -f "$PID_FILE" ]]; then
     PID="$(cat "$PID_FILE" 2>/dev/null || true)"
-    if [[ -n "${PID:-}" ]] && kill -0 "$PID" 2>/dev/null; then
+    # Only "already running" if the pid is a LIVE instance of OUR daemon.
+    # A dead or recycled pid falls through to a fresh spawn (the daemon's
+    # own _existing_pid() guard re-checks and overwrites the pid file).
+    if narrator_pid_is_ours "$PID"; then
         echo "narrator daemon already running (pid=$PID)"
         exit 0
     fi

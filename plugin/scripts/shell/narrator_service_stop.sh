@@ -3,7 +3,11 @@
 
 set -uo pipefail
 
+SHELL_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PID_FILE="/tmp/auto-speech-narrator-daemon.pid"
+
+# shellcheck source=daemon_pid.sh
+source "$SHELL_DIR/daemon_pid.sh"
 
 if [[ ! -f "$PID_FILE" ]]; then
     echo "narrator daemon: not running"
@@ -17,9 +21,11 @@ if [[ -z "${PID:-}" ]]; then
     exit 0
 fi
 
-if ! kill -0 "$PID" 2>/dev/null; then
+# Identity-checked, NOT a bare kill -0: never signal a process that isn't
+# our daemon. Under PID reuse a recycled number would otherwise be killed.
+if ! narrator_pid_is_ours "$PID"; then
     rm -f "$PID_FILE"
-    echo "narrator daemon: pid $PID not running; cleaned up"
+    echo "narrator daemon: pid $PID is not our daemon (dead or recycled); cleaned up"
     exit 0
 fi
 

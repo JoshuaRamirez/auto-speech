@@ -65,17 +65,43 @@ def test_existing_pid_returns_none_for_dead_pid() -> None:
         path.unlink()
 
 
-def test_existing_pid_returns_pid_for_live_process() -> None:
-    # Use our own PID — definitely alive AND signalable by current user.
+def test_existing_pid_reclaims_live_non_daemon_pid() -> None:
+    # Our own PID is alive but is the TEST runner, not the daemon. Under the
+    # PID-identity guard it is reclaimable, so _existing_pid() returns None
+    # (this is exactly the PID-reuse case: a live number that isn't us).
     with tempfile.NamedTemporaryFile(mode="w", delete=False) as f:
         f.write(str(os.getpid()))
         path = Path(f.name)
     try:
         with patch.object(narrator_service, "PID_FILE", path):
-            result = narrator_service._existing_pid()
-            assert result == os.getpid()
+            assert narrator_service._existing_pid() is None
     finally:
         path.unlink()
+
+
+def test_pid_is_our_daemon_true_for_matching_cmdline() -> None:
+    # Live pid (our own) + a cmdline that looks like the daemon ⇒ True.
+    assert narrator_service._pid_is_our_daemon(
+        os.getpid(),
+        cmdline_reader=lambda _p: "/usr/bin/python3 /x/y/narrator_service.py",
+    ) is True
+
+
+def test_pid_is_our_daemon_false_for_recycled_pid() -> None:
+    # Live pid, but the cmdline is an unrelated process (pid was recycled).
+    # Note "test_narrator_service.py" contains the substring but NOT
+    # "/narrator_service.py" — the leading slash is what distinguishes them.
+    assert narrator_service._pid_is_our_daemon(
+        os.getpid(),
+        cmdline_reader=lambda _p: "/usr/bin/python3 /x/tests/test_narrator_service.py",
+    ) is False
+
+
+def test_pid_is_our_daemon_false_for_dead_pid() -> None:
+    # Dead pid: rejected before the cmdline is even consulted.
+    assert narrator_service._pid_is_our_daemon(
+        999999, cmdline_reader=lambda _p: "/x/narrator_service.py"
+    ) is False
 
 
 def test_sweep_removes_old_session_markers_but_not_fresh_ones() -> None:
@@ -254,7 +280,10 @@ def main() -> int:
     tests = [
         test_existing_pid_returns_none_when_pid_file_absent,
         test_existing_pid_returns_none_for_dead_pid,
-        test_existing_pid_returns_pid_for_live_process,
+        test_existing_pid_reclaims_live_non_daemon_pid,
+        test_pid_is_our_daemon_true_for_matching_cmdline,
+        test_pid_is_our_daemon_false_for_recycled_pid,
+        test_pid_is_our_daemon_false_for_dead_pid,
         test_sweep_removes_old_session_markers_but_not_fresh_ones,
         test_sweep_tolerates_missing_dirs,
         test_process_chunk_filters_events_without_session_marker,

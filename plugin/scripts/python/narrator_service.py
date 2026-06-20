@@ -61,16 +61,45 @@ def _log(msg: str) -> None:
     _LOGGER.info(msg)
 
 
+def _pid_cmdline(pid: int) -> str:
+    """Best-effort command line of `pid` via `ps`; '' on any error."""
+    try:
+        out = subprocess.run(
+            ["ps", "-p", str(pid), "-o", "command="],
+            capture_output=True,
+            text=True,
+            timeout=2,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return ""
+    return out.stdout.strip()
+
+
+def _pid_is_our_daemon(pid: int, cmdline_reader=_pid_cmdline) -> bool:
+    """True iff `pid` is alive AND is THIS daemon.
+
+    Guards against PID reuse: after a crash the OS may recycle the daemon's
+    pid for an unrelated process, which still passes `kill -0`. Trusting the
+    number alone would falsely block a restart (here) or kill the wrong
+    process (the stop script), so we additionally match the daemon's command
+    line. The leading slash in the signature avoids matching the test runner
+    (`.../test_narrator_service.py`)."""
+    try:
+        os.kill(pid, 0)
+    except OSError:
+        return False
+    return "/narrator_service.py" in cmdline_reader(pid)
+
+
 def _existing_pid() -> int | None:
+    """The pid of a LIVE instance of this daemon, or None when the pid file
+    is absent, unreadable, points at a dead process, or — under PID reuse —
+    points at a process that is not our daemon (and is thus reclaimable)."""
     try:
         pid = int(PID_FILE.read_text().strip())
     except (OSError, ValueError):
         return None
-    try:
-        os.kill(pid, 0)
-        return pid
-    except (ProcessLookupError, PermissionError):
-        return None
+    return pid if _pid_is_our_daemon(pid) else None
 
 
 def _project_root() -> Path:
