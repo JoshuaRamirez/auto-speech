@@ -36,6 +36,19 @@ else
     echo "  global disable: absent"
 fi
 
+# Session SOLO scope (spotlight). Absent marker => ALL sessions read.
+SOLO_MARKER="$HOME/.claude/auto-speech-autoplay-solo"
+if [[ -e "$SOLO_MARKER" ]]; then
+    SOLO_ID="$(tr -d '[:space:]' < "$SOLO_MARKER" 2>/dev/null || true)"
+    if [[ -n "$SESSION_ID" ]] && [[ "$SOLO_ID" == "$SESSION_ID" ]]; then
+        echo "  scope:          SOLO — only THIS session reads (spotlight=$SOLO_ID)"
+    else
+        echo "  scope:          SOLO — only session ${SOLO_ID:-<empty>} reads; this session muted"
+    fi
+else
+    echo "  scope:          ALL — every session reads (default)"
+fi
+
 # Currently-playing mpv (from the singleton session dir)
 MPV_PID="$(cat /tmp/auto-speech/mpv.pid 2>/dev/null || true)"
 if [[ -n "${MPV_PID:-}" ]] && kill -0 "$MPV_PID" 2>/dev/null; then

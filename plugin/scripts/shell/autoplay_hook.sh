@@ -48,6 +48,20 @@ if [[ -e "$DISABLED_MARKER" ]]; then
     exit 0
 fi
 
+# Per-session SOLO scoping. When the spotlight marker exists it names the
+# ONE session allowed to play; every OTHER session is muted here. Absent
+# marker => all sessions play (the default). Set/cleared by
+# /auto-speech-scope. An unidentifiable session (empty SESSION_ID, e.g.
+# jq missing) is NOT muted, to avoid total silence — mirrors
+# SoloScope.session_allowed() in autoplay_scope.py.
+SOLO_MARKER="$HOME/.claude/auto-speech-autoplay-solo"
+if [[ -n "$SESSION_ID" ]] && [[ -e "$SOLO_MARKER" ]]; then
+    SOLO_ID="$(tr -d '[:space:]' < "$SOLO_MARKER" 2>/dev/null || true)"
+    if [[ -n "$SOLO_ID" ]] && [[ "$SOLO_ID" != "$SESSION_ID" ]]; then
+        exit 0
+    fi
+fi
+
 # Per-session OPT-OUT scoping. Autoplay is ON by default for every
 # session. A marker file in this dir (CLAUDE_CODE_SESSION_ID keyed,
 # written by /auto-speech-autoplay-off) silences just that session;

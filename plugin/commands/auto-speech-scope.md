@@ -1,0 +1,67 @@
+---
+description: Switch autoplay between reading ALL sessions or just THIS one. Args = (all | solo) or empty to show current scope.
+argument-hint: "[all|solo]"
+allowed-tools: Bash
+---
+
+You are executing `/auto-speech-scope` for the auto-speech plugin.
+
+This toggles the autoplay **spotlight**. Autoplay is ON for every session
+by default (ALL scope). `solo` claims the spotlight for THIS session, so
+only this session reads aloud and every other session is muted until you
+switch back to `all`.
+
+## Argument
+
+Parse `$ARGUMENTS` (case-insensitive, trimmed):
+- empty / whitespace → action is `show`
+- `all` → scope=all (every session reads; the default)
+- `solo` | `this` | `one` | `only` → scope=solo (only THIS session reads)
+- anything else → respond `scope: unknown value <value> (expected all | solo)` and stop.
+
+## show
+
+Run this Bash command and respond with its output verbatim on one line:
+
+```
+CLAUDE_CODE_SESSION_ID="${CLAUDE_CODE_SESSION_ID:-}" /Users/joshua/Developer/auto-speech/.venv/bin/python /Users/joshua/Developer/auto-speech/plugin/scripts/python/autoplay_scope.py
+```
+
+## set all
+
+Run:
+
+```
+set -euo pipefail
+rm -f "$HOME/.claude/auto-speech-autoplay-solo"
+echo "scope-all"
+```
+
+Respond with one line: `autoplay scope: ALL — every session reads`.
+
+## set solo
+
+Run:
+
+```
+set -euo pipefail
+SESSION_ID="${CLAUDE_CODE_SESSION_ID:-}"
+if [ -z "$SESSION_ID" ]; then
+    echo "no-session-id"
+    exit 0
+fi
+mkdir -p "$HOME/.claude"
+printf '%s' "$SESSION_ID" > "$HOME/.claude/auto-speech-autoplay-solo"
+# Soloing THIS session implies it should actually read: clear its own
+# per-session opt-out marker if one was left behind by /auto-speech-autoplay-off.
+rm -f "$HOME/.claude/auto-speech-autoplay-sessions/$SESSION_ID"
+echo "scope-solo $SESSION_ID"
+```
+
+If the output is `scope-solo <id>`, respond with one line:
+`autoplay scope: SOLO — only this session (<id>) reads; all others muted`.
+
+If the output is `no-session-id`, respond with one line:
+`cannot solo: CLAUDE_CODE_SESSION_ID is not set in this shell`.
+
+On any other output, respond with the output verbatim.
