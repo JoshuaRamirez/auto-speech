@@ -1,0 +1,44 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  check:
+    # macOS runner matches the project's target (MLX, Homebrew mpv, BSD stat).
+    # We do NOT install the runtime deps here: the darwin-scoped uv.lock and
+    # multi-GB MLX/model wheels make that slow and unnecessary. Instead we run
+    # the dependency-free hermetic test subset on a bare Python 3.12, plus the
+    # static checks (ruff, shellcheck, lockfile drift).
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v6
+
+      - name: Ruff (lint)
+        run: uvx ruff check plugin/scripts/python tests
+
+      - name: ShellCheck (warnings+)
+        run: |
+          brew install shellcheck
+          shellcheck -S warning plugin/scripts/shell/*.sh setup/*.sh tests/*.sh
+
+      - name: Lockfile in sync with pyproject
+        run: uv lock --check
+
+      - name: Hermetic tests (bare Python 3.12, no project deps)
+        run: |
+          uv venv --python 3.12 "$RUNNER_TEMP/ci-bare"
+          AUTO_SPEECH_TEST_PYTHON="$RUNNER_TEMP/ci-bare/bin/python" \
+            bash tests/run_all.sh --hermetic

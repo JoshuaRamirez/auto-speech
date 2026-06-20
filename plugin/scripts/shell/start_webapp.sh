@@ -16,7 +16,6 @@
 set -uo pipefail
 
 PLUGIN_SCRIPTS_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-PROJECT_ROOT="$(cd "$PLUGIN_SCRIPTS_DIR/../.." && pwd)"
 RUNSERVER="$PLUGIN_SCRIPTS_DIR/shell/run_server.sh"
 PIDFILE="/tmp/auto-speech-webapp.pid"
 LOG="/tmp/auto-speech-webapp.log"

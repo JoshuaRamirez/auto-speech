@@ -22,7 +22,12 @@ if [[ -e "$LEGACY_MARKER" ]]; then
     echo "  legacy:    DEPRECATED per-project marker still present at $LEGACY_MARKER (run /auto-speech-narrate-off to clean)"
 fi
 if [[ -d "$MARKER_DIR" ]]; then
-    OTHER_SESSIONS=$(ls "$MARKER_DIR" 2>/dev/null | grep -v "^${SESSION_ID:-}$" | wc -l | tr -d ' ')
+    OTHER_SESSIONS=0
+    for _m in "$MARKER_DIR"/*; do
+        [[ -e "$_m" ]] || continue
+        [[ "$(basename "$_m")" == "${SESSION_ID:-}" ]] && continue
+        OTHER_SESSIONS=$((OTHER_SESSIONS + 1))
+    done
     if [[ "$OTHER_SESSIONS" -gt 0 ]]; then
         echo "  others:    $OTHER_SESSIONS other session(s) also opted in"
     fi

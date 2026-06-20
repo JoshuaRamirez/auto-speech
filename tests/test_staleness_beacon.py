@@ -8,7 +8,6 @@ from __future__ import annotations
 
 import sys
 import tempfile
-import time
 from pathlib import Path
 
 SRC = Path(__file__).resolve().parents[1] / "plugin" / "scripts" / "python"

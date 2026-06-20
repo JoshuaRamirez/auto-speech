@@ -37,3 +37,8 @@ environments = ["sys_platform == 'darwin'"]
 # Virtual project: we install dependencies into the venv but do not build
 # or install auto-speech itself as a package (the code runs from plugin/).
 package = false
+
+[tool.ruff]
+target-version = "py312"
+line-length = 100
+extend-exclude = [".venv", "docs"]

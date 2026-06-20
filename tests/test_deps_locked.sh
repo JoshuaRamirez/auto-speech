@@ -15,7 +15,7 @@ if ! command -v uv >/dev/null 2>&1; then
     exit 0
 fi
 
-cd "$PROJECT_ROOT"
+cd "$PROJECT_ROOT" || exit 1
 if uv lock --check >/dev/null 2>&1; then
     echo "  ok  uv.lock is in sync with pyproject.toml"
     echo "deps-locked: 1 ran, 0 failed"

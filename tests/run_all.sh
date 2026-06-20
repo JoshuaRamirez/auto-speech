@@ -1,7 +1,15 @@
 #!/usr/bin/env bash
-# Run every test_*.py in this directory directly (no pytest dependency).
-# Exits non-zero on the first failure. Order: cheap unit tests first,
-# then the heavier producer/consumer/wav-concat tests last.
+# Run the test suite directly (no pytest dependency).
+#
+# Modes:
+#   bash tests/run_all.sh             full suite (python + shell + heavy)
+#   bash tests/run_all.sh --hermetic  only tests that need NO runtime deps
+#                                     — the CI subset (runs on a bare 3.12)
+#
+# Interpreter: defaults to .venv; override with AUTO_SPEECH_TEST_PYTHON so
+# CI can run the hermetic subset on a bare interpreter (the darwin-scoped
+# uv.lock can't `uv sync` on a Linux runner, and the hermetic tests import
+# only the standard library + plugin modules anyway).
 
 set -uo pipefail
 
@@ -9,10 +17,26 @@ TESTS_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_ROOT="$(cd "$TESTS_DIR/.." && pwd)"
 VENV="$PROJECT_ROOT/.venv"
 
-if [[ ! -x "$VENV/bin/python" ]]; then
-    echo "error: venv missing at $VENV. Run setup/install.sh." >&2
+HERMETIC=0
+if [[ "${1:-}" == "--hermetic" ]]; then
+    HERMETIC=1
+    shift
+fi
+
+PYTHON="${AUTO_SPEECH_TEST_PYTHON:-$VENV/bin/python}"
+if [[ ! -x "$PYTHON" ]]; then
+    echo "error: python interpreter not found at $PYTHON" >&2
+    echo "       set AUTO_SPEECH_TEST_PYTHON, or run setup/install.sh." >&2
     exit 1
 fi
+
+# Tests that import runtime deps (numpy / the TTS audio pipeline) and so
+# CANNOT run on a bare interpreter. Classified empirically; every other
+# test_*.py imports only the standard library + plugin modules.
+NEEDS_DEPS=(
+    test_segment_producer.py
+    test_playback_consumer.py
+)
 
 # Cheap unit tests first — failures here usually indicate a wider problem.
 CHEAP=(
@@ -70,7 +94,7 @@ run_one_py() {
     fi
     echo
     echo "==== $f ===="
-    if "$VENV/bin/python" "$path"; then
+    if "$PYTHON" "$path"; then
         ran=$((ran + 1))
     else
         ran=$((ran + 1))
@@ -97,9 +121,25 @@ run_one_sh() {
     fi
 }
 
-for f in "${CHEAP[@]}"; do run_one_py "$f"; done
-for f in "${SHELL_TESTS[@]}"; do run_one_sh "$f"; done
-for f in "${HEAVY[@]}"; do run_one_py "$f"; done
+if [[ $HERMETIC -eq 1 ]]; then
+    # Every python test except the dep-requiring ones. New tests are picked
+    # up automatically; add a new dep-requiring test to NEEDS_DEPS above.
+    echo "[hermetic] interpreter: $PYTHON"
+    for path in "$TESTS_DIR"/test_*.py; do
+        f="$(basename "$path")"
+        skip=0
+        for d in "${NEEDS_DEPS[@]}"; do [[ "$f" == "$d" ]] && skip=1; done
+        if [[ $skip -eq 1 ]]; then
+            echo "skip $f (needs runtime deps)"
+            continue
+        fi
+        run_one_py "$f"
+    done
+else
+    for f in "${CHEAP[@]}"; do run_one_py "$f"; done
+    for f in "${SHELL_TESTS[@]}"; do run_one_sh "$f"; done
+    for f in "${HEAVY[@]}"; do run_one_py "$f"; done
+fi
 
 echo
 echo "===================="

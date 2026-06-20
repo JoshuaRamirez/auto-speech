@@ -29,9 +29,7 @@ from pathlib import Path
 
 from flask import Flask, jsonify, render_template, request
 
-from audio_transcript import AudioTranscript
-from cache_entry import CacheEntry
-from cache_store import CachePromotionError, CacheStore
+from cache_store import CacheStore
 from claude_cli_rewriter import (
     ClaudeCliRewriteError,
     ClaudeCliRewriter,
@@ -39,7 +37,6 @@ from claude_cli_rewriter import (
     load_default_template,
 )
 from config_constants import DEFAULT_SPEED, DEFAULT_VOICE_ID, FALLBACK_CHARS_PER_SEC
-from duration_estimator import DurationEstimator
 from job_state import (
     PHASE_GENERATING,
     PHASE_HANDED_OFF,
@@ -281,7 +278,7 @@ class WebServer:
 
             # Miss + nothing in flight → register a new job and submit it.
             mode_str = "rewrite" if rewrite_mode else "passthrough"
-            job = self._jobs.begin(
+            self._jobs.begin(
                 mode=mode_str,
                 source_chars=len(text),
                 source_hash=source_hash,

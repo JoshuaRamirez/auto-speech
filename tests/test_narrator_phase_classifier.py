@@ -20,7 +20,6 @@ sys.path.insert(0, str(SRC))
 
 from narrator_phase_classifier import (  # noqa: E402
     Category,
-    Phase,
     PhaseClassifier,
 )
 

@@ -15,7 +15,6 @@ sys.path.insert(0, str(SRC))
 from narrator_phase_classifier import Category, Phase, ToolEvent  # noqa: E402
 from narrator_summarizer import (  # noqa: E402
     MockSummarizer,
-    Summarizer,
     load_summarizer,
 )
 

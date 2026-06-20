@@ -1,7 +1,6 @@
 """Unit test for WavConcatenator: frame-count sum + format parity."""
 from __future__ import annotations
 
-import struct
 import sys
 import tempfile
 import wave

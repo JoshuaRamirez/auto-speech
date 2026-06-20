@@ -89,7 +89,7 @@ def test_relative_prompt_path_resolves_against_config_dir() -> None:
         prompt.write_text("hello {events}", encoding="utf-8")
         cfg_path = Path(td) / "narrator.toml"
         cfg_path.write_text(
-            f'[narrator]\nprovider = "mock"\nprompt_template = "my_prompt.txt"\n',
+            '[narrator]\nprovider = "mock"\nprompt_template = "my_prompt.txt"\n',
             encoding="utf-8",
         )
         prev = os.environ.get("AUTO_SPEECH_NARRATOR_CONFIG")
