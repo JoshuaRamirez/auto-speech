@@ -17,6 +17,7 @@ from pathlib import Path
 
 from auto_speech_log import max_bytes
 from autoplay_scope import SoloScope
+from config_validation import validate_user_configs
 from health_report import HealthReport, Status
 
 # FAIL below this much free space on the logs/cache filesystem; WARN below
@@ -52,6 +53,7 @@ class Doctor:
         home: Path | None = None,
         tmp: Path | None = None,
         venv_python: Path | None = None,
+        config_dir: Path | None = None,
         max_queue_depth: int = 32,
         which=shutil.which,
         disk_usage=shutil.disk_usage,
@@ -59,6 +61,11 @@ class Doctor:
     ) -> None:
         self._home = Path(home) if home is not None else Path(os.path.expanduser("~"))
         self._tmp = Path(tmp) if tmp is not None else Path("/tmp")
+        self._config_dir = (
+            Path(config_dir)
+            if config_dir is not None
+            else self._home / ".config" / "auto-speech"
+        )
         self._venv_python = Path(venv_python) if venv_python is not None else _default_venv_python()
         self._max_queue_depth = max_queue_depth
         self._which = which
@@ -74,6 +81,7 @@ class Doctor:
         self._check_daemon(r)
         self._check_queue(r)
         self._check_scope(r)
+        self._check_config(r)
         return r
 
     # --- individual probes -------------------------------------------------
@@ -162,6 +170,16 @@ class Doctor:
             r.add("scope", Status.OK, "ALL — every session reads")
         else:
             r.add("scope", Status.OK, f"SOLO — only session {held} reads")
+
+    def _check_config(self, r: HealthReport) -> None:
+        problems = validate_user_configs(self._config_dir)
+        if not problems:
+            r.add("config", Status.OK, "valid (or using shipped defaults)")
+            return
+        shown = "; ".join(problems[:4])
+        if len(problems) > 4:
+            shown += f" (+{len(problems) - 4} more)"
+        r.add("config", Status.WARN, shown)
 
 
 def main(argv: list[str]) -> int:

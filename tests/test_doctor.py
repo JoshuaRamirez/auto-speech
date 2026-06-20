@@ -134,6 +134,24 @@ def test_global_mute_and_solo_scope() -> None:
         assert "sess-Z" in _check(report, "scope").detail
 
 
+def test_bad_config_warns_but_healthy() -> None:
+    with tempfile.TemporaryDirectory() as h, tempfile.TemporaryDirectory() as t, \
+            tempfile.TemporaryDirectory() as c:
+        (Path(c) / "autoplay.toml").write_text('[autoplay]\nmode = "nope"\n', encoding="utf-8")
+        report = _doctor(Path(h), Path(t), config_dir=Path(c)).run()
+        cfg = _check(report, "config")
+        assert cfg.status is Status.WARN
+        assert "mode must be one of" in cfg.detail
+        assert report.healthy is True  # a config typo degrades, doesn't break
+
+
+def test_clean_config_ok() -> None:
+    with tempfile.TemporaryDirectory() as h, tempfile.TemporaryDirectory() as t, \
+            tempfile.TemporaryDirectory() as c:
+        report = _doctor(Path(h), Path(t), config_dir=Path(c)).run()
+        assert _check(report, "config").status is Status.OK
+
+
 def test_json_shape_and_exit() -> None:
     with tempfile.TemporaryDirectory() as h, tempfile.TemporaryDirectory() as t:
         report = _doctor(Path(h), Path(t)).run()
@@ -154,6 +172,8 @@ def main() -> int:
         test_stale_daemon_pid_warns,
         test_saturated_queue_warns,
         test_global_mute_and_solo_scope,
+        test_bad_config_warns_but_healthy,
+        test_clean_config_ok,
         test_json_shape_and_exit,
     ]
     for t in tests:
