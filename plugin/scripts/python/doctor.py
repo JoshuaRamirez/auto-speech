@@ -19,6 +19,7 @@ from auto_speech_log import max_bytes
 from autoplay_scope import SoloScope
 from config_validation import validate_user_configs
 from health_report import HealthReport, Status
+from self_update import needs_sync
 
 # FAIL below this much free space on the logs/cache filesystem; WARN below
 # the higher mark. Unbounded /tmp growth was the original blocker, so headroom
@@ -34,9 +35,13 @@ LOG_FILES = (
 )
 
 
-def _default_venv_python() -> Path:
+def _project_root() -> Path:
     # plugin/scripts/python/doctor.py → project root is parents[3]
-    return Path(__file__).resolve().parents[3] / ".venv" / "bin" / "python"
+    return Path(__file__).resolve().parents[3]
+
+
+def _default_venv_python() -> Path:
+    return _project_root() / ".venv" / "bin" / "python"
 
 
 def _default_daemon_alive(pid: int) -> bool:
@@ -54,6 +59,8 @@ class Doctor:
         tmp: Path | None = None,
         venv_python: Path | None = None,
         config_dir: Path | None = None,
+        lock_path: Path | None = None,
+        stamp_path: Path | None = None,
         max_queue_depth: int = 32,
         which=shutil.which,
         disk_usage=shutil.disk_usage,
@@ -65,6 +72,10 @@ class Doctor:
             Path(config_dir)
             if config_dir is not None
             else self._home / ".config" / "auto-speech"
+        )
+        self._lock_path = Path(lock_path) if lock_path is not None else _project_root() / "uv.lock"
+        self._stamp_path = (
+            Path(stamp_path) if stamp_path is not None else _project_root() / "setup" / ".synced"
         )
         self._venv_python = Path(venv_python) if venv_python is not None else _default_venv_python()
         self._max_queue_depth = max_queue_depth
@@ -82,6 +93,7 @@ class Doctor:
         self._check_queue(r)
         self._check_scope(r)
         self._check_config(r)
+        self._check_updates(r)
         return r
 
     # --- individual probes -------------------------------------------------
@@ -180,6 +192,14 @@ class Doctor:
         if len(problems) > 4:
             shown += f" (+{len(problems) - 4} more)"
         r.add("config", Status.WARN, shown)
+
+    def _check_updates(self, r: HealthReport) -> None:
+        if not self._lock_path.exists():
+            r.add("updates", Status.OK, "no lockfile (dev checkout)")
+        elif needs_sync(self._lock_path, self._stamp_path):
+            r.add("updates", Status.WARN, "venv out of sync with uv.lock — run /auto-speech-update")
+        else:
+            r.add("updates", Status.OK, "venv in sync with uv.lock")
 
 
 def main(argv: list[str]) -> int:

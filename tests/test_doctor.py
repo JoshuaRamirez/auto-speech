@@ -152,6 +152,31 @@ def test_clean_config_ok() -> None:
         assert _check(report, "config").status is Status.OK
 
 
+def test_updates_in_sync_ok() -> None:
+    with tempfile.TemporaryDirectory() as h, tempfile.TemporaryDirectory() as t, \
+            tempfile.TemporaryDirectory() as p:
+        lock = Path(p) / "uv.lock"
+        stamp = Path(p) / ".synced"
+        lock.write_bytes(b"locked")
+        import self_update
+        self_update.record_sync(lock, stamp)  # stamp matches lock
+        report = _doctor(Path(h), Path(t), lock_path=lock, stamp_path=stamp).run()
+        assert _check(report, "updates").status is Status.OK
+
+
+def test_updates_out_of_sync_warns() -> None:
+    with tempfile.TemporaryDirectory() as h, tempfile.TemporaryDirectory() as t, \
+            tempfile.TemporaryDirectory() as p:
+        lock = Path(p) / "uv.lock"
+        stamp = Path(p) / ".synced"
+        lock.write_bytes(b"locked")  # no stamp written → out of sync
+        report = _doctor(Path(h), Path(t), lock_path=lock, stamp_path=stamp).run()
+        c = _check(report, "updates")
+        assert c.status is Status.WARN
+        assert "/auto-speech-update" in c.detail
+        assert report.healthy is True  # out-of-sync degrades, doesn't break
+
+
 def test_json_shape_and_exit() -> None:
     with tempfile.TemporaryDirectory() as h, tempfile.TemporaryDirectory() as t:
         report = _doctor(Path(h), Path(t)).run()
@@ -174,6 +199,8 @@ def main() -> int:
         test_global_mute_and_solo_scope,
         test_bad_config_warns_but_healthy,
         test_clean_config_ok,
+        test_updates_in_sync_ok,
+        test_updates_out_of_sync_warns,
         test_json_shape_and_exit,
     ]
     for t in tests:

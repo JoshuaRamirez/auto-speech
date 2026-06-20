@@ -44,6 +44,7 @@ CHEAP=(
     test_auto_speech_log.py
     test_doctor.py
     test_config_validation.py
+    test_self_update.py
     test_playback_state.py
     test_narrator_state.py
     test_worker_lifecycle.py

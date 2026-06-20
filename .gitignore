@@ -8,8 +8,9 @@ __pycache__/
 # Virtual environment (managed by setup/install.sh)
 .venv/
 
-# Install-time sentinel
+# Install-time sentinel + per-machine self-update stamp (lock hash last synced)
 setup/.installed
+setup/.synced
 
 # Per-machine calibration history (profile itself IS committed as a sample)
 config/calibration_history.jsonl
