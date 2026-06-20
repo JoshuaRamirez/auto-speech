@@ -45,6 +45,12 @@ idle_shutdown_seconds = 600.0
 # the typical per-turn tool count will silence the narrator entirely.
 min_events_per_phase = 1
 
+# Maximum phases buffered ahead of the (playback-bound) TTS worker.
+# When a burst of phases outruns playback, the daemon sheds the OLDEST
+# queued phase rather than grow memory without bound; every drop is
+# logged with a running total. Default 32.
+max_queue_depth = 32
+
 # Optional: override the Ollama API host. Only used when provider="ollama".
 # Defaults to AUTO_SPEECH_OLLAMA_HOST env var, then http://127.0.0.1:11434.
 # ollama_host = "http://127.0.0.1:11434"

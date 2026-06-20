@@ -84,7 +84,14 @@ class NarratorService:
         self._classifier = PhaseClassifier(
             silence_seconds=self._config["silence_seconds"]
         )
-        self._tts_queue: queue.Queue[Phase | None] = queue.Queue()
+        # Bounded so a burst of phases can't grow the queue without limit
+        # when the TTS worker (which blocks on playback) lags. See
+        # _enqueue_phase for the drop-oldest backpressure policy.
+        self._max_queue = int(self._config.get("max_queue_depth", 32))
+        self._tts_queue: queue.Queue[Phase | None] = queue.Queue(
+            maxsize=self._max_queue
+        )
+        self._dropped_phases = 0
         self._summarizer: Summarizer | None = None
         self._summarizer_lock = threading.Lock()
         self._last_event_ts = time.time()
@@ -122,7 +129,21 @@ class NarratorService:
             # reaches a legal pre-rest state before NOT_RUNNING.
             if self._fsm.can(SIGNAL_SHUTDOWN):
                 self._fsm.transition(SIGNAL_SHUTDOWN)
-            self._tts_queue.put(None)  # sentinel
+            # Stop the worker. The queue is bounded, so never block the
+            # shutdown path on a full queue — make room, then enqueue the
+            # sentinel.
+            try:
+                self._tts_queue.put_nowait(None)
+            except queue.Full:
+                try:
+                    self._tts_queue.get_nowait()
+                    self._tts_queue.task_done()
+                except queue.Empty:
+                    pass
+                try:
+                    self._tts_queue.put_nowait(None)
+                except queue.Full:
+                    pass
             tts_thread.join(timeout=5.0)
             try:
                 PID_FILE.unlink()
@@ -240,12 +261,51 @@ class NarratorService:
                 f"events={len(phase.events)} (< {min_events})"
             )
             return
-        self._tts_queue.put(phase)
+        self._enqueue_phase(phase)
         self._update_depth(self._tts_queue.qsize())
         _log(
             f"enqueued phase={phase.category.value} "
             f"events={len(phase.events)} depth={self._tts_queue.qsize()}"
         )
+
+    def _enqueue_phase(self, phase: Phase) -> None:
+        """Bounded put with drop-oldest backpressure.
+
+        The TTS worker blocks on playback-to-completion to preserve true
+        FIFO, so a burst of phases can outrun it. Rather than let the
+        queue grow without bound (a slow memory leak under sustained tool
+        use), cap it at max_queue_depth and shed the OLDEST queued phase
+        when full — stale narration is the least worth speaking — counting
+        every drop so the loss is observable in the daemon log.
+
+        Only the tail thread calls this; the TTS worker only removes from
+        the queue. After shedding one item a slot is therefore guaranteed
+        free, but the final put stays defensive for safety.
+        """
+        try:
+            self._tts_queue.put_nowait(phase)
+            return
+        except queue.Full:
+            pass
+        try:
+            dropped = self._tts_queue.get_nowait()
+            self._tts_queue.task_done()
+            self._dropped_phases += 1
+            cat = getattr(getattr(dropped, "category", None), "value", "?")
+            _log(
+                f"queue full (max={self._max_queue}); dropped oldest "
+                f"phase={cat} total_dropped={self._dropped_phases}"
+            )
+        except queue.Empty:
+            pass
+        try:
+            self._tts_queue.put_nowait(phase)
+        except queue.Full:
+            self._dropped_phases += 1
+            _log(
+                "queue still full after shed; dropped new phase "
+                f"total_dropped={self._dropped_phases}"
+            )
 
     def _update_depth(self, depth: int) -> None:
         try:

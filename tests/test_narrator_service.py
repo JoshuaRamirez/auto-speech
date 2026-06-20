@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import json
 import os
+import queue
 import sys
 import tempfile
 import time
@@ -22,6 +23,29 @@ SRC = Path(__file__).resolve().parents[1] / "plugin" / "scripts" / "python"
 sys.path.insert(0, str(SRC))
 
 import narrator_service  # noqa: E402
+
+
+def _bare_service(max_queue: int):
+    """A NarratorService with just the fields _enqueue_phase touches,
+    constructed via __new__ to skip the config/classifier/threads in
+    __init__ (mirrors the other tests in this file)."""
+    svc = narrator_service.NarratorService.__new__(narrator_service.NarratorService)
+    svc._max_queue = max_queue
+    svc._tts_queue = queue.Queue(maxsize=max_queue)
+    svc._dropped_phases = 0
+    return svc
+
+
+class _FakePhase:
+    """Minimal stand-in carrying the attributes the drop log reads."""
+
+    def __init__(self, tag: str) -> None:
+        self.tag = tag
+
+        class _Cat:
+            value = tag
+
+        self.category = _Cat()
 
 
 def test_existing_pid_returns_none_when_pid_file_absent() -> None:
@@ -176,6 +200,56 @@ def test_process_chunk_suppresses_stop_event_flush() -> None:
     assert svc._classifier.flush() is None
 
 
+def test_enqueue_under_cap_keeps_all() -> None:
+    svc = _bare_service(max_queue=4)
+    for i in range(4):
+        svc._enqueue_phase(_FakePhase(f"p{i}"))
+    assert svc._tts_queue.qsize() == 4
+    assert svc._dropped_phases == 0
+
+
+def test_enqueue_over_cap_drops_oldest() -> None:
+    svc = _bare_service(max_queue=3)
+    for i in range(5):  # 2 over the cap
+        svc._enqueue_phase(_FakePhase(f"p{i}"))
+    # Never exceeds the bound.
+    assert svc._tts_queue.qsize() == 3
+    # The two oldest were shed; the survivors are the three newest.
+    survivors = [svc._tts_queue.get().tag for _ in range(3)]
+    assert survivors == ["p2", "p3", "p4"]
+    assert svc._dropped_phases == 2
+
+
+def test_enqueue_into_zero_free_slots_is_bounded() -> None:
+    # A degenerate maxsize=1 still holds exactly one and counts drops.
+    svc = _bare_service(max_queue=1)
+    for i in range(3):
+        svc._enqueue_phase(_FakePhase(f"p{i}"))
+    assert svc._tts_queue.qsize() == 1
+    assert svc._tts_queue.get().tag == "p2"
+    assert svc._dropped_phases == 2
+
+
+def test_config_max_queue_depth_default_and_override() -> None:
+    import narrator_config
+
+    # Default when the key is absent: 32.
+    with tempfile.TemporaryDirectory() as d:
+        cfg_path = Path(d) / "narrator.toml"
+        cfg_path.write_text('[narrator]\nprovider = "mock"\n', encoding="utf-8")
+        with patch.dict(os.environ, {"AUTO_SPEECH_NARRATOR_CONFIG": str(cfg_path)}):
+            assert narrator_config.load_config()["max_queue_depth"] == 32
+
+    # Explicit override is honored and coerced to int.
+    with tempfile.TemporaryDirectory() as d:
+        cfg_path = Path(d) / "narrator.toml"
+        cfg_path.write_text(
+            '[narrator]\nprovider = "mock"\nmax_queue_depth = 8\n', encoding="utf-8"
+        )
+        with patch.dict(os.environ, {"AUTO_SPEECH_NARRATOR_CONFIG": str(cfg_path)}):
+            assert narrator_config.load_config()["max_queue_depth"] == 8
+
+
 def main() -> int:
     tests = [
         test_existing_pid_returns_none_when_pid_file_absent,
@@ -185,6 +259,10 @@ def main() -> int:
         test_sweep_tolerates_missing_dirs,
         test_process_chunk_filters_events_without_session_marker,
         test_process_chunk_suppresses_stop_event_flush,
+        test_enqueue_under_cap_keeps_all,
+        test_enqueue_over_cap_drops_oldest,
+        test_enqueue_into_zero_free_slots_is_bounded,
+        test_config_max_queue_depth_default_and_override,
     ]
     for t in tests:
         t()
