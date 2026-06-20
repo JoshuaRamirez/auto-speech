@@ -73,6 +73,7 @@ SHELL_TESTS=(
     test_autoplay_shim.sh
     test_narrator_hook.sh
     test_install_idempotent.sh
+    test_bootstrap_hook_idempotent.sh
     test_deps_locked.sh
 )
 

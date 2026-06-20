@@ -74,6 +74,13 @@ else
     echo "[uninstall] uninstall-narrator-hooks.sh missing; skipping narrator hooks"
 fi
 
+# 2b-2. Remove the self-update bootstrap hook (SessionStart).
+if [[ -x "$PROJECT_ROOT/setup/uninstall-bootstrap-hook.sh" ]]; then
+    "$PROJECT_ROOT/setup/uninstall-bootstrap-hook.sh" || true
+else
+    echo "[uninstall] uninstall-bootstrap-hook.sh missing; skipping bootstrap hook"
+fi
+
 # 2c. Stop the narrator daemon if running.
 if [[ -x "$PROJECT_ROOT/plugin/scripts/shell/narrator_service_stop.sh" ]]; then
     "$PROJECT_ROOT/plugin/scripts/shell/narrator_service_stop.sh" || true
