@@ -24,6 +24,7 @@ import threading
 import time
 from pathlib import Path
 
+from auto_speech_log import get_logger
 from narrator_config import load_config
 from narrator_phase_classifier import Category, Phase, PhaseClassifier
 from narrator_state import (
@@ -49,13 +50,15 @@ POLL_INTERVAL_S = 0.25
 SUPPRESSED_CATEGORIES = {Category.OTHER}
 
 
+# The daemon is long-lived, so its structured log needs MID-RUN rotation:
+# a RotatingFileHandler that exclusively owns LOG_FILE. The start script
+# sends the daemon's raw stdio to a separate .out file (rotated pre-spawn)
+# precisely so it does NOT also write here and defeat this rotation.
+_LOGGER = get_logger("auto-speech.narrator", LOG_FILE)
+
+
 def _log(msg: str) -> None:
-    ts = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
-    try:
-        with LOG_FILE.open("a", encoding="utf-8") as f:
-            f.write(f"[{ts}] {msg}\n")
-    except OSError:
-        pass
+    _LOGGER.info(msg)
 
 
 def _existing_pid() -> int | None:

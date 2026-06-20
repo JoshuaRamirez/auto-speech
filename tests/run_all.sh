@@ -17,6 +17,7 @@ fi
 # Cheap unit tests first — failures here usually indicate a wider problem.
 CHEAP=(
     test_state_machine.py
+    test_auto_speech_log.py
     test_playback_state.py
     test_narrator_state.py
     test_worker_lifecycle.py

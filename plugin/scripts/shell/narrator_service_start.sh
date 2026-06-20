@@ -9,7 +9,16 @@ PROJECT_ROOT="$(cd "$PLUGIN_SCRIPTS_DIR/../.." && pwd)"
 VENV="$PROJECT_ROOT/.venv"
 SERVICE="$PLUGIN_SCRIPTS_DIR/python/narrator_service.py"
 PID_FILE="/tmp/auto-speech-narrator-daemon.pid"
+# Structured log: owned and rotated in-process by auto_speech_log
+# (RotatingFileHandler). The daemon's RAW stdio (tracebacks, MLX progress)
+# goes to a SEPARATE .out file so it doesn't write to LOG_FILE and defeat
+# that rotation. The .out is rotated here, pre-spawn.
 LOG_FILE="/tmp/auto-speech-narrator-daemon.log"
+OUT_FILE="/tmp/auto-speech-narrator-daemon.out"
+
+# shellcheck source=log_rotate.sh
+source "$PLUGIN_SCRIPTS_DIR/shell/log_rotate.sh"
+as_rotate_log "$OUT_FILE"
 
 if [[ ! -x "$VENV/bin/python" ]]; then
     echo "error: venv missing at $VENV. Run setup/install.sh first." >&2
@@ -24,7 +33,7 @@ if [[ -f "$PID_FILE" ]]; then
     fi
 fi
 
-python3 - "$VENV/bin/python" "$SERVICE" "$LOG_FILE" <<'PY' &
+python3 - "$VENV/bin/python" "$SERVICE" "$OUT_FILE" <<'PY' &
 import os, sys
 py, service, log = sys.argv[1], sys.argv[2], sys.argv[3]
 if os.fork() != 0:
@@ -51,5 +60,5 @@ for _ in 1 2 3 4 5 6 7 8 9 10; do
     fi
     sleep 0.2
 done
-echo "narrator daemon: pid file did not appear; check $LOG_FILE" >&2
+echo "narrator daemon: pid file did not appear; check $OUT_FILE (raw stdio) and $LOG_FILE" >&2
 exit 1

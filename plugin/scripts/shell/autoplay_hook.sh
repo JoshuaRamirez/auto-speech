@@ -11,6 +11,12 @@ PLUGIN_SCRIPTS_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 WORKER="$PLUGIN_SCRIPTS_DIR/shell/autoplay_worker.sh"
 DISABLED_MARKER="$HOME/.claude/auto-speech.disabled"
 LOG="/tmp/auto-speech-autoplay.log"
+
+# Size-cap the shared autoplay log. The detached worker prints to stdout,
+# which the spawn below redirects onto $LOG; workers are ephemeral, so
+# rotating once per spawn (before the fd is opened) keeps it bounded.
+# shellcheck source=log_rotate.sh
+source "$PLUGIN_SCRIPTS_DIR/shell/log_rotate.sh"
 # Beacon is per-session (set after we parse session_id from the payload).
 # Used by is_stale() in the worker to detect a newer Stop event from
 # the SAME session. Per-session-keyed so a Stop in session B doesn't
@@ -88,6 +94,9 @@ fi
 
 # Capture the beacon mtime to hand to the worker.
 BEACON_MTIME="$(stat -f %m "$BEACON" 2>/dev/null || echo 0)"
+
+# Rotate the worker log before the spawn opens it for append.
+as_rotate_log "$LOG"
 
 # Spawn the worker fully detached. macOS lacks GNU `setsid`, so we use
 # python3 to do a double-fork + setsid into a new session. The hook
