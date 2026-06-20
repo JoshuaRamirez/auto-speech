@@ -23,6 +23,13 @@ Playback (per-response autoplay + manual replay):
 /auto-speech-autoplay-off       # opt THIS session out
 /auto-speech-autoplay-mode      # set or show summary mode (verbatim|small|medium|large)
 /auto-speech-autoplay-status    # show session opt-out marker, opt-out dir, mpv, log tail
+/auto-speech-scope [all|solo]   # read ALL sessions, or only THIS one (spotlight)
+```
+
+Diagnostics & maintenance:
+```
+/auto-speech-doctor [json]      # health check; exits non-zero when unhealthy
+/auto-speech-update             # reconcile the venv with uv.lock (no git pull)
 ```
 
 ## Autoplay
@@ -156,6 +163,10 @@ auto-speech/
 ## Read first
 - [docs/specification/README.md](docs/specification/README.md) — the spec
 - [docs/plan/implementation-plan.md](docs/plan/implementation-plan.md) — the plan
+- [docs/OPERATIONS.md](docs/OPERATIONS.md) — run unattended, monitor with
+  `/auto-speech-doctor`, troubleshoot, log locations, env-var precedence
+- [docs/CONTRIBUTING.md](docs/CONTRIBUTING.md) — run tests + lint, the
+  hermetic CI subset, and the dependency-lock workflow
 
 ## Known deferred work
 

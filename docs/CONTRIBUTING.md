@@ -1,0 +1,82 @@
+# Contributing
+
+auto-speech is a Claude Code plugin written in Python 3.12 + Bash, targeting
+macOS / Apple Silicon. This is the developer's how-to: tests, lint, CI, and
+the dependency-lock workflow.
+
+## Setup
+
+```
+bash setup/install.sh        # uv sync from the committed lock + spaCy model
+```
+
+This creates `.venv` from `pyproject.toml` + `uv.lock` (reproducible). It is
+non-destructive: if `mlx-lm` is already installed it keeps the `narrate`
+extra so a base sync won't prune your narration capability.
+
+## Tests
+
+No pytest — tests are plain scripts with a `main()` that exits non-zero on
+failure. The runner:
+
+```
+bash tests/run_all.sh            # full suite (python + shell + audio/TTS)
+bash tests/run_all.sh --hermetic # only dependency-free tests (the CI subset)
+```
+
+- **Hermetic** tests import only the standard library + plugin modules and
+  run on a bare interpreter (no MLX, mpv, numpy, or audio device). New tests
+  are included automatically; a test that needs runtime deps goes in the
+  `NEEDS_DEPS` denylist in `run_all.sh`.
+- Override the interpreter with `AUTO_SPEECH_TEST_PYTHON` (CI points it at a
+  bare `uv venv` so the darwin-only lock never has to `uv sync` on Linux):
+
+```
+uv venv --python 3.12 /tmp/bare
+AUTO_SPEECH_TEST_PYTHON=/tmp/bare/bin/python bash tests/run_all.sh --hermetic
+```
+
+Test conventions: one `test_*.py` per module, a `main()` listing the cases,
+each printing `  ok  <name>`; collaborators/system probes are injected so the
+test touches no real audio, LLM, daemon, or `/tmp` state.
+
+## Lint
+
+```
+uvx ruff check plugin/scripts/python tests
+shellcheck -S warning plugin/scripts/shell/*.sh setup/*.sh tests/*.sh
+```
+
+Both must be clean. Ruff config is in `pyproject.toml` (`[tool.ruff]`).
+
+## CI
+
+`.github/workflows/ci.yml` runs on a **macOS** runner (matching the target
+platform) and gates every push/PR on four static checks, without installing
+the multi-GB darwin-only runtime deps:
+
+1. `ruff check`
+2. `shellcheck -S warning`
+3. `uv lock --check` (lockfile in sync with `pyproject.toml`)
+4. the **hermetic** test subset on a bare Python 3.12
+
+Reproduce CI locally by running those four commands.
+
+## Dependencies & the lockfile
+
+Dependencies are declared in `pyproject.toml` and pinned in `uv.lock`
+(darwin-scoped — a universal lock fails on the macOS-only MLX wheels).
+
+- Add/upgrade a dependency: edit `pyproject.toml`, run `uv lock`, commit
+  both. `tests/test_deps_locked.sh` (and CI) fail if they drift.
+- `mlx-lm` lives in the `narrate` optional extra so narration is locked too
+  without forcing it into the base install.
+
+## Conventions
+
+- One class per file; prefer many small classes over large ones.
+- Name the actual constraint (e.g. "no environment I/O", "stateless"), not
+  web shorthand.
+- Commit with the repo's Conventional Commits + emoji style; stage by named
+  files; keep commits small.
+- Merge, never rewrite history; never force-push.
