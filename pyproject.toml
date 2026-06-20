@@ -1,0 +1,39 @@
+[project]
+name = "auto-speech"
+version = "0.1.0"
+description = "Speak Claude Code responses aloud, with real-time narration (Claude Code plugin)."
+readme = "README.md"
+requires-python = ">=3.12"
+
+# Base runtime: end-of-turn autoplay (TTS) + the local web app.
+#   mlx-audio  — Apple-Silicon TTS engine (Kokoro)
+#   misaki[en] — English G2P (pulls spaCy; the en_core_web_sm MODEL is a
+#                separate post-sync download, see setup/install.sh)
+#   num2words  — number normalization for the rewriter
+#   flask      — the localhost web app
+dependencies = [
+    "mlx-audio>=0.4.2",
+    "misaki[en]>=0.9.4",
+    "num2words>=0.5.14",
+    "flask>=3.0",
+]
+
+[project.optional-dependencies]
+# Real-time LLM narration via Apple MLX. Installed on demand by
+# /auto-speech-narrate-install (`uv sync --extra narrate`). Kept in the
+# lock so a later `uv sync --extra narrate` is reproducible and a base
+# sync doesn't silently prune a user's narration capability.
+narrate = ["mlx-lm>=0.31.1"]
+
+[dependency-groups]
+# Tooling for CI / local checks (not shipped to runtime).
+dev = ["ruff>=0.6"]
+
+[tool.uv]
+# auto-speech is an Apple-Silicon tool: MLX wheels, Homebrew mpv, and BSD
+# `stat` are all macOS-only. Resolve the lock for macOS exclusively — a
+# universal resolution would fail on the macOS-only MLX wheels.
+environments = ["sys_platform == 'darwin'"]
+# Virtual project: we install dependencies into the venv but do not build
+# or install auto-speech itself as a package (the code runs from plugin/).
+package = false

@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # auto-speech — one-shot environment installer.
-# Creates a Python 3.12 venv at project root and installs mlx-audio + misaki.
+# Creates the project venv at .venv and installs the LOCKED dependency set
+# via `uv sync` (pyproject.toml + uv.lock) for reproducible installs.
 # Idempotent: safe to re-run.
 
 set -euo pipefail
@@ -10,6 +11,7 @@ VENV="$PROJECT_ROOT/.venv"
 SENTINEL="$PROJECT_ROOT/setup/.installed"
 
 echo "[auto-speech install] project root: $PROJECT_ROOT"
+cd "$PROJECT_ROOT"
 
 if ! command -v uv >/dev/null 2>&1; then
     echo "error: uv is not installed. Install via: brew install uv" >&2
@@ -36,19 +38,28 @@ if ! command -v jq >/dev/null 2>&1; then
     fi
 fi
 
-if [[ ! -d "$VENV" ]]; then
-    echo "[auto-speech install] creating venv at $VENV with Python 3.12"
-    uv venv --python 3.12 "$VENV"
-else
-    echo "[auto-speech install] venv already exists at $VENV"
+# Preserve an existing narration install: if mlx-lm is already present in
+# the venv, include the `narrate` extra so `uv sync` does not prune it.
+# (uv sync is exact by default; a base sync would otherwise uninstall a
+# user's narration capability.)
+SYNC_ARGS=()
+if [[ -x "$VENV/bin/python" ]] && "$VENV/bin/python" -c "import mlx_lm" >/dev/null 2>&1; then
+    echo "[auto-speech install] detected narration deps — keeping the 'narrate' extra"
+    SYNC_ARGS+=(--extra narrate)
 fi
 
-echo "[auto-speech install] installing mlx-audio and misaki..."
-# shellcheck disable=SC1091
-source "$VENV/bin/activate"
-uv pip install --upgrade pip
-uv pip install mlx-audio "misaki[en]" num2words "flask>=3.0"
-python -m spacy download en_core_web_sm
+echo "[auto-speech install] syncing locked dependencies (uv sync)..."
+uv sync "${SYNC_ARGS[@]}"
+
+# spaCy English model for misaki G2P. NOT a pip dependency — a separate
+# one-time download, cached under the venv. Skip when already importable
+# so re-running the installer doesn't re-download it.
+if uv run --no-sync python -c "import en_core_web_sm" >/dev/null 2>&1; then
+    echo "[auto-speech install] spaCy model en_core_web_sm already present"
+else
+    echo "[auto-speech install] downloading spaCy model en_core_web_sm"
+    uv run --no-sync python -m spacy download en_core_web_sm
+fi
 
 date -u +"%Y-%m-%dT%H:%M:%SZ" > "$SENTINEL"
 echo "[auto-speech install] done. Sentinel: $SENTINEL"

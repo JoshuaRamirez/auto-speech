@@ -15,7 +15,7 @@ Parse `$ARGUMENTS`:
 ## Step 1 — Inform the user
 
 Before running anything, tell the user this will:
-1. `pip install mlx-lm` into the project venv at `/Users/joshua/Developer/auto-speech/.venv`
+1. Install the `narrate` extra (mlx-lm, from the lock) into the project venv via `uv sync --extra narrate`
 2. Download `<MODEL>` from HuggingFace (typically 1-3 GB)
 3. Write `~/.config/auto-speech/narrator.toml` with `provider = "mlx"` and `model = "<MODEL>"`
 
@@ -37,7 +37,8 @@ PROJECT_ROOT=/Users/joshua/Developer/auto-speech
 VENV="$PROJECT_ROOT/.venv"
 MODEL='<MODEL>'
 
-"$VENV/bin/pip" install --upgrade mlx-lm
+# Install mlx-lm from the lock (reproducible) and keep the base deps.
+( cd "$PROJECT_ROOT" && uv sync --extra narrate )
 
 # Pre-pull the model so first narration isn't blocked by a download.
 "$VENV/bin/python" -c "

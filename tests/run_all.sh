@@ -46,6 +46,7 @@ SHELL_TESTS=(
     test_autoplay_shim.sh
     test_narrator_hook.sh
     test_install_idempotent.sh
+    test_deps_locked.sh
 )
 
 # Heavier tests that touch the TTS pipeline or audio files.
