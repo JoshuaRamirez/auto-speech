@@ -20,15 +20,18 @@ from __future__ import annotations
 import argparse
 import hashlib
 import sys
+import tempfile
 import threading
 import time
 import traceback
+import wave
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timezone
 from pathlib import Path
 
-from flask import Flask, jsonify, render_template, request
+from flask import Flask, Response, jsonify, render_template, request
 
+from cache_entry import CacheEntry
 from cache_store import CacheStore
 from claude_cli_rewriter import (
     ClaudeCliRewriteError,
@@ -50,13 +53,42 @@ from pipeline import (
     PipelineOrchestrator,
 )
 from session_dir import SessionDir
-from tts_engine import TTSEngine
+from tts_engine import TTSEngine, TTSGenerationError
 from voice_profile import VoiceProfile
 from voice_profile_store import VoiceProfileStore
 
 
 _DEFAULT_HOST = "127.0.0.1"
 _DEFAULT_PORT = 7860
+
+# Upper bound on a single /api/synthesize request. Highlighted selections
+# are short; this guards against a pathological paste tying up the model.
+_SYNTH_MAX_CHARS = 20000
+
+
+def _add_cors_headers(resp):
+    resp.headers["Access-Control-Allow-Origin"] = "*"
+    resp.headers["Access-Control-Allow-Methods"] = "POST, OPTIONS"
+    resp.headers["Access-Control-Allow-Headers"] = "Content-Type"
+    return resp
+
+
+def _synthesize_hash(text: str, voice_id: str, speed: float) -> str:
+    """Cache key for /api/synthesize, in its own namespace."""
+    key_input = (
+        text.encode("utf-8")
+        + b"\x00"
+        + f"{voice_id}:{speed}".encode("utf-8")
+        + b"\x00synthesize"
+    )
+    return hashlib.sha256(key_input).hexdigest()
+
+
+def _wav_duration_seconds(path: Path) -> float:
+    with wave.open(str(path), "rb") as wf:
+        frames = wf.getnframes()
+        rate = wf.getframerate()
+    return frames / rate if rate else 0.0
 
 
 def _project_root() -> Path:
@@ -190,6 +222,14 @@ class WebServer:
         self._app.add_url_rule(
             "/api/speak", view_func=self._handle_speak, methods=["POST"]
         )
+        # Browser-facing: synthesize and RETURN the WAV bytes (no mpv, no
+        # rewrite). Backs the "Speak Selection" Chrome extension. Also
+        # answers CORS preflight (OPTIONS) for cross-origin extension fetches.
+        self._app.add_url_rule(
+            "/api/synthesize",
+            view_func=self._handle_synthesize,
+            methods=["POST", "OPTIONS"],
+        )
         self._app.add_url_rule(
             "/api/replay", view_func=self._handle_replay, methods=["POST"]
         )
@@ -214,6 +254,10 @@ class WebServer:
         self._app.add_url_rule(
             "/api/status", view_func=self._handle_status, methods=["GET"]
         )
+        # Permit cross-origin reads from the browser extension. The server
+        # is localhost-bound (I-13.1), so a permissive ACAO here only opens
+        # it to code already running on this machine.
+        self._app.after_request(_add_cors_headers)
 
     # ----- pages -----
 
@@ -375,6 +419,100 @@ class WebServer:
                 # state update from masking it. Still surface the secondary
                 # failure rather than swallowing it entirely.
                 print(f"[web] could not record job failure: {exc2!r}", file=sys.stderr)
+
+    # ----- API: synthesize (browser extension) -----
+
+    def _handle_synthesize(self):
+        """Return WAV bytes for `text`, synthesized with the local model.
+
+        Passthrough only — the highlighted text is read verbatim (no
+        rewrite, no claude CLI, no mpv). Results are cached under a
+        dedicated "synthesize" key space so they never alias the
+        rewrite/passthrough playback entries.
+        """
+        if request.method == "OPTIONS":
+            return ("", 204)
+
+        body = request.get_json(silent=True) or {}
+        text = (body.get("text") or "").strip()
+        if not text:
+            return jsonify({"error": "text is required"}), 400
+        if len(text) > _SYNTH_MAX_CHARS:
+            return (
+                jsonify({"error": f"text exceeds {_SYNTH_MAX_CHARS} chars"}),
+                413,
+            )
+
+        voice_id = (body.get("voice") or self._profile.voice_id).strip()
+        try:
+            speed = float(body.get("speed", self._profile.speed))
+        except (TypeError, ValueError):
+            return jsonify({"error": "speed must be a number"}), 400
+        speed = max(0.5, min(2.0, speed))
+
+        profile = VoiceProfile(
+            voice_id=voice_id,
+            speed=speed,
+            chars_per_second=self._profile.chars_per_second,
+            calibrated_at=self._profile.calibrated_at,
+            calibration_source_chars=self._profile.calibration_source_chars,
+        )
+        source_hash = _synthesize_hash(text, voice_id, speed)
+
+        # Serialize the whole lookup-or-produce on the TTS worker thread so
+        # the produce path runs where MLX state lives, and two concurrent
+        # requests for the same miss don't both synthesize.
+        future = self._tts_executor.submit(
+            self._synthesize_to_cache, text, profile, source_hash
+        )
+        try:
+            wav_path = future.result()
+        except TTSGenerationError as exc:
+            return jsonify({"error": f"synthesis failed: {exc}"}), 500
+        except Exception as exc:  # noqa: BLE001
+            print(f"[web] synthesize CRASH: {exc!r}", file=sys.stderr)
+            traceback.print_exc(file=sys.stderr)
+            return jsonify({"error": f"synthesis crashed: {exc!r}"}), 500
+
+        try:
+            data = wav_path.read_bytes()
+        except OSError as exc:
+            return jsonify({"error": f"could not read wav: {exc}"}), 500
+        return Response(
+            data,
+            mimetype="audio/wav",
+            headers={"X-Auto-Speech-Hash": source_hash},
+        )
+
+    def _synthesize_to_cache(
+        self, text: str, profile: VoiceProfile, source_hash: str
+    ) -> Path:
+        """Runs on the TTS worker thread. Returns the cached WAV path.
+
+        Cache hit → return the existing WAV. Miss → synthesize to a temp
+        file, promote it into the cache, return the promoted path.
+        """
+        hit = self._cache.lookup(source_hash)
+        if hit is not None:
+            return hit[0]
+
+        with tempfile.TemporaryDirectory(prefix="autospeech-synth-") as tmpdir:
+            tmp_wav = Path(tmpdir) / "full.wav"
+            self._tts.synthesize(text, profile, tmp_wav)
+            duration = _wav_duration_seconds(tmp_wav)
+            cps = (len(text) / duration) if duration > 0 else FALLBACK_CHARS_PER_SEC
+            entry = CacheEntry(
+                source_hash=source_hash,
+                voice_id=profile.voice_id,
+                speed=profile.speed,
+                char_count=len(text),
+                duration_seconds=duration,
+                created_at=datetime.now(timezone.utc)
+                .isoformat(timespec="seconds")
+                .replace("+00:00", "Z"),
+                chars_per_second_at_creation=cps,
+            )
+            return self._cache.promote(source_hash, tmp_wav, entry)
 
     def _handle_replay(self):
         body = request.get_json(silent=True) or {}
