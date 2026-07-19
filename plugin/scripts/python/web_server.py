@@ -103,6 +103,57 @@ def _wav_duration_seconds(path: Path) -> float:
     return frames / rate if rate else 0.0
 
 
+def _supported_lang_prefixes() -> set[str]:
+    """Kokoro language-prefix letters this install can actually synthesize.
+
+    English (a, b) uses the required `misaki` package; e/f/h/i/p go through
+    espeak (EspeakG2P). Japanese (j) and Mandarin (z) need the optional
+    misaki[ja]/misaki[zh] extras, so they are included only when importable.
+    """
+    supported = set("abefhip")
+    for prefix, module in (("j", "misaki.ja"), ("z", "misaki.zh")):
+        try:
+            __import__(module)
+            supported.add(prefix)
+        except Exception:  # noqa: BLE001 — extra simply absent
+            pass
+    return supported
+
+
+def _discover_voices(model_id: str) -> list[str]:
+    """Enumerate the model's synthesizable voice ids from the local HF cache.
+
+    Reads the `voices/` directory of the already-downloaded snapshot (no
+    network) and drops voices whose language G2P is not installed, so the
+    picker never offers a voice that would fail. Returns [] if the model
+    isn't cached or the layout differs, in which case callers skip
+    voice validation.
+    """
+    try:
+        from huggingface_hub import snapshot_download
+
+        snap = snapshot_download(
+            model_id, allow_patterns=["voices/*"], local_files_only=True
+        )
+    except Exception as exc:  # noqa: BLE001 — discovery is best-effort
+        print(f"[web] voice discovery failed: {exc}", file=sys.stderr)
+        return []
+    voices_dir = Path(snap) / "voices"
+    if not voices_dir.is_dir():
+        return []
+    all_ids = sorted(p.stem for p in voices_dir.iterdir() if p.is_file())
+    supported = _supported_lang_prefixes()
+    usable = [v for v in all_ids if v and v[0] in supported]
+    dropped = len(all_ids) - len(usable)
+    if dropped:
+        print(
+            f"[web] {dropped} voices hidden (language G2P not installed; "
+            "install misaki[ja]/misaki[zh] to enable Japanese/Mandarin)",
+            file=sys.stderr,
+        )
+    return usable
+
+
 # Depth cap for the resilient synth split (sentence → clause → word-halves).
 _MAX_SPLIT_DEPTH = 4
 
@@ -188,6 +239,11 @@ class WebServer:
         self._profile_store = VoiceProfileStore(_config_voice_path())
         self._profile = self._load_profile()
 
+        # Voices the model ships (from the local HF cache). Empty ⇒ discovery
+        # failed and voice validation is skipped. Computed once at startup.
+        self._voices = _discover_voices(self._tts.model_id)
+        print(f"[web] {len(self._voices)} voices discovered", file=sys.stderr)
+
         # Single worker thread that owns the TTSEngine's MLX state for the
         # life of the server. All TTS-touching work goes through it.
         self._tts_executor = ThreadPoolExecutor(
@@ -266,6 +322,10 @@ class WebServer:
             "/api/synthesize",
             view_func=self._handle_synthesize,
             methods=["POST", "OPTIONS"],
+        )
+        # Lists the model's voice ids so the extension can offer a picker.
+        self._app.add_url_rule(
+            "/api/voices", view_func=self._handle_voices, methods=["GET"]
         )
         self._app.add_url_rule(
             "/api/replay", view_func=self._handle_replay, methods=["POST"]
@@ -459,6 +519,12 @@ class WebServer:
 
     # ----- API: synthesize (browser extension) -----
 
+    def _handle_voices(self):
+        """List the model's available voice ids and the current default."""
+        return jsonify(
+            {"voices": self._voices, "default": self._profile.voice_id}
+        )
+
     def _handle_synthesize(self):
         """Return WAV bytes for `text`, synthesized with the local model.
 
@@ -481,6 +547,18 @@ class WebServer:
             )
 
         voice_id = (body.get("voice") or self._profile.voice_id).strip()
+        # Reject an unknown voice up front with a clear 400 (and the valid
+        # list) rather than letting Kokoro fail deep with an opaque 500.
+        if self._voices and voice_id not in self._voices:
+            return (
+                jsonify(
+                    {
+                        "error": f"unknown voice {voice_id!r}",
+                        "voices": self._voices,
+                    }
+                ),
+                400,
+            )
         try:
             speed = float(body.get("speed", self._profile.speed))
         except (TypeError, ValueError):
@@ -580,43 +658,43 @@ class WebServer:
         full_wav = tmpdir / "full.wav"
         transcript = AudioTranscript(text=text)
 
+        # Both paths synthesize each span resiliently (a span that trips the
+        # mlx-audio broadcast bug is split finer and retried). Short text is
+        # one span; long text is chunked on sentence boundaries first.
         if ShortPathStrategy(SHORT_THRESHOLD_SECONDS).should_use(transcript, profile):
-            return self._synth_span(text, profile, full_wav)
+            spans = [(tmpdir / "span-000.wav", text)]
+        else:
+            plan = ChunkPlanner().plan(
+                transcript,
+                profile,
+                base_duration_seconds=BASE_DURATION_SECONDS,
+                tolerance=BOUNDARY_TOLERANCE,
+            )
+            print(
+                f"[web] synthesize long path: {len(plan)} chunks "
+                f"(~{plan.total_estimated_duration_seconds:.0f}s)",
+                file=sys.stderr,
+            )
+            spans = [
+                (tmpdir / f"chunk-{d.index:03d}.wav", d.text) for d in plan
+            ]
 
-        plan = ChunkPlanner().plan(
-            transcript,
-            profile,
-            base_duration_seconds=BASE_DURATION_SECONDS,
-            tolerance=BOUNDARY_TOLERANCE,
-        )
-        print(
-            f"[web] synthesize long path: {len(plan)} chunks "
-            f"(~{plan.total_estimated_duration_seconds:.0f}s)",
-            file=sys.stderr,
-        )
         part_wavs: list[Path] = []
-        for descriptor in plan:
-            base = tmpdir / f"chunk-{descriptor.index:03d}.wav"
+        for out_path, span_text in spans:
             part_wavs.extend(
-                self._synth_span_resilient(descriptor.text, profile, base)
+                self._synth_span_resilient(span_text, profile, out_path)
             )
 
         if not part_wavs:
-            raise TTSNoSpeakableContentError(
-                "no speakable content across any chunk"
-            )
+            raise TTSNoSpeakableContentError("no speakable content in selection")
+        if len(part_wavs) == 1 and part_wavs[0] != full_wav:
+            part_wavs[0].replace(full_wav)
+            return full_wav
         try:
             WavConcatenator.concat(part_wavs, full_wav)
         except WavConcatError as exc:
             raise TTSGenerationError(f"chunk concat failed: {exc}") from exc
         return full_wav
-
-    def _synth_span(
-        self, text: str, profile: VoiceProfile, out_path: Path
-    ) -> Path:
-        """Synthesize one span to out_path (single Kokoro generate)."""
-        self._tts.synthesize(text, profile, out_path)
-        return out_path
 
     def _synth_span_resilient(
         self,

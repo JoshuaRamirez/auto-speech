@@ -20,6 +20,16 @@ from voice_profile import VoiceProfile
 
 KOKORO_SAMPLE_RATE = 24000
 
+# Kokoro language codes keyed by the voice-id prefix letter.
+_KOKORO_LANG_CODES = frozenset("abefhijpz")
+
+
+def _lang_code_for_voice(voice_id: str) -> str:
+    """Return the Kokoro lang_code for a voice id (its first letter), or 'a'."""
+    if voice_id and voice_id[0] in _KOKORO_LANG_CODES:
+        return voice_id[0]
+    return "a"
+
 
 class TTSGenerationError(RuntimeError):
     """Raised when Kokoro synthesis fails. Non-recoverable; halt the pipeline."""
@@ -41,6 +51,10 @@ class TTSEngine:
     def __init__(self, model_id: str = "mlx-community/Kokoro-82M-bf16") -> None:
         self._model_id = model_id
         self._model = None  # lazy
+
+    @property
+    def model_id(self) -> str:
+        return self._model_id
 
     def _ensure_loaded(self) -> None:
         if self._model is not None:
@@ -65,9 +79,15 @@ class TTSEngine:
         out_path.parent.mkdir(parents=True, exist_ok=True)
         tmp = out_path.with_suffix(out_path.suffix + ".partial")
 
+        # Kokoro's lang_code is the voice-id's first letter (a=American,
+        # b=British English, e/f/h/i/j/p/z = other languages). Passing the
+        # wrong code loads the voice into a mismatched G2P pipeline, which
+        # emits garbage or trips a broadcast-shape crash. Default to "a".
+        lang_code = _lang_code_for_voice(voice_profile.voice_id)
+
         print(
             f"[tts_engine] synthesizing chars={len(text)} voice={voice_profile.voice_id} "
-            f"speed={voice_profile.speed}"
+            f"speed={voice_profile.speed} lang={lang_code}"
         )
         try:
             chunks = []
@@ -75,7 +95,7 @@ class TTSEngine:
                 text=text,
                 voice=voice_profile.voice_id,
                 speed=voice_profile.speed,
-                lang_code="a",
+                lang_code=lang_code,
             ):
                 chunks.append(np.array(result.audio))
         except Exception as exc:

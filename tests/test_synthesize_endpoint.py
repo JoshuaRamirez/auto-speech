@@ -96,6 +96,17 @@ def test_no_speakable_content_returns_422(tmp_path) -> None:
     assert resp.get_json()["error"] == "no speakable text"
 
 
+def test_lang_code_for_voice() -> None:
+    from tts_engine import _lang_code_for_voice
+
+    assert _lang_code_for_voice("af_heart") == "a"
+    assert _lang_code_for_voice("bm_george") == "b"
+    assert _lang_code_for_voice("ef_dora") == "e"
+    assert _lang_code_for_voice("zf_xiaoxiao") == "z"
+    assert _lang_code_for_voice("") == "a"  # fallback
+    assert _lang_code_for_voice("qq_unknown") == "a"  # unknown prefix → fallback
+
+
 def test_split_span_granularity() -> None:
     from web_server import _split_span
 
