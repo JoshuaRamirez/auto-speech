@@ -25,6 +25,16 @@ class TTSGenerationError(RuntimeError):
     """Raised when Kokoro synthesis fails. Non-recoverable; halt the pipeline."""
 
 
+class TTSNoSpeakableContentError(TTSGenerationError):
+    """Raised when the input has no pronounceable content.
+
+    Kokoro/misaki reduce the text to zero phonemes — e.g. a selection made
+    up entirely of symbols ("• • •", "★", "#", "x² + y² = z²"). This is a
+    property of the *input*, not a synthesis fault, so callers may treat it
+    as "nothing to say" rather than an error.
+    """
+
+
 class TTSEngine:
     """Synthesize a WAV for a text string using Kokoro-82M via mlx-audio."""
 
@@ -72,7 +82,9 @@ class TTSEngine:
             raise TTSGenerationError(f"kokoro generate failed: {exc}") from exc
 
         if not chunks:
-            raise TTSGenerationError("kokoro emitted no audio chunks")
+            raise TTSNoSpeakableContentError(
+                "kokoro emitted no audio chunks (no pronounceable content)"
+            )
 
         audio = np.concatenate(chunks, axis=0).astype(np.float32)
         audio = np.clip(audio, -1.0, 1.0)

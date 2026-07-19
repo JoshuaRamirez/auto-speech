@@ -81,6 +81,21 @@ def test_synthesize_returns_wav_and_caches(tmp_path) -> None:
     assert synth_calls["n"] == 1
 
 
+def test_no_speakable_content_returns_422(tmp_path) -> None:
+    import tts_engine
+
+    server, _ = _make_server(tmp_path)
+
+    def raise_unspeakable(text, profile, out_path):  # noqa: ANN001
+        raise tts_engine.TTSNoSpeakableContentError("no phonemes")
+
+    server._tts.synthesize = raise_unspeakable  # noqa: SLF001
+    client = server._app.test_client()  # noqa: SLF001
+    resp = client.post("/api/synthesize", json={"text": "★ • #"})
+    assert resp.status_code == 422
+    assert resp.get_json()["error"] == "no speakable text"
+
+
 def test_options_preflight(tmp_path) -> None:
     server, _ = _make_server(tmp_path)
     client = server._app.test_client()  # noqa: SLF001

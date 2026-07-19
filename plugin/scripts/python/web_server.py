@@ -53,7 +53,7 @@ from pipeline import (
     PipelineOrchestrator,
 )
 from session_dir import SessionDir
-from tts_engine import TTSEngine, TTSGenerationError
+from tts_engine import TTSEngine, TTSGenerationError, TTSNoSpeakableContentError
 from voice_profile import VoiceProfile
 from voice_profile_store import VoiceProfileStore
 
@@ -465,12 +465,26 @@ class WebServer:
         future = self._tts_executor.submit(
             self._synthesize_to_cache, text, profile, source_hash
         )
+        snippet = text[:60].replace("\n", " ")
         try:
             wav_path = future.result()
+        except TTSNoSpeakableContentError as exc:
+            # Input reduced to zero phonemes (all symbols). Not a fault —
+            # tell the client there is nothing to speak so it can stay quiet
+            # instead of falling back to a browser voice that also says
+            # nothing. 422 = well-formed request, unprocessable content.
+            print(
+                f"[web] synthesize: no speakable content for {snippet!r}",
+                file=sys.stderr,
+            )
+            return jsonify({"error": "no speakable text", "reason": str(exc)}), 422
         except TTSGenerationError as exc:
+            print(
+                f"[web] synthesize FAIL for {snippet!r}: {exc}", file=sys.stderr
+            )
             return jsonify({"error": f"synthesis failed: {exc}"}), 500
         except Exception as exc:  # noqa: BLE001
-            print(f"[web] synthesize CRASH: {exc!r}", file=sys.stderr)
+            print(f"[web] synthesize CRASH for {snippet!r}: {exc!r}", file=sys.stderr)
             traceback.print_exc(file=sys.stderr)
             return jsonify({"error": f"synthesis crashed: {exc!r}"}), 500
 
