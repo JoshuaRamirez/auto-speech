@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "Speak Selection",
-  "version": "0.2.0",
+  "version": "0.2.1",
   "description": "Right-click highlighted text to have it read aloud, using the local auto-speech (Kokoro) engine with a browser-voice fallback.",
   "permissions": ["contextMenus", "storage", "scripting", "activeTab"],
   "host_permissions": [

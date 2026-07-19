@@ -77,6 +77,12 @@ async function speak(text, tabId) {
     const dataUrl = await synthesizeToDataUrl(text, settings);
     await runInPage(tabId, playAudioInPage, [dataUrl]);
   } catch (err) {
+    if (err instanceof NoSpeakableTextError) {
+      // The selection has no pronounceable content (e.g. only symbols).
+      // Browser TTS would say nothing either, so stay quiet.
+      console.info("[Speak Selection] nothing speakable in selection; skipping.");
+      return;
+    }
     console.warn(
       "[Speak Selection] local backend failed, falling back to browser TTS:",
       err
@@ -84,6 +90,10 @@ async function speak(text, tabId) {
     await speakViaBrowser(text, tabId, settings);
   }
 }
+
+// Distinguishes "server says there's nothing to speak" (HTTP 422) from a
+// real failure (network error, 500) that warrants the browser fallback.
+class NoSpeakableTextError extends Error {}
 
 async function synthesizeToDataUrl(text, settings) {
   const base = settings.serverUrl.replace(/\/+$/, "");
@@ -96,6 +106,9 @@ async function synthesizeToDataUrl(text, settings) {
       ...(settings.voiceId ? { voice: settings.voiceId } : {}),
     }),
   });
+  if (resp.status === 422) {
+    throw new NoSpeakableTextError("no speakable text");
+  }
   if (!resp.ok) {
     const detail = await resp.text().catch(() => "");
     throw new Error(`server ${resp.status}: ${detail.slice(0, 200)}`);
