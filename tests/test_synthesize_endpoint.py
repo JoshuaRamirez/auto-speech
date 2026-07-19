@@ -96,6 +96,61 @@ def test_no_speakable_content_returns_422(tmp_path) -> None:
     assert resp.get_json()["error"] == "no speakable text"
 
 
+def test_split_span_granularity() -> None:
+    from web_server import _split_span
+
+    assert _split_span("One. Two. Three.") == ["One.", "Two.", "Three."]
+    assert _split_span("alpha, beta; gamma") == ["alpha", "beta", "gamma"]
+    assert _split_span("just four plain words") == ["just four", "plain words"]
+    assert _split_span("single") == ["single"]
+
+
+def test_resilient_split_recovers_from_generate_fault(tmp_path) -> None:
+    """A span that trips the generate bug is split finer until it succeeds."""
+    import web_server
+
+    server, _ = _make_server(tmp_path)
+
+    # Simulate the mlx-audio bug: fail on any span longer than 3 words,
+    # succeed (emit a tiny WAV) on shorter ones.
+    def flaky(text, profile, out_path):  # noqa: ANN001
+        if len(text.split()) > 3:
+            raise web_server.TTSGenerationError("simulated broadcast bug")
+        _write_tiny_wav(Path(out_path))
+
+    server._tts.synthesize = flaky  # noqa: SLF001
+    out = tmp_path / "chunk.wav"
+    wavs = server._synth_span_resilient(  # noqa: SLF001
+        "alpha beta gamma delta epsilon zeta eta", server._profile, out
+    )
+    assert len(wavs) >= 2
+    for w in wavs:
+        assert Path(w).exists()
+
+
+def test_resilient_split_skips_unspeakable_leaf(tmp_path) -> None:
+    """An unspeakable fragment is dropped, not fatal, when others speak."""
+    import web_server
+
+    server, _ = _make_server(tmp_path)
+
+    def synth(text, profile, out_path):  # noqa: ANN001
+        t = text.strip()
+        if t == "★":
+            raise web_server.TTSNoSpeakableContentError("no phonemes")
+        if len(t.split()) > 1:
+            raise web_server.TTSGenerationError("simulated broadcast bug")
+        _write_tiny_wav(Path(out_path))
+
+    server._tts.synthesize = synth  # noqa: SLF001
+    out = tmp_path / "chunk.wav"
+    # Splits to words; "hello" and "world" speak, lone "★" is skipped.
+    wavs = server._synth_span_resilient(  # noqa: SLF001
+        "hello ★ world", server._profile, out
+    )
+    assert len(wavs) == 2
+
+
 def test_options_preflight(tmp_path) -> None:
     server, _ = _make_server(tmp_path)
     client = server._app.test_client()  # noqa: SLF001

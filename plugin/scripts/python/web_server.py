@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import argparse
 import hashlib
+import re
 import sys
 import tempfile
 import threading
@@ -31,15 +32,24 @@ from pathlib import Path
 
 from flask import Flask, Response, jsonify, render_template, request
 
+from audio_transcript import AudioTranscript
 from cache_entry import CacheEntry
 from cache_store import CacheStore
+from chunk_planner import ChunkPlanner
 from claude_cli_rewriter import (
     ClaudeCliRewriteError,
     ClaudeCliRewriter,
     ClaudeCliUnavailable,
     load_default_template,
 )
-from config_constants import DEFAULT_SPEED, DEFAULT_VOICE_ID, FALLBACK_CHARS_PER_SEC
+from config_constants import (
+    BASE_DURATION_SECONDS,
+    BOUNDARY_TOLERANCE,
+    DEFAULT_SPEED,
+    DEFAULT_VOICE_ID,
+    FALLBACK_CHARS_PER_SEC,
+    SHORT_THRESHOLD_SECONDS,
+)
 from job_state import (
     PHASE_GENERATING,
     PHASE_HANDED_OFF,
@@ -53,9 +63,11 @@ from pipeline import (
     PipelineOrchestrator,
 )
 from session_dir import SessionDir
+from short_path import ShortPathStrategy
 from tts_engine import TTSEngine, TTSGenerationError, TTSNoSpeakableContentError
 from voice_profile import VoiceProfile
 from voice_profile_store import VoiceProfileStore
+from wav_concatenator import WavConcatError, WavConcatenator
 
 
 _DEFAULT_HOST = "127.0.0.1"
@@ -89,6 +101,31 @@ def _wav_duration_seconds(path: Path) -> float:
         frames = wf.getnframes()
         rate = wf.getframerate()
     return frames / rate if rate else 0.0
+
+
+# Depth cap for the resilient synth split (sentence → clause → word-halves).
+_MAX_SPLIT_DEPTH = 4
+
+_SENTENCE_RE = re.compile(r"(?<=[.!?])\s+")
+_CLAUSE_RE = re.compile(r"\s*[,;:—–]\s*")
+
+
+def _split_span(text: str) -> list[str]:
+    """Return the next-finer split of `text` for retry after a generate fault.
+
+    Sentences if there is more than one; else clauses; else the word list
+    halved; else the text unchanged (a single word — the recursion's floor).
+    """
+    text = text.strip()
+    for rx in (_SENTENCE_RE, _CLAUSE_RE):
+        parts = [p.strip() for p in rx.split(text) if p.strip()]
+        if len(parts) > 1:
+            return parts
+    words = text.split()
+    if len(words) > 1:
+        mid = len(words) // 2
+        return [" ".join(words[:mid]), " ".join(words[mid:])]
+    return [text]
 
 
 def _project_root() -> Path:
@@ -511,8 +548,7 @@ class WebServer:
             return hit[0]
 
         with tempfile.TemporaryDirectory(prefix="autospeech-synth-") as tmpdir:
-            tmp_wav = Path(tmpdir) / "full.wav"
-            self._tts.synthesize(text, profile, tmp_wav)
+            tmp_wav = self._render_full_wav(text, profile, Path(tmpdir))
             duration = _wav_duration_seconds(tmp_wav)
             cps = (len(text) / duration) if duration > 0 else FALLBACK_CHARS_PER_SEC
             entry = CacheEntry(
@@ -527,6 +563,102 @@ class WebServer:
                 chars_per_second_at_creation=cps,
             )
             return self._cache.promote(source_hash, tmp_wav, entry)
+
+    def _render_full_wav(
+        self, text: str, profile: VoiceProfile, tmpdir: Path
+    ) -> Path:
+        """Produce tmpdir/full.wav for `text`. Runs on the TTS worker thread.
+
+        Short text → one Kokoro generate. Long text → chunk-and-concatenate
+        on sentence boundaries (a single long generate trips an mlx-audio
+        broadcast-shape bug). Each chunk is synthesized resiliently: a chunk
+        that still trips the bug is split finer (sentences → words) and the
+        speakable fragments are kept, so one bad span cannot silence the
+        whole selection.
+        """
+        tmpdir.mkdir(parents=True, exist_ok=True)
+        full_wav = tmpdir / "full.wav"
+        transcript = AudioTranscript(text=text)
+
+        if ShortPathStrategy(SHORT_THRESHOLD_SECONDS).should_use(transcript, profile):
+            return self._synth_span(text, profile, full_wav)
+
+        plan = ChunkPlanner().plan(
+            transcript,
+            profile,
+            base_duration_seconds=BASE_DURATION_SECONDS,
+            tolerance=BOUNDARY_TOLERANCE,
+        )
+        print(
+            f"[web] synthesize long path: {len(plan)} chunks "
+            f"(~{plan.total_estimated_duration_seconds:.0f}s)",
+            file=sys.stderr,
+        )
+        part_wavs: list[Path] = []
+        for descriptor in plan:
+            base = tmpdir / f"chunk-{descriptor.index:03d}.wav"
+            part_wavs.extend(
+                self._synth_span_resilient(descriptor.text, profile, base)
+            )
+
+        if not part_wavs:
+            raise TTSNoSpeakableContentError(
+                "no speakable content across any chunk"
+            )
+        try:
+            WavConcatenator.concat(part_wavs, full_wav)
+        except WavConcatError as exc:
+            raise TTSGenerationError(f"chunk concat failed: {exc}") from exc
+        return full_wav
+
+    def _synth_span(
+        self, text: str, profile: VoiceProfile, out_path: Path
+    ) -> Path:
+        """Synthesize one span to out_path (single Kokoro generate)."""
+        self._tts.synthesize(text, profile, out_path)
+        return out_path
+
+    def _synth_span_resilient(
+        self,
+        text: str,
+        profile: VoiceProfile,
+        out_path: Path,
+        depth: int = 0,
+    ) -> list[Path]:
+        """Synthesize `text`, splitting finer on generation failure.
+
+        Returns the WAV paths produced (0..n). An unspeakable span yields
+        an empty list (skipped, not fatal). A span that trips the mlx-audio
+        broadcast bug is split into sentences, then words, and retried; a
+        leaf that still fails is dropped with a log line rather than
+        failing the whole request.
+        """
+        try:
+            self._tts.synthesize(text, profile, out_path)
+            return [out_path]
+        except TTSNoSpeakableContentError:
+            return []  # nothing to say in this span; skip it
+        except TTSGenerationError as exc:
+            parts = _split_span(text)
+            if depth >= _MAX_SPLIT_DEPTH or len(parts) <= 1:
+                print(
+                    f"[web] dropping unsynthesizable span "
+                    f"(depth={depth}) {text[:40]!r}: {exc}",
+                    file=sys.stderr,
+                )
+                return []
+            print(
+                f"[web] span tripped generate bug; splitting into "
+                f"{len(parts)} (depth={depth})",
+                file=sys.stderr,
+            )
+            results: list[Path] = []
+            for i, part in enumerate(parts):
+                sub = out_path.with_name(f"{out_path.stem}-{depth}_{i}.wav")
+                results.extend(
+                    self._synth_span_resilient(part, profile, sub, depth + 1)
+                )
+            return results
 
     def _handle_replay(self):
         body = request.get_json(silent=True) or {}
