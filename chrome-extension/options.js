@@ -1,6 +1,7 @@
-// Options page logic. Runs in an extension page, so speechSynthesis is
+// AutoSpeech options page. Runs in an extension page, so speechSynthesis is
 // available for browser-backend voice enumeration and previews. The local
-// backend is previewed by fetching a WAV from the auto-speech server.
+// backend's voices come from the server's /api/voices; previews fetch a WAV
+// from /api/synthesize.
 
 const DEFAULTS = {
   backend: "local",
@@ -21,6 +22,7 @@ const els = {
   serverUrl: $("serverUrl"),
   serverCheck: $("server-check"),
   voiceId: $("voiceId"),
+  voiceCount: $("voice-count"),
   speed: $("speed"),
   speedVal: $("speed-val"),
   voice: $("voice"),
@@ -64,6 +66,75 @@ function populateVoices() {
   els.voice.value = current.voiceURI;
 }
 
+// --- Local (Kokoro) voices ----------------------------------------------
+
+// Kokoro voice ids are <lang><gender>_<name>, e.g. "af_bella".
+const LANG_NAMES = {
+  a: "American English",
+  b: "British English",
+  e: "Spanish",
+  f: "French",
+  h: "Hindi",
+  i: "Italian",
+  j: "Japanese",
+  p: "Brazilian Portuguese",
+  z: "Mandarin Chinese",
+};
+
+function groupLabel(id) {
+  const lang = LANG_NAMES[id[0]] || "Other";
+  const gender = id[1] === "m" ? "Male" : id[1] === "f" ? "Female" : "";
+  return gender ? `${lang} · ${gender}` : lang;
+}
+
+function prettyName(id) {
+  const name = (id.split("_")[1] || id).replace(/^\w/, (c) => c.toUpperCase());
+  return `${name} (${id})`;
+}
+
+async function populateLocalVoices() {
+  const base = els.serverUrl.value.trim().replace(/\/+$/, "") || DEFAULTS.serverUrl;
+  // Reset to just the default option.
+  els.voiceId.innerHTML = "";
+  const def = document.createElement("option");
+  def.value = "";
+  def.textContent = "Server default";
+  els.voiceId.appendChild(def);
+
+  let voices = [];
+  try {
+    const resp = await fetch(`${base}/api/voices`, { method: "GET" });
+    if (resp.ok) voices = (await resp.json()).voices || [];
+  } catch {
+    /* server down — leave just the default; text below reflects it */
+  }
+
+  if (!voices.length) {
+    els.voiceCount.textContent = "(server unreachable — using default)";
+    els.voiceId.value = "";
+    return;
+  }
+
+  // Group by language·gender for a scannable menu.
+  const groups = {};
+  for (const id of voices) (groups[groupLabel(id)] ||= []).push(id);
+  for (const label of Object.keys(groups).sort()) {
+    const og = document.createElement("optgroup");
+    og.label = label;
+    for (const id of groups[label]) {
+      const opt = document.createElement("option");
+      opt.value = id;
+      opt.textContent = prettyName(id);
+      og.appendChild(opt);
+    }
+    els.voiceId.appendChild(og);
+  }
+  els.voiceCount.textContent = `(${voices.length} voices)`;
+  // Restore the saved selection if it still exists.
+  els.voiceId.value = current.voiceId;
+  if (els.voiceId.value !== current.voiceId) els.voiceId.value = "";
+}
+
 // --- Labels --------------------------------------------------------------
 
 function syncLabels() {
@@ -79,14 +150,14 @@ async function load() {
   current = { ...DEFAULTS, ...(await chrome.storage.sync.get(DEFAULTS)) };
   els.backend.value = current.backend;
   els.serverUrl.value = current.serverUrl;
-  els.voiceId.value = current.voiceId;
   els.speed.value = current.speed;
   els.rate.value = current.rate;
   els.pitch.value = current.pitch;
   els.volume.value = current.volume;
   syncLabels();
   applyBackendVisibility();
-  populateVoices();
+  populateVoices(); // browser voices
+  populateLocalVoices(); // Kokoro voices (sets voiceId selection)
   checkServer();
 }
 
@@ -177,8 +248,14 @@ function setStatus(msg, cls) {
 
 // --- Wiring --------------------------------------------------------------
 
-els.backend.addEventListener("change", applyBackendVisibility);
-els.serverUrl.addEventListener("change", checkServer);
+els.backend.addEventListener("change", () => {
+  applyBackendVisibility();
+  if (els.backend.value === "local") populateLocalVoices();
+});
+els.serverUrl.addEventListener("change", () => {
+  checkServer();
+  populateLocalVoices();
+});
 ["speed", "rate", "pitch", "volume"].forEach((k) =>
   els[k].addEventListener("input", syncLabels)
 );

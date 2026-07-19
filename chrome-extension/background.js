@@ -1,4 +1,4 @@
-// Speak Selection — background service worker (MV3).
+// AutoSpeech — background service worker (MV3).
 //
 // Primary path: POST the selection to the local auto-speech server
 // (Kokoro via mlx-audio) at /api/synthesize, receive WAV bytes, and play
@@ -32,12 +32,12 @@ function createMenus() {
   chrome.contextMenus.removeAll(() => {
     chrome.contextMenus.create({
       id: MENU_ID,
-      title: 'Speak "%s"',
+      title: 'AutoSpeech: speak "%s"',
       contexts: ["selection"],
     });
     chrome.contextMenus.create({
       id: STOP_ID,
-      title: "Stop speaking",
+      title: "AutoSpeech: stop speaking",
       contexts: ["all"],
     });
   });
@@ -80,11 +80,11 @@ async function speak(text, tabId) {
     if (err instanceof NoSpeakableTextError) {
       // The selection has no pronounceable content (e.g. only symbols).
       // Browser TTS would say nothing either, so stay quiet.
-      console.info("[Speak Selection] nothing speakable in selection; skipping.");
+      console.info("[AutoSpeech] nothing speakable in selection; skipping.");
       return;
     }
     console.warn(
-      "[Speak Selection] local backend failed, falling back to browser TTS:",
+      "[AutoSpeech] local backend failed, falling back to browser TTS:",
       err
     );
     await speakViaBrowser(text, tabId, settings);
@@ -138,7 +138,7 @@ function stopAll(tabId) {
 function runInPage(tabId, func, args) {
   return chrome.scripting
     .executeScript({ target: { tabId }, func, args })
-    .catch((err) => console.warn("[Speak Selection] inject failed:", err));
+    .catch((err) => console.warn("[AutoSpeech] inject failed:", err));
 }
 
 // --- Functions injected into the page ------------------------------------
@@ -153,9 +153,9 @@ function playAudioInPage(dataUrl) {
     window.speechSynthesis?.cancel();
     const audio = new Audio(dataUrl);
     window.__autoSpeechAudio = audio;
-    audio.play().catch((e) => console.error("[Speak Selection] play:", e));
+    audio.play().catch((e) => console.error("[AutoSpeech] play:", e));
   } catch (e) {
-    console.error("[Speak Selection]", e);
+    console.error("[AutoSpeech]", e);
   }
 }
 
@@ -174,7 +174,7 @@ function speakInPage(text, settings) {
     }
     window.speechSynthesis.speak(utter);
   } catch (e) {
-    console.error("[Speak Selection]", e);
+    console.error("[AutoSpeech]", e);
   }
 }
 
@@ -186,6 +186,6 @@ function stopSpeakingInPage() {
       window.__autoSpeechAudio = null;
     }
   } catch (e) {
-    console.error("[Speak Selection]", e);
+    console.error("[AutoSpeech]", e);
   }
 }

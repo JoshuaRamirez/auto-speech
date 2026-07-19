@@ -1,20 +1,25 @@
-# Speak Selection — Chrome Extension
+# AutoSpeech — Chrome Extension
 
 Right-click highlighted text on any page to have it read aloud, using the
-**local auto-speech (Kokoro) engine** for high-quality synthesis — with an
+**local AutoSpeech (Kokoro) engine** for high-quality synthesis — with an
 automatic fallback to the browser's built-in voices when the local server
-isn't running.
+isn't running. Appears as **AutoSpeech** in the right-click menu.
 
-## Features (v0.2.0)
+## Features (v0.3.0)
 
-- Context-menu **Speak "…"** on any text selection.
-- Context-menu **Stop speaking** (also: click the toolbar icon to stop).
+- Context-menu **AutoSpeech: speak "…"** on any text selection.
+- Context-menu **AutoSpeech: stop speaking** (also: click the toolbar icon).
 - Two voice engines, selectable in Options:
-  - **Local auto-speech (Kokoro)** — best quality. The extension POSTs the
+  - **Local AutoSpeech (Kokoro)** — best quality. The extension POSTs the
     selection to the local server's `/api/synthesize`, gets WAV bytes back,
-    and plays them in the tab. Server URL, voice id, and speed configurable.
+    and plays them in the tab. Server URL, **voice**, and speed configurable.
     If the server is unreachable, it silently falls back to browser voices.
   - **Browser built-in voices** — offline; voice, rate, pitch, volume.
+- **Voice picker** populated live from the server's `/api/voices` — the
+  Kokoro voices this install can synthesize, grouped by language and gender
+  (American/British English out of the box, plus Spanish/French/Hindi/
+  Italian/Portuguese via espeak; Japanese/Mandarin appear only if the
+  `misaki[ja]`/`misaki[zh]` extras are installed).
 - Settings sync across your Chrome profile via `chrome.storage.sync`.
 
 ## Using the local Kokoro backend
@@ -55,14 +60,24 @@ The server side is `/api/synthesize` in `plugin/scripts/python/web_server.py`
 — passthrough (verbatim), cached in its own key space, run on the TTS worker
 thread, with permissive CORS (the server stays localhost-bound).
 
+## Robustness notes
+
+- **Long selections** are chunked on sentence boundaries before synthesis (a
+  single long Kokoro generate trips an mlx-audio broadcast-shape bug).
+- **Every span is synthesized resiliently**: a span that still trips the bug
+  is split finer (sentences → clauses → words) and retried; unspeakable
+  fragments (e.g. a lone `★`) are skipped, not fatal.
+- **Symbol-only selections** return HTTP 422 and the extension stays quiet.
+- **Unknown voice** returns HTTP 400 with the valid list (not a silent
+  fallback).
+
 ## Version manifest note
 
-`background.js` corresponds to `manifest.json` `version` 0.2.0. Bump the
+`background.js` corresponds to `manifest.json` `version` 0.3.0. Bump the
 manifest version alongside behavioral changes.
 
 ## Roadmap
 
 - Keyboard shortcut to speak the current selection.
 - Highlight-follows-speech (word boundary events).
-- Enumerate available Kokoro voice ids from the server in Options.
 - Per-site voice/rate overrides.
