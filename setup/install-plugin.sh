@@ -43,33 +43,49 @@ install_one() {
     echo "[install-plugin] linked $dst -> $src"
 }
 
-install_one "auto-speech-speak.md"
-install_one "auto-speech-replay.md"
-install_one "auto-speech-pause.md"
-install_one "auto-speech-resume.md"
-install_one "auto-speech-seek.md"
-install_one "auto-speech-restart.md"
-install_one "auto-speech-end.md"
-install_one "auto-speech-autoplay-on.md"
-install_one "auto-speech-autoplay-off.md"
-install_one "auto-speech-autoplay-mode.md"
-install_one "auto-speech-autoplay-status.md"
-install_one "auto-speech-app.md"
-install_one "auto-speech-narrate-on.md"
-install_one "auto-speech-narrate-off.md"
-install_one "auto-speech-narrate-status.md"
-install_one "auto-speech-narrate-stop.md"
-install_one "auto-speech-narrate-install.md"
-install_one "auto-speech-narrate-config.md"
-install_one "auto-speech-scope.md"
-install_one "auto-speech-doctor.md"
-install_one "auto-speech-update.md"
+# Curated keep-set (2026-07-21): the plugin exposes only the highest-value
+# commands. Transport controls (pause/resume/seek/restart/end), the
+# narration subsystem (narrate-*), and the low-frequency maintenance/status
+# commands (autoplay-status/update) were trimmed — playback transport lives
+# in the web app (/auto-speech-app) and health lives in /auto-speech-doctor.
+# The prune loop below removes any previously-installed command outside this
+# set so re-running the installer converges on the curated surface.
+KEEP=(
+    "auto-speech-speak.md"
+    "auto-speech-replay.md"
+    "auto-speech-app.md"
+    "auto-speech-autoplay-on.md"
+    "auto-speech-autoplay-off.md"
+    "auto-speech-autoplay-mode.md"
+    "auto-speech-scope.md"
+    "auto-speech-doctor.md"
+)
 
-echo "[install-plugin] auto-speech commands installed:"
+# Prune stale auto-speech-* command symlinks not in the keep-set. Only
+# removes symlinks that point back into this project's plugin/commands dir;
+# never touches real files or unrelated links.
+prune_removed() {
+    local link target base
+    for link in "$CMD_DST_DIR"/auto-speech-*.md; do
+        [[ -L "$link" ]] || continue
+        target="$(readlink "$link")"
+        [[ "$target" == "$PROJECT_ROOT/plugin/commands/"* ]] || continue
+        base="$(basename "$link")"
+        for keep in "${KEEP[@]}"; do
+            [[ "$base" == "$keep" ]] && continue 2
+        done
+        rm "$link"
+        echo "[install-plugin] pruned trimmed command: $link"
+    done
+}
+
+prune_removed
+
+for cmd in "${KEEP[@]}"; do
+    install_one "$cmd"
+done
+
+echo "[install-plugin] auto-speech commands installed (curated keep-set):"
 echo "    /auto-speech-speak [n]    /auto-speech-replay [n]    /auto-speech-app"
-echo "    /auto-speech-pause        /auto-speech-resume        /auto-speech-restart"
-echo "    /auto-speech-end          /auto-speech-seek          /auto-speech-autoplay-on"
-echo "    /auto-speech-autoplay-off /auto-speech-autoplay-mode /auto-speech-autoplay-status"
-echo "    /auto-speech-narrate-on   /auto-speech-narrate-off   /auto-speech-narrate-status"
-echo "    /auto-speech-narrate-stop /auto-speech-narrate-install /auto-speech-narrate-config"
-echo "    /auto-speech-scope        /auto-speech-doctor        /auto-speech-update"
+echo "    /auto-speech-autoplay-on  /auto-speech-autoplay-off  /auto-speech-autoplay-mode"
+echo "    /auto-speech-scope        /auto-speech-doctor"
