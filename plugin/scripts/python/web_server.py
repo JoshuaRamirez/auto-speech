@@ -11,6 +11,21 @@ model on its first task and runs every subsequent generate() on that
 same thread. The lock is then redundant for serialization but kept as
 a defensive guard against double-submitting before a result is awaited.
 
+Threat model: the server binds loopback only (I-13.1 — non-loopback hosts
+are refused at startup) and is unauthenticated BY DESIGN: it trusts every
+same-machine caller, like mpv's IPC socket does. The browser cross-origin
+surface is closed instead:
+  - CORS headers are reflected only for Chrome-extension origins
+    (_EXTENSION_ORIGIN_RE); ordinary web origins get no ACAO header, so
+    their scripts cannot read responses and their JSON preflights fail.
+  - request.get_json() is used without force=True, so a cross-origin
+    "simple" POST (text/plain — the only body a page can send without a
+    preflight) parses to None and gets a 400.
+Together these keep /api/speak's `claude` CLI spawn and the synth/playback
+endpoints unreachable from arbitrary web pages, while the extension (whose
+service-worker fetches are host-permission-exempt from CORS anyway) and
+the same-origin web UI keep working.
+
 Run with:
   source .venv/bin/activate
   python plugin/scripts/python/web_server.py [--port 7860]
@@ -78,10 +93,20 @@ _DEFAULT_PORT = 7860
 _SYNTH_MAX_CHARS = 20000
 
 
+# Chrome extension origins are exactly chrome-extension:// + a 32-char
+# id drawn from a-p. Only such origins get CORS headers (reflected, not
+# wildcarded); ordinary web origins get none — see the threat model in
+# the module docstring.
+_EXTENSION_ORIGIN_RE = re.compile(r"chrome-extension://[a-p]{32}")
+
+
 def _add_cors_headers(resp):
-    resp.headers["Access-Control-Allow-Origin"] = "*"
-    resp.headers["Access-Control-Allow-Methods"] = "POST, OPTIONS"
-    resp.headers["Access-Control-Allow-Headers"] = "Content-Type"
+    origin = request.headers.get("Origin", "")
+    if _EXTENSION_ORIGIN_RE.fullmatch(origin):
+        resp.headers["Access-Control-Allow-Origin"] = origin
+        resp.headers["Vary"] = "Origin"
+        resp.headers["Access-Control-Allow-Methods"] = "GET, POST, OPTIONS"
+        resp.headers["Access-Control-Allow-Headers"] = "Content-Type"
     return resp
 
 
@@ -351,9 +376,10 @@ class WebServer:
         self._app.add_url_rule(
             "/api/status", view_func=self._handle_status, methods=["GET"]
         )
-        # Permit cross-origin reads from the browser extension. The server
-        # is localhost-bound (I-13.1), so a permissive ACAO here only opens
-        # it to code already running on this machine.
+        # Cross-origin policy: reflect CORS headers only for the browser
+        # extension's origin; every other origin gets none. Localhost-bound
+        # (I-13.1) is not enough on its own — any open browser tab can POST
+        # to 127.0.0.1 — so web origins are denied readback and preflight.
         self._app.after_request(_add_cors_headers)
 
     # ----- pages -----

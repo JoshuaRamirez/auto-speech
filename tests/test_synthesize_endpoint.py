@@ -5,7 +5,8 @@ TTSEngine is stubbed to emit a tiny valid WAV. Pins:
   - 400 on empty text, 413 on oversize text
   - 200 audio/wav on success, with the hash header
   - second identical request is served from cache (no re-synthesis)
-  - CORS headers present; OPTIONS preflight returns 204
+  - CORS reflected for extension origins ONLY; web origins get no ACAO
+  - OPTIONS preflight returns 204
 
 Runs under tests/run_all.sh (no pytest): full mode and the --web lane.
 Needs Flask + numpy, so it is listed in NEEDS_DEPS (skipped hermetic).
@@ -20,6 +21,9 @@ from unittest import mock
 
 SRC = Path(__file__).resolve().parents[1] / "plugin" / "scripts" / "python"
 sys.path.insert(0, str(SRC))
+
+# A syntactically-valid Chrome extension origin (32 chars of a-p).
+EXT_ORIGIN = "chrome-extension://" + "a" * 32
 
 
 def _write_tiny_wav(path: Path) -> None:
@@ -73,12 +77,17 @@ def test_synthesize_returns_wav_and_caches() -> None:
         server, synth_calls = _make_server(Path(td))
         client = server._app.test_client()  # noqa: SLF001
 
-        r1 = client.post("/api/synthesize", json={"text": "hello world"})
+        r1 = client.post(
+            "/api/synthesize",
+            json={"text": "hello world"},
+            headers={"Origin": EXT_ORIGIN},
+        )
         assert r1.status_code == 200
         assert r1.mimetype == "audio/wav"
         assert r1.data[:4] == b"RIFF"
         assert r1.headers.get("X-Auto-Speech-Hash")
-        assert r1.headers.get("Access-Control-Allow-Origin") == "*"
+        assert r1.headers.get("Access-Control-Allow-Origin") == EXT_ORIGIN
+        assert r1.headers.get("Vary") == "Origin"
         assert synth_calls["n"] == 1
 
         # Identical request → served from cache, no second synthesis.
@@ -178,9 +187,37 @@ def test_options_preflight() -> None:
     with tempfile.TemporaryDirectory() as td:
         server, _ = _make_server(Path(td))
         client = server._app.test_client()  # noqa: SLF001
-        resp = client.open("/api/synthesize", method="OPTIONS")
+        resp = client.open(
+            "/api/synthesize", method="OPTIONS", headers={"Origin": EXT_ORIGIN}
+        )
         assert resp.status_code == 204
-        assert resp.headers.get("Access-Control-Allow-Origin") == "*"
+        assert resp.headers.get("Access-Control-Allow-Origin") == EXT_ORIGIN
+
+
+def test_cors_denied_for_web_and_absent_origins() -> None:
+    """Non-extension origins get NO ACAO header — pages can't read responses."""
+    with tempfile.TemporaryDirectory() as td:
+        server, _ = _make_server(Path(td))
+        client = server._app.test_client()  # noqa: SLF001
+
+        # A regular web origin: response carries no CORS grant.
+        r_web = client.post(
+            "/api/synthesize",
+            json={"text": "hi"},
+            headers={"Origin": "https://evil.example"},
+        )
+        assert "Access-Control-Allow-Origin" not in r_web.headers
+
+        # No Origin at all (same-origin web-UI fetches): also no CORS grant.
+        r_none = client.post("/api/synthesize", json={"text": "hi"})
+        assert "Access-Control-Allow-Origin" not in r_none.headers
+
+        # Near-miss origins: wrong alphabet (q) and wrong length (31).
+        for bad in ("chrome-extension://" + "q" * 32, "chrome-extension://" + "a" * 31):
+            r_bad = client.post(
+                "/api/synthesize", json={"text": "hi"}, headers={"Origin": bad}
+            )
+            assert "Access-Control-Allow-Origin" not in r_bad.headers
 
 
 def main() -> int:
@@ -194,6 +231,7 @@ def main() -> int:
         test_resilient_split_recovers_from_generate_fault,
         test_resilient_split_skips_unspeakable_leaf,
         test_options_preflight,
+        test_cors_denied_for_web_and_absent_origins,
     ]
     for t in tests:
         t()

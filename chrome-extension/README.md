@@ -58,7 +58,9 @@ playback is injected into the active tab via `chrome.scripting.executeScript`.
 
 The server side is `/api/synthesize` in `plugin/scripts/python/web_server.py`
 — passthrough (verbatim), cached in its own key space, run on the TTS worker
-thread, with permissive CORS (the server stays localhost-bound).
+thread. CORS headers are reflected only for Chrome-extension origins;
+ordinary web origins get none (the server is also localhost-bound), so
+arbitrary pages cannot drive the API even though the extension can.
 
 ## Robustness notes
 
