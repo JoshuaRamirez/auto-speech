@@ -34,6 +34,7 @@ NAMESPACED_CMDS=(
     auto-speech-pause auto-speech-resume auto-speech-restart
     auto-speech-end auto-speech-seek
     auto-speech-autoplay-on auto-speech-autoplay-off auto-speech-autoplay-mode auto-speech-autoplay-status
+    auto-speech-scope auto-speech-doctor auto-speech-update
     auto-speech-narrate-on auto-speech-narrate-off
     auto-speech-narrate-status auto-speech-narrate-stop
     auto-speech-narrate-install auto-speech-narrate-config

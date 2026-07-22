@@ -1,7 +1,15 @@
 #!/usr/bin/env bash
-# auto-speech — install all auto-speech-* slash commands as user-level
+# auto-speech — install the auto-speech-* slash commands as user-level
 # commands. Idempotent: safe to re-run. Creates symlinks so edits to the
 # project propagate automatically.
+#
+#   bash setup/install-plugin.sh                the 8 curated commands
+#   bash setup/install-plugin.sh --with-extras  + the 13 extra commands
+#
+# Command surface: plugin/commands/ holds the curated keep-set (also what
+# the managed-plugin path auto-discovers); plugin/commands-extra/ holds
+# the rest (playback transport, narrator controls, status/update), opt-in
+# via --with-extras.
 #
 # Naming convention (see README): every command is prefixed with
 # `auto-speech-` to avoid colliding with built-in Claude Code commands
@@ -14,9 +22,15 @@ PROJECT_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 CMD_DST_DIR="$HOME/.claude/commands"
 mkdir -p "$CMD_DST_DIR"
 
+WITH_EXTRAS=0
+if [[ "${1:-}" == "--with-extras" ]]; then
+    WITH_EXTRAS=1
+    shift
+fi
+
 install_one() {
-    local name="$1"
-    local src="$PROJECT_ROOT/plugin/commands/$name"
+    local subdir="$1" name="$2"
+    local src="$PROJECT_ROOT/plugin/$subdir/$name"
     local dst="$CMD_DST_DIR/$name"
 
     if [[ ! -f "$src" ]]; then
@@ -46,10 +60,12 @@ install_one() {
 # Curated keep-set (2026-07-21): the plugin exposes only the highest-value
 # commands. Transport controls (pause/resume/seek/restart/end), the
 # narration subsystem (narrate-*), and the low-frequency maintenance/status
-# commands (autoplay-status/update) were trimmed — playback transport lives
-# in the web app (/auto-speech-app) and health lives in /auto-speech-doctor.
-# The prune loop below removes any previously-installed command outside this
-# set so re-running the installer converges on the curated surface.
+# commands (autoplay-status/update) live in plugin/commands-extra/ —
+# playback transport lives in the web app (/auto-speech-app) and health
+# lives in /auto-speech-doctor. The prune loop below removes any
+# previously-installed curated-dir command outside this set so re-running
+# the installer converges on the curated surface; extras the user opted
+# into are left alone (pruned only when their target file is gone).
 KEEP=(
     "auto-speech-speak.md"
     "auto-speech-replay.md"
@@ -61,31 +77,71 @@ KEEP=(
     "auto-speech-doctor.md"
 )
 
-# Prune stale auto-speech-* command symlinks not in the keep-set. Only
-# removes symlinks that point back into this project's plugin/commands dir;
-# never touches real files or unrelated links.
+EXTRAS=(
+    "auto-speech-pause.md"
+    "auto-speech-resume.md"
+    "auto-speech-seek.md"
+    "auto-speech-restart.md"
+    "auto-speech-end.md"
+    "auto-speech-autoplay-status.md"
+    "auto-speech-update.md"
+    "auto-speech-narrate-on.md"
+    "auto-speech-narrate-off.md"
+    "auto-speech-narrate-status.md"
+    "auto-speech-narrate-stop.md"
+    "auto-speech-narrate-install.md"
+    "auto-speech-narrate-config.md"
+)
+
+# Prune stale auto-speech-* command symlinks. Two tiers, both scoped to
+# links that point back into this project (never touches real files or
+# unrelated links):
+#   - targets under plugin/commands/       removed unless in KEEP (this
+#     also catches dangling links to files that moved to commands-extra/)
+#   - targets under plugin/commands-extra/ removed only when dangling,
+#     so a user's opted-in extras survive re-runs
 prune_removed() {
     local link target base
     for link in "$CMD_DST_DIR"/auto-speech-*.md; do
         [[ -L "$link" ]] || continue
         target="$(readlink "$link")"
-        [[ "$target" == "$PROJECT_ROOT/plugin/commands/"* ]] || continue
         base="$(basename "$link")"
-        for keep in "${KEEP[@]}"; do
-            [[ "$base" == "$keep" ]] && continue 2
-        done
-        rm "$link"
-        echo "[install-plugin] pruned trimmed command: $link"
+        if [[ "$target" == "$PROJECT_ROOT/plugin/commands/"* ]]; then
+            for keep in "${KEEP[@]}"; do
+                [[ "$base" == "$keep" ]] && continue 2
+            done
+            rm "$link"
+            echo "[install-plugin] pruned trimmed command: $link"
+        elif [[ "$target" == "$PROJECT_ROOT/plugin/commands-extra/"* ]]; then
+            if [[ ! -e "$link" ]]; then
+                rm "$link"
+                echo "[install-plugin] pruned dangling extra: $link"
+            fi
+        fi
     done
 }
 
 prune_removed
 
 for cmd in "${KEEP[@]}"; do
-    install_one "$cmd"
+    install_one "commands" "$cmd"
 done
+
+if [[ $WITH_EXTRAS -eq 1 ]]; then
+    for cmd in "${EXTRAS[@]}"; do
+        install_one "commands-extra" "$cmd"
+    done
+fi
 
 echo "[install-plugin] auto-speech commands installed (curated keep-set):"
 echo "    /auto-speech-speak [n]    /auto-speech-replay [n]    /auto-speech-app"
 echo "    /auto-speech-autoplay-on  /auto-speech-autoplay-off  /auto-speech-autoplay-mode"
 echo "    /auto-speech-scope        /auto-speech-doctor"
+if [[ $WITH_EXTRAS -eq 1 ]]; then
+    echo "[install-plugin] extras installed:"
+    echo "    /auto-speech-pause         /auto-speech-resume        /auto-speech-seek"
+    echo "    /auto-speech-restart       /auto-speech-end           /auto-speech-autoplay-status"
+    echo "    /auto-speech-update        /auto-speech-narrate-{on,off,status,stop,install,config}"
+else
+    echo "[install-plugin] 13 extra commands available: re-run with --with-extras"
+fi
