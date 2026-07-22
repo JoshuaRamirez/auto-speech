@@ -31,7 +31,7 @@ isn't running. Appears as **AutoSpeech** in the right-click menu.
    binds `http://127.0.0.1:7860` (localhost-only).
 2. In the extension Options, keep **Voice engine = Local auto-speech**; the
    server-URL hint shows a live reachability check.
-3. Highlight text → right-click → **Speak "…"**. Audio plays in the tab.
+3. Highlight text → right-click → **AutoSpeech: speak "…"**. Audio plays in the tab.
 
 The endpoint reads text verbatim (no LLM rewrite) and caches by
 text+voice+speed, so repeats are instant.
@@ -41,7 +41,7 @@ text+voice+speed, so repeats are instant.
 1. Open `chrome://extensions`.
 2. Enable **Developer mode** (top-right).
 3. Click **Load unpacked** and select this `chrome-extension/` directory.
-4. Highlight text on any page → right-click → **Speak "…"**.
+4. Highlight text on any page → right-click → **AutoSpeech: speak "…"**.
 
 Adjust the voice via the extension's **Options** (right-click the toolbar
 icon → Options, or the entry on `chrome://extensions`).

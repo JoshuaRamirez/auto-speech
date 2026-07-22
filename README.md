@@ -5,7 +5,7 @@
 [![Release](https://img.shields.io/github/v/release/JoshuaRamirez/auto-speech)](https://github.com/JoshuaRamirez/auto-speech/releases)
 
 Speaks Claude Code responses aloud using a **local Kokoro TTS model on Apple
-Silicon** — no cloud, no API keys. Fibonacci-scaled buffered playback gives
+Silicon** — no cloud TTS, no API keys. Fibonacci-scaled buffered playback gives
 sub-second time-to-first-audio even on long responses. Includes end-of-turn
 autoplay, a localhost web app, a Chrome "speak selection" extension, and an
 optional real-time narrator that describes what Claude is doing while it works.

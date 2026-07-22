@@ -17,6 +17,8 @@ set -uo pipefail
 
 PLUGIN_SCRIPTS_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 RUNSERVER="$PLUGIN_SCRIPTS_DIR/shell/run_server.sh"
+# shellcheck source=log_rotate.sh
+source "$PLUGIN_SCRIPTS_DIR/shell/log_rotate.sh"
 PIDFILE="/tmp/auto-speech-webapp.pid"
 LOG="/tmp/auto-speech-webapp.log"
 URL="http://127.0.0.1:7860/"
@@ -57,6 +59,10 @@ fi
 if [[ -f "$PIDFILE" ]] && ! is_pidfile_alive; then
     rm -f "$PIDFILE" 2>/dev/null || true
 fi
+
+# Rotate the log BEFORE the spawn opens it with an append fd — same
+# pre-spawn policy as autoplay_hook.sh (cap 5 MiB, .1/.2/.3 backups).
+as_rotate_log "$LOG"
 
 # Detached spawn via python double-fork + setsid. Same pattern as
 # autoplay_hook.sh; portable on macOS where GNU `setsid` is absent.
