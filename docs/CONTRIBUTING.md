@@ -20,14 +20,18 @@ No pytest — tests are plain scripts with a `main()` that exits non-zero on
 failure. The runner:
 
 ```
-bash tests/run_all.sh            # full suite (python + shell + audio/TTS)
+bash tests/run_all.sh            # full suite (python + shell + web + audio/TTS)
 bash tests/run_all.sh --hermetic # only dependency-free tests (the CI subset)
+bash tests/run_all.sh --web      # only web-server tests (Flask + numpy, no MLX)
 ```
 
 - **Hermetic** tests import only the standard library + plugin modules and
   run on a bare interpreter (no MLX, mpv, numpy, or audio device). New tests
   are included automatically; a test that needs runtime deps goes in the
   `NEEDS_DEPS` denylist in `run_all.sh`.
+- **Web** tests exercise the Flask server with MLX stubbed; they need only
+  `flask` + `numpy`, so CI runs them in a light venv (`WEB` list in
+  `run_all.sh`). A web test also goes in `NEEDS_DEPS` so hermetic skips it.
 - Override the interpreter with `AUTO_SPEECH_TEST_PYTHON` (CI points it at a
   bare `uv venv` so the darwin-only lock never has to `uv sync` on Linux):
 

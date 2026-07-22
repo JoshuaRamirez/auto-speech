@@ -2,9 +2,11 @@
 # Run the test suite directly (no pytest dependency).
 #
 # Modes:
-#   bash tests/run_all.sh             full suite (python + shell + heavy)
+#   bash tests/run_all.sh             full suite (python + shell + web + heavy)
 #   bash tests/run_all.sh --hermetic  only tests that need NO runtime deps
 #                                     — the CI subset (runs on a bare 3.12)
+#   bash tests/run_all.sh --web       only the web-server tests — the CI web
+#                                     lane (needs Flask + numpy, NOT MLX)
 #
 # Interpreter: defaults to .venv; override with AUTO_SPEECH_TEST_PYTHON so
 # CI can run the hermetic subset on a bare interpreter (the darwin-scoped
@@ -18,8 +20,12 @@ PROJECT_ROOT="$(cd "$TESTS_DIR/.." && pwd)"
 VENV="$PROJECT_ROOT/.venv"
 
 HERMETIC=0
+WEB_ONLY=0
 if [[ "${1:-}" == "--hermetic" ]]; then
     HERMETIC=1
+    shift
+elif [[ "${1:-}" == "--web" ]]; then
+    WEB_ONLY=1
     shift
 fi
 
@@ -36,6 +42,7 @@ fi
 NEEDS_DEPS=(
     test_segment_producer.py
     test_playback_consumer.py
+    test_synthesize_endpoint.py
 )
 
 # Cheap unit tests first — failures here usually indicate a wider problem.
@@ -75,6 +82,12 @@ SHELL_TESTS=(
     test_install_idempotent.sh
     test_bootstrap_hook_idempotent.sh
     test_deps_locked.sh
+)
+
+# Web-server tests: need Flask + numpy but stub MLX. Run in full mode and
+# in the dedicated --web CI lane (a light venv with just flask + numpy).
+WEB=(
+    test_synthesize_endpoint.py
 )
 
 # Heavier tests that touch the TTS pipeline or audio files.
@@ -139,9 +152,13 @@ if [[ $HERMETIC -eq 1 ]]; then
         fi
         run_one_py "$f"
     done
+elif [[ $WEB_ONLY -eq 1 ]]; then
+    echo "[web] interpreter: $PYTHON"
+    for f in "${WEB[@]}"; do run_one_py "$f"; done
 else
     for f in "${CHEAP[@]}"; do run_one_py "$f"; done
     for f in "${SHELL_TESTS[@]}"; do run_one_sh "$f"; done
+    for f in "${WEB[@]}"; do run_one_py "$f"; done
     for f in "${HEAVY[@]}"; do run_one_py "$f"; done
 fi
 
