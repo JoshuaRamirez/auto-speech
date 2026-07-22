@@ -210,17 +210,17 @@ def test_raises_when_slug_dir_missing() -> None:
 
 
 def test_dot_in_cwd_basename_maps_to_dash_in_slug() -> None:
-    """Regression for a real user-reported bug: a path like
-    /Users/me/Developer/AspenESS/BusinessLogic.Transformation lives
-    under -Users-me-...-BusinessLogic-Transformation (dot → dash).
-    The old slug-only-replaces-slash logic missed this."""
+    """Regression: a project dir with a dot in its basename, e.g.
+    /Users/me/Developer/Some-Project/Data.Pipeline, lives under
+    -Users-me-...-Data-Pipeline (dot → dash). The old
+    slug-only-replaces-slash logic missed this."""
     with tempfile.TemporaryDirectory() as project_root_str:
         project_root = Path(project_root_str)
         # Synthesize the slug Claude Code would create.
-        cwd = Path("/Users/me/Developer/Some-Project/BusinessLogic.Transformation")
+        cwd = Path("/Users/me/Developer/Some-Project/Data.Pipeline")
         # Substitute dots AND slashes with dashes — that's what we
         # expect the locator to look for.
-        slug_dir = project_root / "-Users-me-Developer-Some-Project-BusinessLogic-Transformation"
+        slug_dir = project_root / "-Users-me-Developer-Some-Project-Data-Pipeline"
         slug_dir.mkdir(parents=True)
         target = slug_dir / "session-x.jsonl"
         _make_jsonl(target)

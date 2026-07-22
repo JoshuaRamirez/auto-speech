@@ -1,7 +1,7 @@
 {
   "name": "auto-speech",
   "version": "0.1.0",
-  "description": "Speak a prior Claude response aloud using a local TTS model (Kokoro via mlx-audio) with Fibonacci-scaled buffered playback.",
+  "description": "Speak Claude Code responses aloud, with real-time narration (Claude Code plugin).",
   "author": {
     "name": "Joshua Ramirez"
   }
