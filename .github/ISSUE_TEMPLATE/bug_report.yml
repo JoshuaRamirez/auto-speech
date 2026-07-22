@@ -1,0 +1,43 @@
+name: Bug report
+description: Something in auto-speech misbehaves
+labels: [bug]
+body:
+  - type: textarea
+    id: description
+    attributes:
+      label: What happened?
+      description: What you did, what you expected, and what happened instead.
+    validations:
+      required: true
+  - type: textarea
+    id: repro
+    attributes:
+      label: Steps to reproduce
+      placeholder: |
+        1. ...
+        2. ...
+    validations:
+      required: false
+  - type: textarea
+    id: doctor
+    attributes:
+      label: /auto-speech-doctor json output
+      description: Run `/auto-speech-doctor json` in Claude Code (or `.venv/bin/python plugin/scripts/python/doctor.py --json` from the clone) and paste the output.
+      render: shell
+    validations:
+      required: false
+  - type: input
+    id: environment
+    attributes:
+      label: Environment
+      placeholder: "macOS 15.5, M3 Pro, uv 0.7.x"
+    validations:
+      required: false
+  - type: textarea
+    id: logs
+    attributes:
+      label: Relevant log tail
+      description: Log locations are listed in docs/OPERATIONS.md (e.g. /tmp/auto-speech-webapp.log, /tmp/auto-speech-autoplay.log).
+      render: shell
+    validations:
+      required: false
