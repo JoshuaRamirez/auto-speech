@@ -1,11 +1,10 @@
 {
   "manifest_version": 3,
   "name": "AutoSpeech",
-  "version": "0.3.0",
+  "version": "0.4.0",
   "description": "Right-click highlighted text to have it read aloud, using the local AutoSpeech (Kokoro) engine with a browser-voice fallback.",
   "permissions": ["contextMenus", "storage", "scripting", "activeTab"],
   "host_permissions": [
-    "<all_urls>",
     "http://127.0.0.1/*",
     "http://localhost/*"
   ],

@@ -5,7 +5,7 @@ Right-click highlighted text on any page to have it read aloud, using the
 automatic fallback to the browser's built-in voices when the local server
 isn't running. Appears as **AutoSpeech** in the right-click menu.
 
-## Features (v0.3.0)
+## Features (v0.4.0)
 
 - Context-menu **AutoSpeech: speak "…"** on any text selection.
 - Context-menu **AutoSpeech: stop speaking** (also: click the toolbar icon).
@@ -75,8 +75,13 @@ arbitrary pages cannot drive the API even though the extension can.
 
 ## Version manifest note
 
-`background.js` corresponds to `manifest.json` `version` 0.3.0. Bump the
+`background.js` corresponds to `manifest.json` `version` 0.4.0. Bump the
 manifest version alongside behavioral changes.
+
+Host permissions are the minimum: `http://127.0.0.1/*` + `http://localhost/*`
+(the service worker's fetch targets) plus gesture-scoped `activeTab` for
+playback injection — no `<all_urls>`. A non-localhost server URL in Options
+is therefore unsupported; the server refuses non-loopback binds anyway.
 
 ## Roadmap
 
