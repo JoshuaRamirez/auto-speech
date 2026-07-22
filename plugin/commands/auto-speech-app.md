@@ -6,7 +6,9 @@ allowed-tools: Bash
 Run this single Bash command:
 
 ```
-/Users/joshua/Developer/auto-speech/plugin/scripts/shell/start_webapp.sh
+PROJECT_ROOT="$(cat "$HOME/.config/auto-speech/root" 2>/dev/null || true)"
+[ -d "$PROJECT_ROOT" ] || { echo "auto-speech: project root not configured — run setup/install-plugin.sh from your clone" >&2; exit 1; }
+"$PROJECT_ROOT/plugin/scripts/shell/start_webapp.sh"
 ```
 
 The command prints exactly two lines to stdout: a status word and the URL.

@@ -22,7 +22,9 @@ If action is `show`, run this Bash command and respond with the resolved
 mode + size + config path inside a fenced block:
 
 ```
-/Users/joshua/Developer/auto-speech/.venv/bin/python /Users/joshua/Developer/auto-speech/plugin/scripts/python/autoplay_config.py
+PROJECT_ROOT="$(cat "$HOME/.config/auto-speech/root" 2>/dev/null || true)"
+[ -d "$PROJECT_ROOT" ] || { echo "auto-speech: project root not configured — run setup/install-plugin.sh from your clone" >&2; exit 1; }
+"$PROJECT_ROOT/.venv/bin/python" "$PROJECT_ROOT/plugin/scripts/python/autoplay_config.py"
 ```
 
 ## set

@@ -15,7 +15,9 @@ Run this single Bash command and respond with its output verbatim inside a
 fenced code block:
 
 ```
-bash /Users/joshua/Developer/auto-speech/setup/bootstrap.sh --force
+PROJECT_ROOT="$(cat "$HOME/.config/auto-speech/root" 2>/dev/null || true)"
+[ -d "$PROJECT_ROOT" ] || { echo "auto-speech: project root not configured — run setup/install-plugin.sh from your clone" >&2; exit 1; }
+bash "$PROJECT_ROOT/setup/bootstrap.sh" --force
 ```
 
 If the output ends with `sync complete`, confirm in one line that the venv is

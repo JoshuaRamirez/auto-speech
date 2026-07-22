@@ -21,6 +21,9 @@ set -uo pipefail
 PROJECT_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 CMD_DIR="$HOME/.claude/commands"
 DISABLE_MARKER="$HOME/.claude/auto-speech.disabled"
+# Overridable so tests can exercise the cleanup against a sandbox instead
+# of the real /tmp (see tests/test_install_plugin.sh).
+TMP_ROOT="${AUTO_SPEECH_TMP_ROOT:-/tmp}"
 
 echo "[uninstall] auto-speech project at $PROJECT_ROOT"
 
@@ -100,24 +103,24 @@ if pgrep -f "$PROJECT_ROOT/.venv/bin/python.*web_server.py" >/dev/null 2>&1; the
 fi
 
 # 5. Stop any active mpv playback session we own.
-if [[ -S /tmp/auto-speech/control.sock ]]; then
-    pkill -f 'mpv .* --input-ipc-server=/tmp/auto-speech/control.sock' || true
+if [[ -S $TMP_ROOT/auto-speech/control.sock ]]; then
+    pkill -f "mpv .* --input-ipc-server=$TMP_ROOT/auto-speech/control.sock" || true
     echo "[uninstall] sent SIGTERM to mpv playback"
 fi
 
 # 6. Clean /tmp/ artifacts.
-rm -rf /tmp/auto-speech 2>/dev/null && echo "[uninstall] removed /tmp/auto-speech/"
-rm -f /tmp/auto-speech-webapp.pid 2>/dev/null && echo "[uninstall] removed /tmp/auto-speech-webapp.pid"
-rm -f /tmp/auto-speech-webapp.log 2>/dev/null && echo "[uninstall] removed /tmp/auto-speech-webapp.log"
-rm -f /tmp/auto-speech-autoplay.log 2>/dev/null && echo "[uninstall] removed /tmp/auto-speech-autoplay.log"
-rm -f /tmp/auto-speech-claude-stderr.log 2>/dev/null && echo "[uninstall] removed /tmp/auto-speech-claude-stderr.log"
-rm -f /tmp/auto-speech-last-stop 2>/dev/null && echo "[uninstall] removed /tmp/auto-speech-last-stop"
-rm -f /tmp/auto-speech-narrator-events.jsonl 2>/dev/null && echo "[uninstall] removed /tmp/auto-speech-narrator-events.jsonl"
-rm -f /tmp/auto-speech-narrator-hook.err 2>/dev/null && echo "[uninstall] removed /tmp/auto-speech-narrator-hook.err"
-rm -f /tmp/auto-speech-narrator-daemon.log 2>/dev/null && echo "[uninstall] removed /tmp/auto-speech-narrator-daemon.log"
-rm -f /tmp/auto-speech-narrator-daemon.pid 2>/dev/null && echo "[uninstall] removed /tmp/auto-speech-narrator-daemon.pid"
-rm -f /tmp/auto-speech-narrator-daemon.watermark 2>/dev/null && echo "[uninstall] removed /tmp/auto-speech-narrator-daemon.watermark"
-rm -f /tmp/auto-speech-narration-depth 2>/dev/null && echo "[uninstall] removed /tmp/auto-speech-narration-depth"
+rm -rf $TMP_ROOT/auto-speech 2>/dev/null && echo "[uninstall] removed $TMP_ROOT/auto-speech/"
+rm -f $TMP_ROOT/auto-speech-webapp.pid 2>/dev/null && echo "[uninstall] removed $TMP_ROOT/auto-speech-webapp.pid"
+rm -f $TMP_ROOT/auto-speech-webapp.log 2>/dev/null && echo "[uninstall] removed $TMP_ROOT/auto-speech-webapp.log"
+rm -f $TMP_ROOT/auto-speech-autoplay.log 2>/dev/null && echo "[uninstall] removed $TMP_ROOT/auto-speech-autoplay.log"
+rm -f $TMP_ROOT/auto-speech-claude-stderr.log 2>/dev/null && echo "[uninstall] removed $TMP_ROOT/auto-speech-claude-stderr.log"
+rm -f $TMP_ROOT/auto-speech-last-stop 2>/dev/null && echo "[uninstall] removed $TMP_ROOT/auto-speech-last-stop"
+rm -f $TMP_ROOT/auto-speech-narrator-events.jsonl 2>/dev/null && echo "[uninstall] removed $TMP_ROOT/auto-speech-narrator-events.jsonl"
+rm -f $TMP_ROOT/auto-speech-narrator-hook.err 2>/dev/null && echo "[uninstall] removed $TMP_ROOT/auto-speech-narrator-hook.err"
+rm -f $TMP_ROOT/auto-speech-narrator-daemon.log 2>/dev/null && echo "[uninstall] removed $TMP_ROOT/auto-speech-narrator-daemon.log"
+rm -f $TMP_ROOT/auto-speech-narrator-daemon.pid 2>/dev/null && echo "[uninstall] removed $TMP_ROOT/auto-speech-narrator-daemon.pid"
+rm -f $TMP_ROOT/auto-speech-narrator-daemon.watermark 2>/dev/null && echo "[uninstall] removed $TMP_ROOT/auto-speech-narrator-daemon.watermark"
+rm -f $TMP_ROOT/auto-speech-narration-depth 2>/dev/null && echo "[uninstall] removed $TMP_ROOT/auto-speech-narration-depth"
 if [[ -d "$HOME/.claude/auto-speech-narrate-sessions" ]]; then
     rm -rf "$HOME/.claude/auto-speech-narrate-sessions"
     echo "[uninstall] removed per-session narrate markers ($HOME/.claude/auto-speech-narrate-sessions)"
@@ -125,6 +128,13 @@ fi
 if [[ -d "$HOME/.claude/auto-speech-autoplay-sessions" ]]; then
     rm -rf "$HOME/.claude/auto-speech-autoplay-sessions"
     echo "[uninstall] removed per-session autoplay markers ($HOME/.claude/auto-speech-autoplay-sessions)"
+fi
+
+# Remove the recorded project root (written by install-plugin.sh). Only the
+# file — autoplay.toml / narrator.toml in the same dir are user content.
+if [[ -f "$HOME/.config/auto-speech/root" ]]; then
+    rm -f "$HOME/.config/auto-speech/root"
+    echo "[uninstall] removed recorded project root ($HOME/.config/auto-speech/root)"
 fi
 
 echo "[uninstall] done."

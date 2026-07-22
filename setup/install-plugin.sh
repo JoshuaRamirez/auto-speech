@@ -22,6 +22,14 @@ PROJECT_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 CMD_DST_DIR="$HOME/.claude/commands"
 mkdir -p "$CMD_DST_DIR"
 
+# Record the clone location for the installed commands: their bash blocks
+# resolve PROJECT_ROOT from this file at runtime, so the same command files
+# work for any user and any clone path. Re-running after moving the clone
+# self-heals the recorded root.
+mkdir -p "$HOME/.config/auto-speech"
+printf '%s\n' "$PROJECT_ROOT" > "$HOME/.config/auto-speech/root"
+echo "[install-plugin] recorded project root: $PROJECT_ROOT"
+
 WITH_EXTRAS=0
 if [[ "${1:-}" == "--with-extras" ]]; then
     WITH_EXTRAS=1

@@ -19,7 +19,9 @@ Parse `$ARGUMENTS`:
 Run this Bash command:
 
 ```
-/Users/joshua/Developer/auto-speech/.venv/bin/python /Users/joshua/Developer/auto-speech/plugin/scripts/python/narrator_config.py
+PROJECT_ROOT="$(cat "$HOME/.config/auto-speech/root" 2>/dev/null || true)"
+[ -d "$PROJECT_ROOT" ] || { echo "auto-speech: project root not configured — run setup/install-plugin.sh from your clone" >&2; exit 1; }
+"$PROJECT_ROOT/.venv/bin/python" "$PROJECT_ROOT/plugin/scripts/python/narrator_config.py"
 ```
 
 Parse its JSON output; `config_path` is the file currently in use.

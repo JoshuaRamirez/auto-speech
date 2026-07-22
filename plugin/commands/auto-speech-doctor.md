@@ -11,7 +11,9 @@ the command below; otherwise run it as-is. Respond with the command's full
 output verbatim inside a fenced code block — do not summarize or reinterpret.
 
 ```
-/Users/joshua/Developer/auto-speech/.venv/bin/python /Users/joshua/Developer/auto-speech/plugin/scripts/python/doctor.py
+PROJECT_ROOT="$(cat "$HOME/.config/auto-speech/root" 2>/dev/null || true)"
+[ -d "$PROJECT_ROOT" ] || { echo "auto-speech: project root not configured — run setup/install-plugin.sh from your clone" >&2; exit 1; }
+"$PROJECT_ROOT/.venv/bin/python" "$PROJECT_ROOT/plugin/scripts/python/doctor.py"
 ```
 
 The command exits non-zero when any check is `FAIL` (unhealthy). After

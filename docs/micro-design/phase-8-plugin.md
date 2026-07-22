@@ -48,10 +48,11 @@ User hears audio, Claude reports "spoke message #2 (N chars)"
   `run_extract.sh`'s stdout is exclusively the message text.
 - **Heredoc in speak.md** uses `__AUTO_SPEECH_EOF__` (non-trivial, unlikely to
   collide with rewritten text).
-- **Absolute paths** in speak.md hard-code `/Users/joshua/Developer/auto-speech/`
-  because the slash command runs from wherever the user's Claude Code session
-  is, not necessarily from the project root. If this project moves, update
-  the paths or move to an env-var approach.
+- **Absolute paths** — RESOLVED (v0.1.0 release prep): command files no
+  longer hard-code the clone path. Each bash block resolves `PROJECT_ROOT`
+  at runtime from `~/.config/auto-speech/root`, which `install-plugin.sh`
+  writes (and rewrites on re-run, so a moved clone self-heals). Contract
+  pinned by `tests/test_install_plugin.sh`.
 
 ## Check gate
 - `/speak` invoked in a live Claude Code session plays the most-recent
