@@ -194,6 +194,44 @@ def test_options_preflight() -> None:
         assert resp.headers.get("Access-Control-Allow-Origin") == EXT_ORIGIN
 
 
+def test_synthesize_not_blocked_by_inflight_rewrite() -> None:
+    """A long /api/speak rewrite must not stall /api/synthesize.
+
+    The rewrite runs on the speak-job thread; only the pipeline occupies
+    the TTS worker. Pin: with a rewrite blocked mid-flight, a synthesize
+    request completes."""
+    import threading
+
+    with tempfile.TemporaryDirectory() as td:
+        server, _ = _make_server(Path(td))
+        client = server._app.test_client()  # noqa: SLF001
+
+        release = threading.Event()
+        started = threading.Event()
+
+        def slow_rewrite(text, timeout_seconds=600.0):  # noqa: ANN001, ARG001
+            started.set()
+            release.wait(timeout=30)
+            return text
+
+        server._rewriter.rewrite = slow_rewrite  # noqa: SLF001
+        server._rewriter.is_available = lambda: True  # noqa: SLF001
+
+        try:
+            r = client.post("/api/speak", json={"text": "long paste", "rewrite": True})
+            assert r.status_code == 202
+            assert started.wait(timeout=10), "rewrite never started"
+
+            # While the rewrite is parked, synthesize must still complete.
+            resp = client.post("/api/synthesize", json={"text": "quick selection"})
+            assert resp.status_code == 200
+            assert resp.data[:4] == b"RIFF"
+        finally:
+            release.set()
+            # Let the speak job drain so the executor isn't torn down mid-job.
+            server._job_executor.shutdown(wait=True)  # noqa: SLF001
+
+
 def test_cors_denied_for_web_and_absent_origins() -> None:
     """Non-extension origins get NO ACAO header — pages can't read responses."""
     with tempfile.TemporaryDirectory() as td:
@@ -231,6 +269,7 @@ def main() -> int:
         test_resilient_split_recovers_from_generate_fault,
         test_resilient_split_skips_unspeakable_leaf,
         test_options_preflight,
+        test_synthesize_not_blocked_by_inflight_rewrite,
         test_cors_denied_for_web_and_absent_origins,
     ]
     for t in tests:

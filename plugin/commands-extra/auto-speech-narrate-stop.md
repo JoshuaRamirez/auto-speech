@@ -1,5 +1,5 @@
 ---
-description: Stop the narrator daemon immediately (independent of the per-project marker).
+description: Stop the narrator daemon immediately (independent of the per-session marker).
 argument-hint: ""
 allowed-tools: Bash
 ---

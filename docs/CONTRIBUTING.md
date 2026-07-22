@@ -56,15 +56,16 @@ Both must be clean. Ruff config is in `pyproject.toml` (`[tool.ruff]`).
 ## CI
 
 `.github/workflows/ci.yml` runs on a **macOS** runner (matching the target
-platform) and gates every push/PR on four static checks, without installing
+platform) and gates every push/PR on five checks, without installing
 the multi-GB darwin-only runtime deps:
 
 1. `ruff check`
 2. `shellcheck -S warning`
 3. `uv lock --check` (lockfile in sync with `pyproject.toml`)
 4. the **hermetic** test subset on a bare Python 3.12
+5. the **web** test lane on a light venv (`flask` + `numpy` only)
 
-Reproduce CI locally by running those four commands.
+Reproduce CI locally by running those five commands.
 
 ## Dependencies & the lockfile
 

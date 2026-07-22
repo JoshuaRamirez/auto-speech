@@ -275,6 +275,16 @@ class WebServer:
             max_workers=1, thread_name_prefix="tts-worker"
         )
 
+        # Separate single worker for speak jobs. The rewrite phase is a
+        # `claude` CLI subprocess (up to rewrite_timeout, default 600 s)
+        # that touches no MLX state — keeping it OFF the TTS thread means
+        # /api/synthesize is never queued behind a long rewrite. The job
+        # runner hands only the pipeline (actual synthesis) to the TTS
+        # worker. JobTracker's 409-on-busy keeps speak jobs serial anyway.
+        self._job_executor = ThreadPoolExecutor(
+            max_workers=1, thread_name_prefix="speak-job"
+        )
+
         # Phase 17: at-most-one fire-and-forget speak job. The HTTP layer
         # consults the tracker to decide 202 (queued) vs 409 (busy).
         self._jobs = JobTracker()
@@ -453,7 +463,9 @@ class WebServer:
 
         # Submit OUTSIDE the lock — the executor's worker is the real
         # serializer. The lock just protected the begin/check critical region.
-        self._tts_executor.submit(
+        # Runs on the job executor; only the pipeline hop inside touches the
+        # TTS thread (see _run_speak_job).
+        self._job_executor.submit(
             self._run_speak_job, text, mode_str, source_hash, rewrite_timeout
         )
 
@@ -476,8 +488,11 @@ class WebServer:
     ) -> None:
         """Background runner: rewrite (if needed) → TTS → mpv handoff.
 
-        Drives the JobTracker through phase transitions. Any exception
-        becomes a `failed` phase with the error string captured.
+        Runs on the speak-job thread. The rewrite (a claude CLI subprocess)
+        happens HERE so it never occupies the TTS worker; the pipeline —
+        the only MLX-touching part — is submitted to the TTS thread and
+        awaited. Drives the JobTracker through phase transitions. Any
+        exception becomes a `failed` phase with the error string captured.
         """
         try:
             if mode == "rewrite":
@@ -518,7 +533,11 @@ class WebServer:
                 tts_engine=self._tts,
             )
             try:
-                rc = orchestrator.run(audio_text)
+                # The pipeline is the MLX-touching part — run it on the
+                # dedicated TTS thread (same-thread invariant) and wait.
+                rc = self._tts_executor.submit(
+                    orchestrator.run, audio_text
+                ).result()
             except Exception as exc:  # noqa: BLE001
                 print(f"[web] job CRASH (pipeline): {exc!r}", file=sys.stderr)
                 traceback.print_exc(file=sys.stderr)

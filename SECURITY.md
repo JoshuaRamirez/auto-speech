@@ -26,7 +26,10 @@ auto-speech is a **local-only** tool. Understanding its trust boundaries:
   surface = the PyPI packages pinned in `uv.lock`.
 - **Runtime downloads**: Kokoro-82M model weights (Apache-2.0) are fetched
   from Hugging Face on first synthesis; the spaCy `en_core_web_sm` model is
-  fetched at install time. Nothing else is downloaded at runtime.
+  fetched at install time. Installing the optional narrator
+  (`/auto-speech-narrate-install`) additionally pulls `mlx-lm` from PyPI
+  and an LLM (default: a 4-bit Qwen 3B) from Hugging Face. Nothing else
+  is downloaded.
 - **No secrets**: the tool stores no credentials and transmits nothing off
   the machine. All synthesis is local.
 

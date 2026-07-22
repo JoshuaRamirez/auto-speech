@@ -90,7 +90,7 @@ The read shape is set via `/auto-speech-autoplay-mode` (or
 
 ## Web app
 
-`/auto-speech-app` (or `python plugin/scripts/python/web_server.py`) serves
+`/auto-speech-app` (or `bash plugin/scripts/shell/run_server.sh`) serves
 `http://127.0.0.1:7860` — loopback only. Paste-to-speak with Claude-CLI
 rewrite, playback transport (pause/seek/stop), a replay-cache browser, and
 the `/api/synthesize` + `/api/voices` endpoints the Chrome extension uses.

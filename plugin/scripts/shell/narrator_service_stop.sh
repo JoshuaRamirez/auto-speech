@@ -4,7 +4,9 @@
 set -uo pipefail
 
 SHELL_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-PID_FILE="/tmp/auto-speech-narrator-daemon.pid"
+# AUTO_SPEECH_TMP_ROOT lets tests point this at a sandbox so a test-driven
+# uninstall can never signal the real daemon (see tests/test_install_plugin.sh).
+PID_FILE="${AUTO_SPEECH_TMP_ROOT:-/tmp}/auto-speech-narrator-daemon.pid"
 
 # shellcheck source=daemon_pid.sh
 source "$SHELL_DIR/daemon_pid.sh"

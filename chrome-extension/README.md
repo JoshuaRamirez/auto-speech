@@ -26,8 +26,9 @@ isn't running. Appears as **AutoSpeech** in the right-click menu.
 
 1. Start the auto-speech web server (it holds a hot Kokoro model):
    `/auto-speech-app` in Claude Code, or
-   `python plugin/scripts/python/web_server.py` from the repo. It binds
-   `http://127.0.0.1:7860` (localhost-only).
+   `bash plugin/scripts/shell/run_server.sh` from the repo (it activates
+   the venv and tells you to run `setup/install.sh` if it's missing). It
+   binds `http://127.0.0.1:7860` (localhost-only).
 2. In the extension Options, keep **Voice engine = Local auto-speech**; the
    server-URL hint shows a live reachability check.
 3. Highlight text → right-click → **Speak "…"**. Audio plays in the tab.
