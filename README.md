@@ -1,170 +1,174 @@
 # auto-speech
 
-A Claude Code plugin that converts a Claude response into spoken audio using a local
-TTS model on Apple Silicon, with Fibonacci-scaled buffered playback for minimal
-time-to-first-audio and seamless streaming.
+[![CI](https://github.com/JoshuaRamirez/auto-speech/actions/workflows/ci.yml/badge.svg)](https://github.com/JoshuaRamirez/auto-speech/actions/workflows/ci.yml)
+[![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
+[![Release](https://img.shields.io/github/v/release/JoshuaRamirez/auto-speech)](https://github.com/JoshuaRamirez/auto-speech/releases)
+
+Speaks Claude Code responses aloud using a **local Kokoro TTS model on Apple
+Silicon** — no cloud, no API keys. Fibonacci-scaled buffered playback gives
+sub-second time-to-first-audio even on long responses. Includes end-of-turn
+autoplay, a localhost web app, a Chrome "speak selection" extension, and an
+optional real-time narrator that describes what Claude is doing while it works.
+
+## Requirements
+
+- **Apple Silicon Mac** (the MLX wheels are macOS/arm64-only; the lockfile
+  resolves for darwin exclusively)
+- **Homebrew** (used to install `mpv` and `jq` if missing)
+- **uv** (`brew install uv`) — manages the Python 3.12 venv
+- Disk + network note: Kokoro-82M model weights download from Hugging Face
+  on first synthesis (a few hundred MB, cached locally)
+
+## Quickstart
+
+```bash
+git clone https://github.com/JoshuaRamirez/auto-speech && cd auto-speech
+bash setup/install.sh          # 1. REQUIRED — venv + locked deps + mpv + jq + spaCy model
+bash setup/verify.sh           # 2. REQUIRED — synthesizes and PLAYS a test WAV (you should hear audio)
+bash setup/install-plugin.sh   # 3. REQUIRED — installs the 8 slash commands into ~/.claude/commands
+bash setup/install-hook.sh     # 4. REQUIRED for autoplay — adds the Stop hook to ~/.claude/settings.json
+```
+
+Optional extras:
+
+```bash
+bash setup/install-bootstrap-hook.sh   # SessionStart self-update (uv sync when uv.lock changes)
+bash setup/install-narrator-hooks.sh   # real-time narration hooks (see Narration)
+bash setup/install-plugin.sh --with-extras   # + 13 extra slash commands
+```
+
+Every script is idempotent — safe to re-run. Step 4 is what makes the
+headline feature work: without the Stop hook, nothing plays at end of turn.
 
 ## Commands
 
-All commands are namespaced with `auto-speech-` so they don't collide with
-built-in Claude Code commands or other plugins (see "Naming convention" below).
+The default install exposes 8 curated commands:
 
-Playback (per-response autoplay + manual replay):
-```
-/auto-speech-speak [n]      # speak the n-th most recent assistant message (default 1)
-/auto-speech-replay [n]     # replay the n-th most recent cached entry
-/auto-speech-app            # launch the localhost web app
-/auto-speech-pause          # mpv pause
-/auto-speech-resume         # mpv resume
-/auto-speech-restart        # mpv seek to 0
-/auto-speech-seek           # mpv seek by +N, -N, N, or 'end'
-/auto-speech-end            # stop mpv playback
-/auto-speech-autoplay-on        # re-enable end-of-turn read for THIS session (on by default)
-/auto-speech-autoplay-off       # opt THIS session out
-/auto-speech-autoplay-mode      # set or show summary mode (verbatim|small|medium|large)
-/auto-speech-autoplay-status    # show session opt-out marker, opt-out dir, mpv, log tail
-/auto-speech-scope [all|solo]   # read ALL sessions, or only THIS one (spotlight)
-```
+| Command | Does |
+|---|---|
+| `/auto-speech-speak [n]` | speak the n-th most recent assistant message (default 1) |
+| `/auto-speech-replay [n]` | replay the n-th most recent cached entry |
+| `/auto-speech-app` | launch the localhost web app |
+| `/auto-speech-autoplay-on` | re-enable end-of-turn autoplay for THIS session (on by default) |
+| `/auto-speech-autoplay-off` | opt THIS session out |
+| `/auto-speech-autoplay-mode` | show or set the autoplay mode (`verbatim\|small\|medium\|large`) |
+| `/auto-speech-scope [all\|solo]` | read ALL sessions, or only THIS one |
+| `/auto-speech-doctor [json]` | health check; exits non-zero when unhealthy |
 
-Diagnostics & maintenance:
-```
-/auto-speech-doctor [json]      # health check; exits non-zero when unhealthy
-/auto-speech-update             # reconcile the venv with uv.lock (no git pull)
-```
+13 more (playback transport, narrator controls, autoplay-status, update)
+live in `plugin/commands-extra/` — install with
+`bash setup/install-plugin.sh --with-extras`. Every command is prefixed
+`auto-speech-` so nothing collides with Claude Code built-ins or other
+plugins; new commands must follow the convention.
 
 ## Autoplay
 
 The end-of-turn autoplay reads each completed assistant response aloud.
 It is **on by default for every session**. Gating is per-session
-**opt-out**: `/auto-speech-autoplay-off` touches a marker file that
-silences just that session, leaving all others playing:
-
-```
-~/.claude/auto-speech-autoplay-sessions/<session_id>
-```
-
-Behaviour with the per-session opt-out marker:
-
-| State of `auto-speech-autoplay-sessions/<session_id>` | Effect |
-|---|---|
-| absent (default) | Autoplay fires for that session. |
-| present | That session is silenced; other sessions are unaffected. |
-
-A global panic mute at `~/.claude/auto-speech.disabled` takes precedence
-over everything and silences every session regardless of per-session
-state.
+**opt-out**: `/auto-speech-autoplay-off` touches a marker file
+(`~/.claude/auto-speech-autoplay-sessions/<session_id>`) that silences
+just that session, leaving all others playing. A global panic mute at
+`~/.claude/auto-speech.disabled` takes precedence over everything.
 
 Concurrent playbacks (multiple sessions, or rapid turns in one session)
-are serialized through a strict cross-session FIFO queue
-(`/tmp/auto-speech-playback-queue/`): each pending playback waits for
-the current one to finish before starting, in arrival order. An active
-playback is **never** cut off by a newer one. Back-to-back Stop events
-within the coalesce window still collapse to the newest, and literally
-identical audio already in flight is deduplicated rather than replayed.
+are serialized through a strict cross-session FIFO queue: each pending
+playback waits for the current one to finish, in arrival order. An active
+playback is **never** cut off by a newer one; back-to-back turns within
+the coalesce window collapse to the newest, and identical audio already
+in flight is deduplicated.
 
-The end-of-turn read shape is controlled by `~/.config/auto-speech/autoplay.toml`
-(four modes — see the table below), tunable also via `/auto-speech-autoplay-mode`:
-
-| Mode | Length | When |
-|---|---|---|
-| `verbatim` | full content, lossless | when every fact matters |
-| `summary` `small` | 1-3 sentences, what happened (default) | quick status |
-| `summary` `medium` | 3-5 sentences | balanced |
-| `summary` `large` | 6-10 sentences, preserves nuance | long technical replies |
-
-Plus `coalesce_seconds` (default 1) and `narration_wait_max_seconds`
-(default 90) in the same config — formerly hardcoded as env vars,
-now overridable both in the config file and via the legacy env vars.
-
-The end-of-turn autoplay supports four modes via `~/.config/auto-speech/autoplay.toml`:
+The read shape is set via `/auto-speech-autoplay-mode` (or
+`~/.config/auto-speech/autoplay.toml`, which also holds
+`coalesce_seconds` and `narration_wait_max_seconds`):
 
 | Mode | Length | When |
 |---|---|---|
 | `verbatim` | full content, lossless | when every fact matters |
-| `summary` `small` | 1-3 sentences, what happened (default) | quick status |
-| `summary` `medium` | 3-5 sentences | balanced |
-| `summary` `large` | 6-10 sentences, preserves nuance | long technical replies |
+| `small` | 1-3 sentence summary (default) | quick status |
+| `medium` | 3-5 sentence summary | balanced |
+| `large` | 6-10 sentence summary, preserves nuance | long technical replies |
 
-Real-time narration (play-by-play of in-flight turns; local LLM, default off):
-```
-/auto-speech-narrate-install [model]  # install mlx-lm + pull a default model, write user config
-/auto-speech-narrate-on               # enable narration in this project, start daemon
-/auto-speech-narrate-off              # disable narration in this project (daemon idle-exits)
-/auto-speech-narrate-stop             # stop the daemon immediately
-/auto-speech-narrate-status           # marker / pid / queue depth / recent log
-/auto-speech-narrate-config [show|edit|path]  # inspect or edit ~/.config/auto-speech/narrator.toml
-```
+## Web app
 
-## Narration
+`/auto-speech-app` (or `python plugin/scripts/python/web_server.py`) serves
+`http://127.0.0.1:7860` — loopback only. Paste-to-speak with Claude-CLI
+rewrite, playback transport (pause/seek/stop), a replay-cache browser, and
+the `/api/synthesize` + `/api/voices` endpoints the Chrome extension uses.
+The model stays hot in the server process, so repeat synthesis is fast.
 
-A separate pipeline (independent of end-of-turn autoplay) summarises what
-Claude is doing **while it happens** and speaks the summary aloud in
-newscaster voice. PreToolUse / PostToolUse / Stop / UserPromptSubmit hooks
-feed an event stream; a phase classifier groups consecutive tool calls of
-the same category (Explore / Edit / Run / Delegate); on each phase
-transition a local LLM produces one sentence; the line plays through the
-existing TTS pipeline in strict FIFO order.
+## Chrome extension
 
-End-of-turn autoplay waits for the narration FIFO to drain before reading
-the final response, so the two pipelines never overlap.
+`chrome-extension/` is **AutoSpeech**: right-click any selected text →
+*speak selection*, synthesized by the local Kokoro server with automatic
+fallback to the browser's built-in voices when the server isn't running.
+Voice picker populates live from `/api/voices`.
 
-Gating is **per-session** via a marker file
-(`~/.claude/auto-speech-narrate-sessions/<session_id>`). Each Claude Code
-session opts in independently — running `/auto-speech-narrate-on` in one
-window does not turn on narration for a parallel Claude Code session in
-the same project. The per-project marker scheme from the original Phase
-23 was deprecated: a single project may have many concurrent sessions
-and the user only wants to hear narration for the session they're
-attending to.
+Install (unpacked): `chrome://extensions` → Developer mode → *Load
+unpacked* → select `chrome-extension/`. It needs the web app running for
+Kokoro-quality audio. The extension is versioned independently of the
+repo (currently 0.4.x); details in
+[chrome-extension/README.md](chrome-extension/README.md).
 
-Provider is pluggable. The shipped default is `mock` (templated, no deps);
-`/auto-speech-narrate-install` flips it to `mlx` and pulls a 4-bit Qwen 3B
-model (configurable). Ollama / OpenAI / Anthropic providers are reserved
-slots for future implementations.
+## Narration (optional)
 
-## Naming convention
+A separate pipeline narrates what Claude is doing **while it happens**:
+hook events feed a phase classifier (Explore / Edit / Run / Delegate);
+on each phase transition a local MLX LLM produces one spoken sentence.
+Off by default, per-session opt-in, and end-of-turn autoplay waits for
+the narration queue to drain so the two never overlap. Set up with
+`bash setup/install-narrator-hooks.sh` +
+`bash setup/install-plugin.sh --with-extras`, then
+`/auto-speech-narrate-install` and `/auto-speech-narrate-on`. Details in
+[docs/OPERATIONS.md](docs/OPERATIONS.md).
 
-**Every user-level slash command this project installs is prefixed with
-`auto-speech-`.** Generic short names like `/pause`, `/resume`, `/end`, and
-`/speak` belong to the shared `~/.claude/commands/` namespace; claiming them
-from a single plugin breaks Claude Code's built-ins (e.g., session resume)
-and any other plugin a user might install.
+## Troubleshooting
 
-The prefix:
-- prevents collisions across the user's entire plugin ecosystem,
-- keeps commands grouped under tab-completion (typing `/auto-` shows them all),
-- mirrors the marketplace-plugin convention (`commit-commands:commit`,
-  `anthropic-skills:pdf`), so if this project is ever promoted to a real
-  marketplace plugin the command names stay stable.
+Run `/auto-speech-doctor` first — it checks binaries, disk, logs, the
+narrator daemon, queue depth, and autoplay scope. The full runbook (log
+locations, config precedence, muting, self-update) is
+[docs/OPERATIONS.md](docs/OPERATIONS.md).
 
-Any new slash command added to `plugin/commands/` MUST follow this convention.
-The install script (`setup/install-plugin.sh`) and uninstall script
-(`setup/uninstall.sh`) symlink and remove only namespaced names. The uninstall
-script also cleans up the legacy unprefixed names for users upgrading from
-before this convention.
+## Uninstall
 
-## Layout
-
-```
-auto-speech/
-├── docs/
-│   ├── specification/   OOAD macro-process output (conceptualization → analysis → design)
-│   ├── plan/            implementation plan with embedded micro-process stubs
-│   ├── decisions/       ADRs (architecture decision records)
-│   └── micro-design/    class-level designs produced during execution
-├── plugin/              Claude Code plugin payload
-│   ├── commands/        slash commands (speak.md)
-│   └── scripts/         python + shell implementation
-├── config/              calibration + voice config
-├── setup/               one-time install scripts
-└── tests/               reference inputs & captured outputs
+```bash
+bash setup/uninstall.sh
 ```
 
-## Read first
-- [docs/specification/README.md](docs/specification/README.md) — the spec
-- [docs/plan/implementation-plan.md](docs/plan/implementation-plan.md) — the plan
-- [docs/OPERATIONS.md](docs/OPERATIONS.md) — run unattended, monitor with
-  `/auto-speech-doctor`, troubleshoot, log locations, env-var precedence
-- [docs/CONTRIBUTING.md](docs/CONTRIBUTING.md) — run tests + lint, the
-  hermetic CI subset, and the dependency-lock workflow
+Removes the command symlinks, all hooks, markers, and temp files; leaves
+the repo, the venv, and Homebrew packages. Hook-specific uninstallers
+(`uninstall-hook.sh`, `uninstall-bootstrap-hook.sh`,
+`uninstall-narrator-hooks.sh`) exist for partial removal.
 
+## Security & privacy
+
+- Everything runs locally: no telemetry, no cloud TTS, no API keys.
+- The web server binds `127.0.0.1` only and is unauthenticated — any
+  local process can reach it; do not port-forward it. Web pages cannot
+  drive it: CORS is granted only to Chrome-extension origins.
+- The installers edit `~/.claude/settings.json` (hooks). The optional
+  bootstrap hook auto-runs `uv sync` against the committed lockfile on
+  session start — it never pulls source from the network.
+- Kokoro-82M weights (Apache-2.0) are fetched from Hugging Face on first
+  use.
+- Vulnerability reports: see [SECURITY.md](SECURITY.md).
+
+## Design history
+
+Built through a documented OOAD process — the artifacts ship in-repo:
+[docs/specification/](docs/specification/README.md) (conceptualization →
+analysis → design), [docs/plan/](docs/plan/implementation-plan.md),
+[docs/decisions/](docs/decisions/) (14 ADRs), and
+[docs/micro-design/](docs/micro-design/) (per-phase class designs).
+Contributor guide: [docs/CONTRIBUTING.md](docs/CONTRIBUTING.md).
+
+## Acknowledgements
+
+- [Kokoro-82M](https://huggingface.co/hexgrad/Kokoro-82M) (Apache-2.0) — the TTS model
+- [mlx-audio](https://github.com/Blaizzy/mlx-audio) (MIT) — Apple-Silicon TTS runtime
+- [misaki](https://github.com/hexgrad/misaki) (Apache-2.0) — G2P
+- [num2words](https://github.com/savoirfairelinux/num2words) (LGPL, used as an unmodified dependency)
+- [Flask](https://flask.palletsprojects.com/) (BSD-3-Clause)
+
+## License
+
+MIT — see [LICENSE](LICENSE).
