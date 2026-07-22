@@ -108,19 +108,17 @@ if [[ -S $TMP_ROOT/auto-speech/control.sock ]]; then
     echo "[uninstall] sent SIGTERM to mpv playback"
 fi
 
-# 6. Clean /tmp/ artifacts.
-rm -rf $TMP_ROOT/auto-speech 2>/dev/null && echo "[uninstall] removed $TMP_ROOT/auto-speech/"
-rm -f $TMP_ROOT/auto-speech-webapp.pid 2>/dev/null && echo "[uninstall] removed $TMP_ROOT/auto-speech-webapp.pid"
-rm -f $TMP_ROOT/auto-speech-webapp.log 2>/dev/null && echo "[uninstall] removed $TMP_ROOT/auto-speech-webapp.log"
-rm -f $TMP_ROOT/auto-speech-autoplay.log 2>/dev/null && echo "[uninstall] removed $TMP_ROOT/auto-speech-autoplay.log"
-rm -f $TMP_ROOT/auto-speech-claude-stderr.log 2>/dev/null && echo "[uninstall] removed $TMP_ROOT/auto-speech-claude-stderr.log"
-rm -f $TMP_ROOT/auto-speech-last-stop 2>/dev/null && echo "[uninstall] removed $TMP_ROOT/auto-speech-last-stop"
-rm -f $TMP_ROOT/auto-speech-narrator-events.jsonl 2>/dev/null && echo "[uninstall] removed $TMP_ROOT/auto-speech-narrator-events.jsonl"
-rm -f $TMP_ROOT/auto-speech-narrator-hook.err 2>/dev/null && echo "[uninstall] removed $TMP_ROOT/auto-speech-narrator-hook.err"
-rm -f $TMP_ROOT/auto-speech-narrator-daemon.log 2>/dev/null && echo "[uninstall] removed $TMP_ROOT/auto-speech-narrator-daemon.log"
-rm -f $TMP_ROOT/auto-speech-narrator-daemon.pid 2>/dev/null && echo "[uninstall] removed $TMP_ROOT/auto-speech-narrator-daemon.pid"
-rm -f $TMP_ROOT/auto-speech-narrator-daemon.watermark 2>/dev/null && echo "[uninstall] removed $TMP_ROOT/auto-speech-narrator-daemon.watermark"
-rm -f $TMP_ROOT/auto-speech-narration-depth 2>/dev/null && echo "[uninstall] removed $TMP_ROOT/auto-speech-narration-depth"
+# 6. Clean tmp artifacts. Glob-based so nothing this project writes under
+# the auto-speech- prefix survives (pid/log/lock/queue/watermark files,
+# rotated .1/.2/.3 log backups, the mpv IPC dir, verify.wav, sync lockdir
+# — the itemized list kept drifting behind the code).
+tmp_removed=0
+for path in "$TMP_ROOT/auto-speech" "$TMP_ROOT"/auto-speech-* "$TMP_ROOT"/auto-speech.*; do
+    [[ -e "$path" || -L "$path" ]] || continue
+    rm -rf "$path"
+    tmp_removed=$((tmp_removed + 1))
+done
+echo "[uninstall] removed $tmp_removed tmp artifact(s) under $TMP_ROOT/auto-speech*"
 if [[ -d "$HOME/.claude/auto-speech-narrate-sessions" ]]; then
     rm -rf "$HOME/.claude/auto-speech-narrate-sessions"
     echo "[uninstall] removed per-session narrate markers ($HOME/.claude/auto-speech-narrate-sessions)"

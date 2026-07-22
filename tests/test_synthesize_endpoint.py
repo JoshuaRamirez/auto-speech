@@ -199,8 +199,16 @@ def test_synthesize_not_blocked_by_inflight_rewrite() -> None:
 
     The rewrite runs on the speak-job thread; only the pipeline occupies
     the TTS worker. Pin: with a rewrite blocked mid-flight, a synthesize
-    request completes."""
+    request completes.
+
+    The whole flow — including the drain in `finally` — runs with
+    PipelineOrchestrator patched out. Without that, the drained speak job
+    would run the REAL pipeline: write into the live replay cache
+    (config/cache/), spawn a real mpv, and potentially wait minutes on an
+    active playback session."""
     import threading
+
+    import web_server
 
     with tempfile.TemporaryDirectory() as td:
         server, _ = _make_server(Path(td))
@@ -217,19 +225,26 @@ def test_synthesize_not_blocked_by_inflight_rewrite() -> None:
         server._rewriter.rewrite = slow_rewrite  # noqa: SLF001
         server._rewriter.is_available = lambda: True  # noqa: SLF001
 
-        try:
-            r = client.post("/api/speak", json={"text": "long paste", "rewrite": True})
-            assert r.status_code == 202
-            assert started.wait(timeout=10), "rewrite never started"
+        with mock.patch.object(web_server, "PipelineOrchestrator") as po_cls:
+            po_cls.return_value.run.return_value = web_server.EXIT_OK
+            try:
+                r = client.post(
+                    "/api/speak", json={"text": "long paste", "rewrite": True}
+                )
+                assert r.status_code == 202
+                assert started.wait(timeout=10), "rewrite never started"
 
-            # While the rewrite is parked, synthesize must still complete.
-            resp = client.post("/api/synthesize", json={"text": "quick selection"})
-            assert resp.status_code == 200
-            assert resp.data[:4] == b"RIFF"
-        finally:
-            release.set()
-            # Let the speak job drain so the executor isn't torn down mid-job.
-            server._job_executor.shutdown(wait=True)  # noqa: SLF001
+                # While the rewrite is parked, synthesize must still complete.
+                resp = client.post("/api/synthesize", json={"text": "quick selection"})
+                assert resp.status_code == 200
+                assert resp.data[:4] == b"RIFF"
+            finally:
+                release.set()
+                # Drain the speak job INSIDE the patch so it finishes against
+                # the stub pipeline, never the real cache/mpv.
+                server._job_executor.shutdown(wait=True)  # noqa: SLF001
+            # The stubbed pipeline must have been what ran.
+            po_cls.return_value.run.assert_called_once()
 
 
 def test_cors_denied_for_web_and_absent_origins() -> None:

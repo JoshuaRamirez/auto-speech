@@ -30,8 +30,15 @@ auto-speech is a **local-only** tool. Understanding its trust boundaries:
   (`/auto-speech-narrate-install`) additionally pulls `mlx-lm` from PyPI
   and an LLM (default: a 4-bit Qwen 3B) from Hugging Face. Nothing else
   is downloaded.
-- **No secrets**: the tool stores no credentials and transmits nothing off
-  the machine. All synthesis is local.
+- **Claude CLI (rewrite/summary step)**: synthesis and narration are fully
+  local, but the rewrite step that shapes text for speech — used by
+  default-on autoplay, `/auto-speech-speak`, and the web app's
+  paste-to-speak — pipes the source text to the `claude` CLI, which sends
+  it to the Anthropic API under your own Claude Code login. Text you
+  paste or have spoken therefore reaches Anthropic exactly as it would if
+  you typed it into Claude Code itself. No other network egress exists.
+- **No secrets**: the tool stores no credentials of its own and adds no
+  telemetry.
 
 ## Reporting a vulnerability
 

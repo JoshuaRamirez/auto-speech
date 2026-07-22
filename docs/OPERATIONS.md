@@ -52,6 +52,7 @@ unattended operation safe:
 | `/tmp/auto-speech-narrator-daemon.log` | narrator daemon (structured) | in-process (RotatingFileHandler) |
 | `/tmp/auto-speech-narrator-daemon.out` | narrator daemon (raw stdio/tracebacks) | pre-spawn |
 | `/tmp/auto-speech-autoplay.log` | autoplay worker | pre-spawn (per turn) |
+| `/tmp/auto-speech-webapp.log` | web app (start_webapp.sh) | pre-spawn |
 | `/tmp/auto-speech-sync.log` | self-update bootstrap | append (low volume) |
 
 ## Staying current (self-update)

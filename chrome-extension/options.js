@@ -102,15 +102,24 @@ async function populateLocalVoices() {
   els.voiceId.appendChild(def);
 
   let voices = [];
+  let reached = false;
   try {
     const resp = await fetch(`${base}/api/voices`, { method: "GET" });
-    if (resp.ok) voices = (await resp.json()).voices || [];
+    if (resp.ok) {
+      reached = true;
+      voices = (await resp.json()).voices || [];
+    }
   } catch {
     /* server down — leave just the default; text below reflects it */
   }
 
   if (!voices.length) {
-    els.voiceCount.textContent = "(server unreachable — using default)";
+    // A reachable server can legitimately report zero voices (voice
+    // discovery degraded — e.g. model snapshot not cached yet); the
+    // server default voice still synthesizes fine in that state.
+    els.voiceCount.textContent = reached
+      ? "(no voices reported — server default only)"
+      : "(server unreachable — using default)";
     els.voiceId.value = "";
     return;
   }

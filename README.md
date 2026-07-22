@@ -141,7 +141,10 @@ the repo, the venv, and Homebrew packages. Hook-specific uninstallers
 
 ## Security & privacy
 
-- Everything runs locally: no telemetry, no cloud TTS, no API keys.
+- Synthesis and narration run locally: no telemetry, no cloud TTS, no API
+  keys stored. The rewrite step that shapes text for speech goes through
+  your own `claude` CLI login (same trust boundary as typing into Claude
+  Code) — see [SECURITY.md](SECURITY.md).
 - The web server binds `127.0.0.1` only and is unauthenticated — any
   local process can reach it; do not port-forward it. Web pages cannot
   drive it: CORS is granted only to Chrome-extension origins.
