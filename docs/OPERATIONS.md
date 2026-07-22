@@ -24,7 +24,7 @@ classifies each as **OK / WARN / FAIL** (any FAIL ⇒ non-zero exit):
 | `narrator` | — | stale/recycled daemon pid (reclaimed next start) |
 | `queue` | — | narration queue saturated (dropping oldest) |
 | `config` | — | a user config has an unknown key / bad type / bad enum |
-| `updates` | — | venv out of sync with `uv.lock` (run `/auto-speech-update`) |
+| `updates` | — | venv out of sync with `uv.lock` (run `bash setup/bootstrap.sh --force`) |
 | `scope`, `autoplay` | — | informational (ALL/SOLO, global mute) |
 
 A WARN means "degraded but running"; only a FAIL is "broken".
@@ -65,9 +65,10 @@ sync with it:
   changed it runs `uv sync` once (single-flight, backgrounded, non-destructive
   — it keeps the `narrate` extra if mlx-lm is installed) and stamps the new
   hash. It **never** runs `git pull`.
-- **Manual:** `/auto-speech-update` (or `bash setup/bootstrap.sh --force`)
-  reconciles the venv synchronously. Pull source changes yourself first if
-  you want them; this only updates dependencies.
+- **Manual:** `bash setup/bootstrap.sh --force` (or `/auto-speech-update`
+  if you installed the extras) reconciles the venv synchronously. Pull
+  source changes yourself first if you want them; this only updates
+  dependencies.
 
 `doctor`'s `updates` check warns when the venv is out of sync.
 
@@ -103,8 +104,8 @@ Config file search order (first found wins): `$AUTO_SPEECH_AUTOPLAY_CONFIG`
 | Symptom | Check | Likely fix |
 |---------|-------|------------|
 | No audio at all | `/auto-speech-doctor` | `mpv` FAIL → `brew install mpv`; or global mute marker present |
-| One session silent | `/auto-speech-autoplay-status` | a per-session opt-out marker, or SOLO is held by another session |
+| One session silent | `/auto-speech-doctor` (scope + queue lines) | a per-session opt-out marker, or SOLO is held by another session |
 | Narration never speaks | `doctor` `narrator` + `/tmp/auto-speech-narrator-daemon.out` | provider downgraded to Mock (MLX load failed) — see the daemon log |
 | Config change ignored | `doctor` `config` | a typo/bad type warned there; fix the TOML |
 | Stale "already running" | — | reclaimed automatically on next start (PID-identity guard) |
-| Deps differ across machines | `doctor` `updates` | `/auto-speech-update` |
+| Deps differ across machines | `doctor` `updates` | `bash setup/bootstrap.sh --force` |
