@@ -42,3 +42,13 @@ jobs:
           uv venv --python 3.12 "$RUNNER_TEMP/ci-bare"
           AUTO_SPEECH_TEST_PYTHON="$RUNNER_TEMP/ci-bare/bin/python" \
             bash tests/run_all.sh --hermetic
+
+      - name: Web tests (Flask + numpy, MLX stubbed)
+        # The web server's non-stub import closure is exactly flask + numpy:
+        # mlx_audio loads lazily inside TTSEngine._ensure_loaded (stubbed by
+        # the tests) and huggingface_hub degrades to an empty voice list.
+        run: |
+          uv venv --python 3.12 "$RUNNER_TEMP/ci-web"
+          uv pip install --python "$RUNNER_TEMP/ci-web/bin/python" "flask>=3.0" numpy
+          AUTO_SPEECH_TEST_PYTHON="$RUNNER_TEMP/ci-web/bin/python" \
+            bash tests/run_all.sh --web
