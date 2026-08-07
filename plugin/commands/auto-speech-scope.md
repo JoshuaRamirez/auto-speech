@@ -54,9 +54,11 @@ if [ -z "$SESSION_ID" ]; then
 fi
 mkdir -p "$HOME/.claude"
 printf '%s' "$SESSION_ID" > "$HOME/.claude/auto-speech-autoplay-solo"
-# Soloing THIS session implies it should actually read: clear its own
-# per-session opt-out marker if one was left behind by /auto-speech-autoplay-off.
-rm -f "$HOME/.claude/auto-speech-autoplay-sessions/$SESSION_ID"
+# Soloing THIS session implies it should actually read. Autoplay is
+# opt-IN, so enrol this session — without a marker the spotlight would
+# name a session that still cannot play.
+mkdir -p "$HOME/.claude/auto-speech-autoplay-enabled"
+touch "$HOME/.claude/auto-speech-autoplay-enabled/$SESSION_ID"
 echo "scope-solo $SESSION_ID"
 ```
 

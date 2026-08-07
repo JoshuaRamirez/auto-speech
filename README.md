@@ -49,8 +49,8 @@ The default install exposes 8 curated commands:
 | `/auto-speech-speak [n]` | speak the n-th most recent assistant message (default 1) |
 | `/auto-speech-replay [n]` | replay the n-th most recent cached entry |
 | `/auto-speech-app` | launch the localhost web app |
-| `/auto-speech-autoplay-on` | re-enable end-of-turn autoplay for THIS session (on by default) |
-| `/auto-speech-autoplay-off` | opt THIS session out |
+| `/auto-speech-autoplay-on` | enable end-of-turn autoplay for THIS session (off by default) |
+| `/auto-speech-autoplay-off` | turn THIS session back off |
 | `/auto-speech-autoplay-mode` | show or set the autoplay mode (`verbatim\|small\|medium\|large`) |
 | `/auto-speech-scope [all\|solo]` | read ALL sessions, or only THIS one |
 | `/auto-speech-doctor [json]` | health check; exits non-zero when unhealthy |
@@ -64,11 +64,13 @@ plugins; new commands must follow the convention.
 ## Autoplay
 
 The end-of-turn autoplay reads each completed assistant response aloud.
-It is **on by default for every session**. Gating is per-session
-**opt-out**: `/auto-speech-autoplay-off` touches a marker file
-(`~/.claude/auto-speech-autoplay-sessions/<session_id>`) that silences
-just that session, leaving all others playing. A global panic mute at
-`~/.claude/auto-speech.disabled` takes precedence over everything.
+It is **off by default**. Gating is per-session **opt-in**:
+`/auto-speech-autoplay-on` touches a marker file
+(`~/.claude/auto-speech-autoplay-enabled/<session_id>`) enrolling just
+that session; every session without a marker stays silent, including one
+whose id cannot be determined. `/auto-speech-autoplay-off` withdraws the
+enrollment. A global panic mute at `~/.claude/auto-speech.disabled` takes
+precedence over everything.
 
 Concurrent playbacks (multiple sessions, or rapid turns in one session)
 are serialized through a strict cross-session FIFO queue: each pending

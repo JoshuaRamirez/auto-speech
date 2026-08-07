@@ -455,7 +455,13 @@ def _sweep_stale_session_markers() -> None:
     over time without this. 30-day window is conservative — sessions
     that old are almost certainly gone."""
     cutoff = time.time() - (_STALE_MARKER_DAYS * 86400)
-    for sub in ("auto-speech-narrate-sessions", "auto-speech-autoplay-sessions"):
+    for sub in (
+        "auto-speech-narrate-sessions",
+        "auto-speech-autoplay-enabled",
+        # Pre-inversion opt-out markers. No longer consulted by anything;
+        # swept so they age out instead of lingering forever.
+        "auto-speech-autoplay-sessions",
+    ):
         d = Path.home() / ".claude" / sub
         if not d.is_dir():
             continue

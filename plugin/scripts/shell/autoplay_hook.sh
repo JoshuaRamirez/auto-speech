@@ -68,13 +68,18 @@ if [[ -n "$SESSION_ID" ]] && [[ -e "$SOLO_MARKER" ]]; then
     fi
 fi
 
-# Per-session OPT-OUT scoping. Autoplay is ON by default for every
-# session. A marker file in this dir (CLAUDE_CODE_SESSION_ID keyed,
-# written by /auto-speech-autoplay-off) silences just that session;
-# all other sessions keep playing. The global mute above still
-# overrides everything.
-SESSION_OPTOUT_DIR="$HOME/.claude/auto-speech-autoplay-sessions"
-if [[ -n "$SESSION_ID" ]] && [[ -e "$SESSION_OPTOUT_DIR/$SESSION_ID" ]]; then
+# Per-session OPT-IN gating. Autoplay is OFF unless this session has
+# enrolled: a marker file named after the session id, written by
+# /auto-speech-autoplay-on and removed by /auto-speech-autoplay-off.
+# Mirrors SessionEnrollment.is_enrolled() in autoplay_enrollment.py.
+#
+# An empty SESSION_ID (jq missing, malformed payload) cannot be enrolled,
+# so it stays SILENT. That is the safe direction for an opt-in default —
+# the opposite of the old opt-out model, where an unidentifiable session
+# was allowed to play to avoid total silence. If autoplay never speaks,
+# check `jq` first: /auto-speech-doctor reports it.
+SESSION_ENROLL_DIR="$HOME/.claude/auto-speech-autoplay-enabled"
+if [[ -z "$SESSION_ID" ]] || [[ ! -e "$SESSION_ENROLL_DIR/$SESSION_ID" ]]; then
     exit 0
 fi
 

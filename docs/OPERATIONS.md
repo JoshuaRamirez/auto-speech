@@ -96,7 +96,9 @@ Config file search order (first found wins): `$AUTO_SPEECH_AUTOPLAY_CONFIG`
 
 - **One session only:** `/auto-speech-scope solo` makes only the current
   session read aloud; `/auto-speech-scope all` restores every session.
-- **This session off:** `/auto-speech-autoplay-off` (per-session opt-out).
+- **This session on:** `/auto-speech-autoplay-on` — autoplay is opt-IN, so
+  nothing plays until a session enrolls.
+- **This session off:** `/auto-speech-autoplay-off` (withdraws enrollment).
 - **Everything off:** `touch ~/.claude/auto-speech.disabled` (global mute);
   `/auto-speech-autoplay-on` clears it.
 
@@ -105,7 +107,7 @@ Config file search order (first found wins): `$AUTO_SPEECH_AUTOPLAY_CONFIG`
 | Symptom | Check | Likely fix |
 |---------|-------|------------|
 | No audio at all | `/auto-speech-doctor` | `mpv` FAIL → `brew install mpv`; or global mute marker present |
-| One session silent | `/auto-speech-doctor` (scope + queue lines) | a per-session opt-out marker, or SOLO is held by another session |
+| One session silent | `/auto-speech-doctor` (scope + queue lines) | it never enrolled — run `/auto-speech-autoplay-on`; or SOLO is held by another session |
 | Narration never speaks | `doctor` `narrator` + `/tmp/auto-speech-narrator-daemon.out` | provider downgraded to Mock (MLX load failed) — see the daemon log |
 | Config change ignored | `doctor` `config` | a typo/bad type warned there; fix the TOML |
 | Stale "already running" | — | reclaimed automatically on next start (PID-identity guard) |

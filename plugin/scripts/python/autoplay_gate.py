@@ -8,9 +8,9 @@ Recognizes the gating conditions that silence autoplay:
 
 SCOPE NOTE — parity with bash: the worker only RE-CHECKS the global
 disable marker (the user could toggle it off between hook fire and the
-worker reaching its disable check). Per-session opt-out and the
-suppress-hooks guard are enforced in autoplay_hook.sh BEFORE the worker
-is ever spawned. They are modeled here as recognized states for
+worker reaching its disable check). Per-session enrollment (autoplay is
+opt-IN; see autoplay_enrollment.py) and the suppress-hooks guard are
+enforced in autoplay_hook.sh BEFORE the worker is ever spawned. They are modeled here as recognized states for
 completeness, but only worker_gated_off() — the global-disable check —
 gates the worker, preserving the exact bash scope.
 """

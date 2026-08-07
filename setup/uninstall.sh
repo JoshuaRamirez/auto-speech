@@ -123,9 +123,14 @@ if [[ -d "$HOME/.claude/auto-speech-narrate-sessions" ]]; then
     rm -rf "$HOME/.claude/auto-speech-narrate-sessions"
     echo "[uninstall] removed per-session narrate markers ($HOME/.claude/auto-speech-narrate-sessions)"
 fi
+if [[ -d "$HOME/.claude/auto-speech-autoplay-enabled" ]]; then
+    rm -rf "$HOME/.claude/auto-speech-autoplay-enabled"
+    echo "[uninstall] removed autoplay enrollment markers ($HOME/.claude/auto-speech-autoplay-enabled)"
+fi
+# Pre-inversion opt-out markers; harmless but ours to clean up.
 if [[ -d "$HOME/.claude/auto-speech-autoplay-sessions" ]]; then
     rm -rf "$HOME/.claude/auto-speech-autoplay-sessions"
-    echo "[uninstall] removed per-session autoplay markers ($HOME/.claude/auto-speech-autoplay-sessions)"
+    echo "[uninstall] removed legacy per-session autoplay markers ($HOME/.claude/auto-speech-autoplay-sessions)"
 fi
 
 # Remove the recorded project root (written by install-plugin.sh). Only the

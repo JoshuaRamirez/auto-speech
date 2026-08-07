@@ -31,10 +31,10 @@ grep -q 'enqueue_ticket()' "$WORKER" && fail "anchor:no-queue-in-shim" "queue lo
 [[ -f "$WORKER_PY" ]] || fail "anchor:py-exists" "autoplay_worker.py missing"
 ok "anchor:shim-is-thin-and-execs-python"
 
-# ---- Hook anchors: opt-OUT semantics, hook unchanged ----
-grep -q 'SESSION_OPTOUT_DIR' "$HOOK" || fail "anchor:hook-optout" "SESSION_OPTOUT_DIR missing in hook"
-grep -q 'SESSION_OPTIN_DIR' "$HOOK" && fail "anchor:hook-optin-gone" "old SESSION_OPTIN_DIR still present in hook"
-ok "anchor:hook-opt-out-semantics"
+# ---- Hook anchors: opt-IN semantics (autoplay is OFF by default) ----
+grep -q 'SESSION_ENROLL_DIR' "$HOOK" || fail "anchor:hook-optin" "SESSION_ENROLL_DIR missing in hook"
+grep -q 'SESSION_OPTOUT_DIR' "$HOOK" && fail "anchor:hook-optout-gone" "opt-out gating still present in hook"
+ok "anchor:hook-opt-in-semantics"
 
 if ! command -v jq >/dev/null 2>&1; then
     echo
@@ -42,24 +42,46 @@ if ! command -v jq >/dev/null 2>&1; then
     exit $failures
 fi
 
-# ---- Functional: hook exits silently for an opted-out session ----
+# ---- Functional: hook exits silently for a session that never enrolled ----
+# This is the DEFAULT state — no marker anywhere — so it is the case that
+# matters most: a fresh session must stay quiet until asked to speak.
 FAKE_HOME="$(mktemp -d -t auto-speech-hook-test-XXXXXX)"
-mkdir -p "$FAKE_HOME/.claude/auto-speech-autoplay-sessions"
-touch "$FAKE_HOME/.claude/auto-speech-autoplay-sessions/test-session-1"
+mkdir -p "$FAKE_HOME/.claude"
 PAYLOAD='{"session_id":"test-session-1","transcript_path":"/nonexistent.jsonl"}'
 if HOME="$FAKE_HOME" bash "$HOOK" <<<"$PAYLOAD" >/dev/null 2>&1; then
     if [[ -e "/tmp/auto-speech-last-stop.test-session-1" ]]; then
-        fail "hook-optout" "hook proceeded past the opt-out gate (beacon written)"
+        fail "hook-optin" "hook proceeded for a session that never enrolled (beacon written)"
         rm -f "/tmp/auto-speech-last-stop.test-session-1"
     else
-        ok "hook-bails-for-opted-out-session"
+        ok "hook-bails-for-unenrolled-session"
     fi
 else
-    fail "hook-optout-exit" "hook exited non-zero for opted-out session"
+    fail "hook-optin-exit" "hook exited non-zero for unenrolled session"
 fi
 
-# ---- Functional: global mute still silences everything ----
+# ---- Functional: an ENROLLED session gets past the gate ----
+# Guard the spawned worker with an unreachable min-length so it bails
+# before any rewrite or audio, whatever the transcript heuristic finds.
+mkdir -p "$FAKE_HOME/.claude/auto-speech-autoplay-enabled"
+touch "$FAKE_HOME/.claude/auto-speech-autoplay-enabled/test-session-3"
+PAYLOAD3='{"session_id":"test-session-3","transcript_path":"/nonexistent.jsonl"}'
+if HOME="$FAKE_HOME" AUTO_SPEECH_AUTOPLAY_MIN_LEN=99999999 \
+        bash "$HOOK" <<<"$PAYLOAD3" >/dev/null 2>&1; then
+    if [[ -e "/tmp/auto-speech-last-stop.test-session-3" ]]; then
+        ok "hook-proceeds-for-enrolled-session"
+        rm -f "/tmp/auto-speech-last-stop.test-session-3"
+    else
+        fail "hook-optin-enrolled" "hook bailed for an ENROLLED session (no beacon)"
+    fi
+else
+    fail "hook-optin-enrolled-exit" "hook exited non-zero for enrolled session"
+fi
+
+# ---- Functional: global mute overrides an ENROLLED session ----
+# Enrolment is required for this to test anything: an unenrolled session
+# bails at the opt-in gate, which would pass this case vacuously.
 touch "$FAKE_HOME/.claude/auto-speech.disabled"
+touch "$FAKE_HOME/.claude/auto-speech-autoplay-enabled/test-session-2"
 PAYLOAD2='{"session_id":"test-session-2","transcript_path":"/nonexistent.jsonl"}'
 if HOME="$FAKE_HOME" bash "$HOOK" <<<"$PAYLOAD2" >/dev/null 2>&1; then
     if [[ -e "/tmp/auto-speech-last-stop.test-session-2" ]]; then

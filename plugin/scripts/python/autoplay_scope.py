@@ -1,10 +1,10 @@
 """SoloScope: which session, if any, holds the autoplay "spotlight".
 
-Autoplay defaults to ON for every session (the opt-out model enforced by
-AutoplayGate + autoplay_hook.sh). SoloScope adds an orthogonal, opt-IN
-narrowing: when the spotlight marker is present it names exactly ONE
-session id that is allowed to play; every other session is muted for the
-duration. Absent marker => all sessions play (the historical default).
+Autoplay is OFF unless a session enrolls (SessionEnrollment +
+autoplay_hook.sh). SoloScope narrows further, orthogonally: when the
+spotlight marker is present it names exactly ONE session id that is
+allowed to play; every other session is muted for the duration. Absent
+marker => every ENROLLED session plays.
 
   Marker: ~/.claude/auto-speech-autoplay-solo   (contents = session id)
 
