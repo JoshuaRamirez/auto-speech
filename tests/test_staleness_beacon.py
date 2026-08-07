@@ -55,6 +55,43 @@ def test_fresh_beacon_not_stale_advanced_beacon_stale() -> None:
     assert b.state == STALE
 
 
+def test_hook_captured_mtime_is_not_stale() -> None:
+    """Regression: the hook→worker mtime handoff must round-trip.
+
+    Every other test seeds start_mtime from Path.stat().st_mtime directly,
+    which hides how the value actually reaches the worker: autoplay_hook.sh
+    captures it with `stat` and passes it as a decimal STRING on argv. When
+    that capture truncated to whole seconds (`stat -f %m`), the true
+    sub-second mtime was always greater, so EVERY worker declared itself
+    superseded by its own beacon and bailed — autoplay went silent with no
+    error anywhere. This asserts a freshly-stamped beacon reads as FRESH
+    through the real capture path.
+    """
+    import subprocess
+
+    p = _temp_beacon()
+    p.write_text("", encoding="utf-8")
+
+    captured = subprocess.run(
+        f'stat -f %Fm "{p}" 2>/dev/null || stat -c %.9Y "{p}" 2>/dev/null || echo 0',
+        shell=True,
+        capture_output=True,
+        text=True,
+        check=True,
+    ).stdout.strip()
+    assert captured != "0", "no usable stat flavour found for the beacon capture"
+    # The capture must carry sub-second precision, not whole seconds.
+    assert "." in captured, f"beacon mtime capture lost precision: {captured!r}"
+
+    b = StalenessBeacon(start_mtime=float(captured))
+    b._path = p
+    assert b.is_stale() is False, (
+        f"fresh beacon read as stale: captured={captured} "
+        f"actual={p.stat().st_mtime!r}"
+    )
+    assert b.state == FRESH
+
+
 def test_latch_is_monotonic() -> None:
     p = _temp_beacon()
     p.write_text("", encoding="utf-8")
@@ -79,6 +116,7 @@ def main() -> int:
         test_path_derivation,
         test_absent_beacon_is_not_stale,
         test_fresh_beacon_not_stale_advanced_beacon_stale,
+        test_hook_captured_mtime_is_not_stale,
         test_latch_is_monotonic,
     ]
     for t in tests:

@@ -92,8 +92,16 @@ fi
 # beacon files and don't false-stale us.
 : > "$BEACON" 2>/dev/null || true
 
-# Capture the beacon mtime to hand to the worker.
-BEACON_MTIME="$(stat -f %m "$BEACON" 2>/dev/null || echo 0)"
+# Capture the beacon mtime to hand to the worker. FULL PRECISION IS
+# REQUIRED: the worker compares this value against Python's float
+# st_mtime (StalenessBeacon.is_stale). A second-truncated capture
+# (plain `stat -f %m`) is always LESS than the true sub-second mtime, so
+# every worker reads its own beacon as newer, declares itself superseded,
+# and bails — silencing autoplay completely. BSD stat emits fractional
+# seconds with %Fm; GNU stat needs -c %.9Y.
+BEACON_MTIME="$(stat -f %Fm "$BEACON" 2>/dev/null \
+    || stat -c %.9Y "$BEACON" 2>/dev/null \
+    || echo 0)"
 
 # Rotate the worker log before the spawn opens it for append.
 as_rotate_log "$LOG"

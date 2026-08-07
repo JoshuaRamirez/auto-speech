@@ -30,6 +30,14 @@ _LEGAL_NEXT: dict[str, set[str]] = {
 
 BEACON_DEFAULT = "/tmp/auto-speech-last-stop"
 
+# The start mtime arrives as a decimal STRING from the hook (`stat -f %Fm`)
+# and is compared against Python's float st_mtime for the same file. The two
+# round-trips can differ by an ULP, which a bare `>` would read as a newer
+# Stop. Require the beacon to have advanced by at least this much before
+# declaring supersession. Far below the shortest realistic gap between two
+# Stop events, so genuine staleness is still detected.
+MTIME_EPSILON_SECONDS = 1e-3
+
 
 def beacon_path(session_id: str | None) -> Path:
     """Per-session beacon path, or the global default when no session_id."""
@@ -59,7 +67,7 @@ class StalenessBeacon(StateMachine):
         Latches FRESH→STALE the first time staleness is observed so the
         recorded state reflects the supersession permanently.
         """
-        stale = self._current_mtime() > self._start_mtime
+        stale = self._current_mtime() > self._start_mtime + MTIME_EPSILON_SECONDS
         if stale and self.state == FRESH:
             self.transition(STALE)
         return stale
