@@ -75,6 +75,19 @@ class MpvController:
             # Wait (bounded) for any prior session to finish on its own.
             self._wait_for_prior_session()
 
+            # Resync the local record before starting again. A caller that
+            # holds ONE controller for the life of the process (the web
+            # server does; every other caller constructs a fresh one per
+            # playback) is still at READY from its previous start, and
+            # nothing calls stop() on that path — so the IDLE → STARTING
+            # edge below would raise IllegalTransition and 500 every
+            # playback after the first. The prior session is finished by
+            # now (or the wait cap expired and we proceed anyway), so
+            # READY → IDLE — "the mpv process exited on its own" — is the
+            # accurate record, not a workaround.
+            if self._fsm.state == READY:
+                self._fsm.transition(IDLE)
+
             socket_path = SessionDir.socket_path()
             SessionDir.root().mkdir(parents=True, exist_ok=True)
             # Ensure the old socket file is gone so mpv can create its own.

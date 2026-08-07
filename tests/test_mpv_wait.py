@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import inspect
 import sys
+import tempfile
 import time
 from pathlib import Path
 
@@ -26,6 +27,10 @@ class _FakeSessionDir:
         self._answers = list(running_answers)
         self.clear_calls = 0
         self.kill_attempts = 0  # would only move if something signalled us
+        # Session state redirected into a scratch dir so start() never
+        # touches the real /tmp/auto-speech.
+        self._root = Path(tempfile.mkdtemp(prefix="auto-speech-mpv-test-"))
+        self.writes: list[tuple] = []
 
     def is_mpv_running(self) -> bool:
         if len(self._answers) > 1:
@@ -37,6 +42,15 @@ class _FakeSessionDir:
 
     def clear(self) -> None:
         self.clear_calls += 1
+
+    def root(self) -> Path:
+        return self._root
+
+    def socket_path(self) -> Path:
+        return self._root / "control.sock"
+
+    def write(self, pid, wav_path, started_at) -> None:
+        self.writes.append((pid, wav_path, started_at))
 
 
 def _patched(fake: _FakeSessionDir):
@@ -95,6 +109,45 @@ def test_cap_expiry_proceeds_without_killing() -> None:
     assert fake.kill_attempts == 0
 
 
+def test_reused_controller_can_start_twice() -> None:
+    """Regression: a controller held across playbacks must restart cleanly.
+
+    web_server.py keeps ONE MpvController for the life of the process and
+    never calls stop() — /api/end quits mpv over IPC directly. The FSM was
+    therefore still at READY on the next start(), where IDLE → STARTING
+    raised IllegalTransition. Uncaught in both _handle_speak (cache hit)
+    and _handle_replay, so every playback after the first 500'd for the
+    rest of the server's life.
+    """
+    fake = _FakeSessionDir([False])
+    wav = Path(__file__).resolve()  # any existing file; start() only stats it
+
+    class _FakeProc:
+        pid = 4242
+        returncode = None
+
+        def poll(self):
+            return None
+
+    with _patched(fake):
+        orig_which = mpv_controller.shutil.which
+        orig_popen = mpv_controller.subprocess.Popen
+        orig_await = MpvController._await_socket_ready
+        mpv_controller.shutil.which = lambda _n: "/usr/bin/true"
+        mpv_controller.subprocess.Popen = lambda *a, **k: _FakeProc()
+        MpvController._await_socket_ready = lambda self, s, p: None
+        try:
+            ctl = MpvController()
+            ctl.start(wav)
+            assert ctl._fsm.state == mpv_controller.READY
+            ctl.start(wav)  # must not raise IllegalTransition
+            assert ctl._fsm.state == mpv_controller.READY
+        finally:
+            mpv_controller.shutil.which = orig_which
+            mpv_controller.subprocess.Popen = orig_popen
+            MpvController._await_socket_ready = orig_await
+
+
 def test_start_no_longer_kills_prior_session() -> None:
     # Source-level pin: the start() sequence must wait, never terminate.
     src = inspect.getsource(MpvController.start)
@@ -110,6 +163,7 @@ def main() -> int:
         test_no_prior_session_returns_immediately,
         test_waits_until_prior_session_finishes,
         test_cap_expiry_proceeds_without_killing,
+        test_reused_controller_can_start_twice,
         test_start_no_longer_kills_prior_session,
     ]
     for t in tests:
