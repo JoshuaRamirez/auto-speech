@@ -187,6 +187,32 @@ def test_resilient_split_skips_unspeakable_leaf() -> None:
         assert len(wavs) == 2
 
 
+def test_non_string_fields_are_client_errors_not_crashes() -> None:
+    """JSON carries types; a wrong one is a 400, not a 500.
+
+    {"text": 123} used to reach .strip() on an int, raising AttributeError
+    deep in the handler — Flask reported a server fault for what is plainly
+    a malformed request, and the traceback went to the server log.
+    """
+    with tempfile.TemporaryDirectory() as td:
+        server, _ = _make_server(Path(td))
+        client = server._app.test_client()  # noqa: SLF001
+
+        cases = [
+            ("/api/synthesize", {"text": 123}),
+            ("/api/synthesize", {"text": "hi", "voice": 7}),
+            ("/api/speak", {"text": ["a", "b"]}),
+            ("/api/speak", {"text": "hi", "rewrite_timeout_s": "soon"}),
+            ("/api/replay", {"hash": 42}),
+            ("/api/seek", {"target": 5}),
+        ]
+        for route, body in cases:
+            resp = client.post(route, json=body)
+            assert resp.status_code == 400, (
+                f"{route} {body} returned {resp.status_code}, expected 400"
+            )
+
+
 def test_options_preflight() -> None:
     with tempfile.TemporaryDirectory() as td:
         server, _ = _make_server(Path(td))
@@ -287,6 +313,7 @@ def main() -> int:
         test_split_span_granularity,
         test_resilient_split_recovers_from_generate_fault,
         test_resilient_split_skips_unspeakable_leaf,
+        test_non_string_fields_are_client_errors_not_crashes,
         test_options_preflight,
         test_synthesize_not_blocked_by_inflight_rewrite,
         test_cors_denied_for_web_and_absent_origins,

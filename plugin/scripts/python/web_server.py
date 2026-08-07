@@ -180,6 +180,22 @@ def _discover_voices(model_id: str) -> list[str]:
     return usable
 
 
+def _text_field(body: dict, name: str, default: str = "") -> str | None:
+    """Return `body[name]` as a stripped string, or None if it isn't one.
+
+    JSON carries types, and a client sending {"text": 123} reaches here with
+    an int. Calling .strip() on it raises AttributeError deep in the handler
+    and Flask turns that into a 500 — a server-fault status for what is
+    plainly a malformed request. None lets the caller answer 400 instead.
+    """
+    raw = body.get(name)
+    if raw is None:
+        return default
+    if not isinstance(raw, str):
+        return None
+    return raw.strip()
+
+
 def _project_root() -> Path:
     return Path(__file__).resolve().parents[3]
 
@@ -386,7 +402,9 @@ class WebServer:
 
     def _handle_speak(self):
         body = request.get_json(silent=True) or {}
-        text = (body.get("text") or "").strip()
+        text = _text_field(body, "text")
+        if text is None:
+            return jsonify({"error": "text must be a string"}), 400
         rewrite_mode = bool(body.get("rewrite", True))  # Phase 14: default ON
         if not text:
             return jsonify({"error": "text is required"}), 400
@@ -397,7 +415,10 @@ class WebServer:
             text, mode="rewrite" if rewrite_mode else "passthrough"
         )
         # Default 10 min for the rewriter; large pastes legitimately need it.
-        rewrite_timeout = float(body.get("rewrite_timeout_s", 600.0))
+        try:
+            rewrite_timeout = float(body.get("rewrite_timeout_s", 600.0))
+        except (TypeError, ValueError):
+            return jsonify({"error": "rewrite_timeout_s must be a number"}), 400
 
         with self._lock:
             # Cache hits stay synchronous — they finish in ~50 ms and don't
@@ -562,7 +583,9 @@ class WebServer:
             return ("", 204)
 
         body = request.get_json(silent=True) or {}
-        text = (body.get("text") or "").strip()
+        text = _text_field(body, "text")
+        if text is None:
+            return jsonify({"error": "text must be a string"}), 400
         if not text:
             return jsonify({"error": "text is required"}), 400
         if len(text) > _SYNTH_MAX_CHARS:
@@ -571,7 +594,10 @@ class WebServer:
                 413,
             )
 
-        voice_id = (body.get("voice") or self._profile.voice_id).strip()
+        voice_id = _text_field(body, "voice", self._profile.voice_id)
+        if voice_id is None:
+            return jsonify({"error": "voice must be a string"}), 400
+        voice_id = voice_id or self._profile.voice_id
         # Reject an unknown voice up front with a clear 400 (and the valid
         # list) rather than letting Kokoro fail deep with an opaque 500.
         if self._voices and voice_id not in self._voices:
@@ -723,7 +749,10 @@ class WebServer:
 
     def _handle_replay(self):
         body = request.get_json(silent=True) or {}
-        h = (body.get("hash") or "").strip().lower()
+        h = _text_field(body, "hash")
+        if h is None:
+            return jsonify({"error": "hash must be a string"}), 400
+        h = h.lower()
         if not h:
             return jsonify({"error": "hash is required"}), 400
 
@@ -787,7 +816,9 @@ class WebServer:
 
     def _handle_seek(self):
         body = request.get_json(silent=True) or {}
-        target = (body.get("target") or "").strip()
+        target = _text_field(body, "target")
+        if target is None:
+            return jsonify({"error": "target must be a string"}), 400
         if not target:
             return jsonify({"error": "target is required"}), 400
         if not SessionDir.is_mpv_running():
