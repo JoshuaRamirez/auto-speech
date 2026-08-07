@@ -212,12 +212,20 @@ class NarratorService:
                     with EVENTS_LOG.open("rb") as f:
                         f.seek(offset)
                         chunk = f.read(size - offset)
-                        offset = size
-                    self._process_chunk(chunk)
-                    try:
-                        WATERMARK_FILE.write_text(str(offset))
-                    except OSError:
-                        pass
+                    # Consume only up to the last COMPLETE line. A trailing
+                    # partial line means the hook is mid-append; advancing
+                    # the offset past it would drop that event (its head
+                    # fails to parse now) AND the next read's fragment (its
+                    # tail fails to parse then), losing the event silently.
+                    last_newline = chunk.rfind(b"\n")
+                    if last_newline != -1:
+                        consumed = last_newline + 1
+                        offset += consumed
+                        self._process_chunk(chunk[:consumed])
+                        try:
+                            WATERMARK_FILE.write_text(str(offset))
+                        except OSError:
+                            pass
 
             # Idle shutdown
             if time.time() - self._last_event_ts > self._idle_shutdown:

@@ -256,6 +256,63 @@ def test_enqueue_into_zero_free_slots_is_bounded() -> None:
     assert svc._dropped_phases == 2
 
 
+def test_tail_resumes_a_line_split_across_two_reads() -> None:
+    """Regression: an event straddling a poll boundary must not be lost.
+
+    The tail advanced its offset to the full file size regardless of where
+    the last newline fell. A line still being appended when the poll fired
+    was therefore consumed as a fragment (unparseable, dropped), and its
+    remainder was read next poll as another fragment (also dropped) — so
+    the event vanished with no trace, contradicting the loop's own comment
+    that a partial trailing line is picked up next read.
+    """
+    svc = narrator_service.NarratorService.__new__(narrator_service.NarratorService)
+    svc._stop = __import__("threading").Event()
+    svc._idle_shutdown = 1e9  # never idle out during the test
+    svc._last_event_ts = time.time()
+    seen: list[bytes] = []
+    svc._process_chunk = lambda chunk: seen.append(chunk)
+
+    with tempfile.TemporaryDirectory() as d:
+        events = Path(d) / "events.jsonl"
+        watermark = Path(d) / "watermark"
+        line = json.dumps({"event": "PostToolUse", "ts": 1.0, "payload": {}}) + "\n"
+        head, tail = line[:20], line[20:]
+
+        # Start empty: with no watermark the tail resumes at end-of-file, so
+        # the line must be appended AFTER the loop is running to be seen.
+        events.write_text("", encoding="utf-8")
+
+        polls = {"n": 0}
+        real_wait = svc._stop.wait
+
+        def append(part: str) -> None:
+            with events.open("a", encoding="utf-8") as f:
+                f.write(part)
+
+        def wait(_interval):
+            polls["n"] += 1
+            if polls["n"] == 1:
+                append(head)  # writer is mid-append when the next poll fires
+            elif polls["n"] == 2:
+                append(tail)  # writer completes the line
+            else:
+                svc._stop.set()
+            return real_wait(0)
+
+        svc._stop.wait = wait
+        with patch.object(narrator_service, "EVENTS_LOG", events), \
+                patch.object(narrator_service, "WATERMARK_FILE", watermark):
+            svc._tail_events()
+
+    joined = b"".join(seen)
+    assert joined == line.encode("utf-8"), (
+        f"event lost or corrupted across the read boundary: {joined!r}"
+    )
+    for chunk in seen:
+        assert chunk.endswith(b"\n"), f"partial line was consumed: {chunk!r}"
+
+
 def test_config_max_queue_depth_default_and_override() -> None:
     import narrator_config
 
@@ -291,6 +348,7 @@ def main() -> int:
         test_enqueue_under_cap_keeps_all,
         test_enqueue_over_cap_drops_oldest,
         test_enqueue_into_zero_free_slots_is_bounded,
+        test_tail_resumes_a_line_split_across_two_reads,
         test_config_max_queue_depth_default_and_override,
     ]
     for t in tests:

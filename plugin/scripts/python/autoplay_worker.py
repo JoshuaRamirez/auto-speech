@@ -69,6 +69,27 @@ def _int_env(name: str, default: int) -> int:
         return default
 
 
+def _num_env(name: str, cast):
+    """Parse an env var with `cast`, or None when unset/blank/malformed.
+
+    The worker's contract is to ALWAYS exit 0 and log its failures. A bare
+    cast here would let a typo'd override (AUTO_SPEECH_AUTOPLAY_COALESCE=1s)
+    raise before any handler is installed, killing the worker with a
+    traceback and no log line — the one failure mode the contract forbids.
+    """
+    raw = os.environ.get(name)
+    if raw in (None, ""):
+        return None
+    try:
+        return cast(raw)
+    except (TypeError, ValueError):
+        print(
+            f"[worker] ignoring malformed {name}={raw!r}; using config/default",
+            file=sys.stderr,
+        )
+        return None
+
+
 def resolve_config() -> dict:
     """Resolve coalesce / narration-wait / queue-wait / min-len.
 
@@ -97,17 +118,17 @@ def resolve_config() -> dict:
             file=sys.stderr,
         )
 
-    coalesce_env = os.environ.get("AUTO_SPEECH_AUTOPLAY_COALESCE")
-    if coalesce_env not in (None, ""):
-        coalesce = float(coalesce_env)
+    coalesce_env = _num_env("AUTO_SPEECH_AUTOPLAY_COALESCE", float)
+    if coalesce_env is not None:
+        coalesce = coalesce_env
     elif coalesce_cfg is not None:
         coalesce = float(coalesce_cfg)
     else:
         coalesce = 1.0
 
-    narration_env = os.environ.get("AUTO_SPEECH_NARRATION_WAIT_MAX")
-    if narration_env not in (None, ""):
-        narration_wait = int(narration_env)
+    narration_env = _num_env("AUTO_SPEECH_NARRATION_WAIT_MAX", int)
+    if narration_env is not None:
+        narration_wait = narration_env
     elif narration_cfg is not None:
         narration_wait = narration_cfg
     else:
