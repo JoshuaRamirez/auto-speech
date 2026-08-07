@@ -125,12 +125,16 @@ def test_lang_code_for_voice() -> None:
 
 
 def test_split_span_granularity() -> None:
-    from web_server import _split_span
+    # The split/retry logic now lives in the shared SpanSplitter +
+    # ResilientSynthesizer collaborators so the CLI and autoplay paths get
+    # the same recovery the web server had. See test_resilient_synthesizer.py.
+    from span_splitter import SpanSplitter
 
-    assert _split_span("One. Two. Three.") == ["One.", "Two.", "Three."]
-    assert _split_span("alpha, beta; gamma") == ["alpha", "beta", "gamma"]
-    assert _split_span("just four plain words") == ["just four", "plain words"]
-    assert _split_span("single") == ["single"]
+    split = SpanSplitter().split
+    assert split("One. Two. Three.") == ["One.", "Two.", "Three."]
+    assert split("alpha, beta; gamma") == ["alpha", "beta", "gamma"]
+    assert split("just four plain words") == ["just four", "plain words"]
+    assert split("single") == ["single"]
 
 
 def test_resilient_split_recovers_from_generate_fault() -> None:
@@ -150,7 +154,7 @@ def test_resilient_split_recovers_from_generate_fault() -> None:
 
         server._tts.synthesize = flaky  # noqa: SLF001
         out = tmp_path / "chunk.wav"
-        wavs = server._synth_span_resilient(  # noqa: SLF001
+        wavs = server._synth.synthesize_parts(  # noqa: SLF001
             "alpha beta gamma delta epsilon zeta eta", server._profile, out
         )
         assert len(wavs) >= 2
@@ -177,7 +181,7 @@ def test_resilient_split_skips_unspeakable_leaf() -> None:
         server._tts.synthesize = synth  # noqa: SLF001
         out = tmp_path / "chunk.wav"
         # Splits to words; "hello" and "world" speak, lone "★" is skipped.
-        wavs = server._synth_span_resilient(  # noqa: SLF001
+        wavs = server._synth.synthesize_parts(  # noqa: SLF001
             "hello ★ world", server._profile, out
         )
         assert len(wavs) == 2

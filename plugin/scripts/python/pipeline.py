@@ -280,7 +280,30 @@ class PipelineOrchestrator:
                 break
 
         # Invariant I-10.1: concat-iff-success.
-        chunk_paths = [tmpdir / f"chunk-{d.index:03d}.wav" for d in plan]
+        # Join only the chunks that were actually produced. SegmentProducer
+        # now recovers from a content-dependent Kokoro generate fault by
+        # splitting the chunk finer, and drops a chunk outright when nothing
+        # in it is speakable — listing a path it never wrote would fail the
+        # concat and silence the whole message, which is the failure this
+        # recovery exists to prevent.
+        chunk_paths = [
+            p
+            for p in (tmpdir / f"chunk-{d.index:03d}.wav" for d in plan)
+            if p.is_file()
+        ]
+        if not chunk_paths:
+            print(
+                "[pipeline] no chunk audio was produced; nothing to play",
+                file=sys.stderr,
+            )
+            return EXIT_TTS_FAIL
+        if len(chunk_paths) < len(plan):
+            print(
+                f"[pipeline] WARNING: speaking {len(chunk_paths)} of "
+                f"{len(plan)} chunks; {len(plan) - len(chunk_paths)} had no "
+                "synthesizable audio",
+                file=sys.stderr,
+            )
         full_path = tmpdir / "full.wav"
         try:
             WavConcatenator.concat(chunk_paths, full_path)

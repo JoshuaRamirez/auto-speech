@@ -43,6 +43,7 @@ NEEDS_DEPS=(
     test_segment_producer.py
     test_playback_consumer.py
     test_synthesize_endpoint.py
+    test_resilient_synthesizer.py
 )
 
 # Cheap unit tests first — failures here usually indicate a wider problem.
@@ -95,6 +96,7 @@ WEB=(
 HEAVY=(
     test_chunk_planner.py
     test_wav_concat.py
+    test_resilient_synthesizer.py
     test_segment_producer.py
     test_playback_consumer.py
 )

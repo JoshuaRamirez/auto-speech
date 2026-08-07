@@ -77,6 +77,7 @@ from pipeline import (
     EXIT_OK,
     PipelineOrchestrator,
 )
+from resilient_synthesizer import ResilientSynthesizer
 from session_dir import SessionDir
 from short_path import ShortPathStrategy
 from tts_engine import TTSEngine, TTSGenerationError, TTSNoSpeakableContentError
@@ -179,31 +180,6 @@ def _discover_voices(model_id: str) -> list[str]:
     return usable
 
 
-# Depth cap for the resilient synth split (sentence → clause → word-halves).
-_MAX_SPLIT_DEPTH = 4
-
-_SENTENCE_RE = re.compile(r"(?<=[.!?])\s+")
-_CLAUSE_RE = re.compile(r"\s*[,;:—–]\s*")
-
-
-def _split_span(text: str) -> list[str]:
-    """Return the next-finer split of `text` for retry after a generate fault.
-
-    Sentences if there is more than one; else clauses; else the word list
-    halved; else the text unchanged (a single word — the recursion's floor).
-    """
-    text = text.strip()
-    for rx in (_SENTENCE_RE, _CLAUSE_RE):
-        parts = [p.strip() for p in rx.split(text) if p.strip()]
-        if len(parts) > 1:
-            return parts
-    words = text.split()
-    if len(words) > 1:
-        mid = len(words) // 2
-        return [" ".join(words[:mid]), " ".join(words[mid:])]
-    return [text]
-
-
 def _project_root() -> Path:
     return Path(__file__).resolve().parents[3]
 
@@ -258,6 +234,10 @@ class WebServer:
             static_folder=None,
         )
         self._tts = TTSEngine()
+        # Shared recovery wrapper: a span that trips a Kokoro generate
+        # fault is retried finer instead of failing the request. The CLI
+        # and autoplay paths go through the same collaborator.
+        self._synth = ResilientSynthesizer(self._tts)
         self._cache = CacheStore(_cache_root())
         self._mpv = MpvController()
         self._lock = threading.Lock()
@@ -727,7 +707,7 @@ class WebServer:
         part_wavs: list[Path] = []
         for out_path, span_text in spans:
             part_wavs.extend(
-                self._synth_span_resilient(span_text, profile, out_path)
+                self._synth.synthesize_parts(span_text, profile, out_path)
             )
 
         if not part_wavs:
@@ -740,48 +720,6 @@ class WebServer:
         except WavConcatError as exc:
             raise TTSGenerationError(f"chunk concat failed: {exc}") from exc
         return full_wav
-
-    def _synth_span_resilient(
-        self,
-        text: str,
-        profile: VoiceProfile,
-        out_path: Path,
-        depth: int = 0,
-    ) -> list[Path]:
-        """Synthesize `text`, splitting finer on generation failure.
-
-        Returns the WAV paths produced (0..n). An unspeakable span yields
-        an empty list (skipped, not fatal). A span that trips the mlx-audio
-        broadcast bug is split into sentences, then words, and retried; a
-        leaf that still fails is dropped with a log line rather than
-        failing the whole request.
-        """
-        try:
-            self._tts.synthesize(text, profile, out_path)
-            return [out_path]
-        except TTSNoSpeakableContentError:
-            return []  # nothing to say in this span; skip it
-        except TTSGenerationError as exc:
-            parts = _split_span(text)
-            if depth >= _MAX_SPLIT_DEPTH or len(parts) <= 1:
-                print(
-                    f"[web] dropping unsynthesizable span "
-                    f"(depth={depth}) {text[:40]!r}: {exc}",
-                    file=sys.stderr,
-                )
-                return []
-            print(
-                f"[web] span tripped generate bug; splitting into "
-                f"{len(parts)} (depth={depth})",
-                file=sys.stderr,
-            )
-            results: list[Path] = []
-            for i, part in enumerate(parts):
-                sub = out_path.with_name(f"{out_path.stem}-{depth}_{i}.wav")
-                results.extend(
-                    self._synth_span_resilient(part, profile, sub, depth + 1)
-                )
-            return results
 
     def _handle_replay(self):
         body = request.get_json(silent=True) or {}

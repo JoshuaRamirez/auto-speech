@@ -7,7 +7,8 @@ from pathlib import Path
 from audio_transcript import AudioTranscript
 from duration_estimator import DurationEstimator
 from mpv_controller import MpvController, MpvNotInstalledError, MpvStartupError
-from tts_engine import TTSEngine
+from resilient_synthesizer import ResilientSynthesizer
+from tts_engine import TTSEngine, TTSNoSpeakableContentError
 from voice_profile import VoiceProfile
 
 
@@ -32,7 +33,15 @@ class ShortPathStrategy:
         stop_event: threading.Event,
     ) -> int:
         wav_path = tmpdir / "full.wav"
-        tts_engine.synthesize(transcript.text, voice_profile, wav_path)
+        # Recover from a content-dependent Kokoro generate fault by
+        # retrying the offending span finer, rather than failing the run.
+        produced = ResilientSynthesizer(tts_engine).synthesize_one(
+            transcript.text, voice_profile, wav_path
+        )
+        if not produced:
+            raise TTSNoSpeakableContentError(
+                "no speakable audio recovered from transcript"
+            )
         if stop_event.is_set():
             return 130
         try:
