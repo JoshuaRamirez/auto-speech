@@ -25,8 +25,15 @@ fi
 
 if [[ -d "$ENROLL_DIR" ]] && [[ -n "$(ls -A "$ENROLL_DIR" 2>/dev/null)" ]]; then
     COUNT=$(ls "$ENROLL_DIR" 2>/dev/null | wc -l | tr -d ' ')
-    OTHER=$((COUNT - $([[ -e "$SESSION_MARKER" ]] && echo 1 || echo 0)))
-    echo "  enroll dir:     $COUNT session(s) enrolled ($OTHER other than this one)"
+    # "other than this one" is only meaningful when we have a real session
+    # id and can tell whether its marker is among the enrolled count.
+    # Unset CLAUDE_CODE_SESSION_ID leaves SESSION_MARKER at NO_SESSION_ID.
+    if [[ -n "$SESSION_ID" ]]; then
+        OTHER=$((COUNT - $([[ -e "$SESSION_MARKER" ]] && echo 1 || echo 0)))
+        echo "  enroll dir:     $COUNT session(s) enrolled ($OTHER other than this one)"
+    else
+        echo "  enroll dir:     $COUNT session(s) enrolled"
+    fi
 else
     echo "  enroll dir:     absent or empty → no session has enrolled"
 fi

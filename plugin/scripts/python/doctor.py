@@ -113,7 +113,8 @@ class Doctor:
             r.add(
                 "jq",
                 Status.WARN,
-                "missing — session id cannot be parsed; autoplay cannot enroll (brew install jq)",
+                "missing — Stop hook cannot parse session id from the payload; "
+                "autoplay stays silent (brew install jq)",
             )
 
     def _check_venv(self, r: HealthReport) -> None:

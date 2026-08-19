@@ -18,7 +18,7 @@ classifies each as **OK / WARN / FAIL** (any FAIL ⇒ non-zero exit):
 |-------|-----------|-----------|
 | `mpv` | binary missing (no playback) | — |
 | `uv` | — | missing (can't install/update) |
-| `jq` | — | missing (session id cannot be parsed; autoplay cannot enroll) |
+| `jq` | — | missing (Stop hook cannot parse session id from the payload; autoplay stays silent) |
 | `venv` | interpreter absent | — |
 | `disk` | `/tmp` free < 50 MiB | < 200 MiB |
 | `logs` | — | a log exceeds the rotation cap (rotation lagging) |
