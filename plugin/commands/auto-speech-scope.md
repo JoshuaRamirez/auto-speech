@@ -6,16 +6,17 @@ allowed-tools: Bash
 
 You are executing `/auto-speech-scope` for the auto-speech plugin.
 
-This toggles the autoplay **spotlight**. Autoplay is ON for every session
-by default (ALL scope). `solo` claims the spotlight for THIS session, so
+This toggles the autoplay **spotlight**. Autoplay is OFF unless a session
+enrolls (`/auto-speech-autoplay-on`). ALL scope (the default) lets every
+enrolled session read; `solo` claims the spotlight for THIS session, so
 only this session reads aloud and every other session is muted until you
-switch back to `all`.
+switch back to `all`. Soloing this session also enrolls it.
 
 ## Argument
 
 Parse `$ARGUMENTS` (case-insensitive, trimmed):
 - empty / whitespace → action is `show`
-- `all` → scope=all (every session reads; the default)
+- `all` → scope=all (every enrolled session reads; the default)
 - `solo` | `this` | `one` | `only` → scope=solo (only THIS session reads)
 - anything else → respond `scope: unknown value <value> (expected all | solo)` and stop.
 
@@ -39,7 +40,7 @@ rm -f "$HOME/.claude/auto-speech-autoplay-solo"
 echo "scope-all"
 ```
 
-Respond with one line: `autoplay scope: ALL — every session reads`.
+Respond with one line: `autoplay scope: ALL — every enrolled session reads`.
 
 ## set solo
 

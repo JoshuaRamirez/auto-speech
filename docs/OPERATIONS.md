@@ -18,6 +18,7 @@ classifies each as **OK / WARN / FAIL** (any FAIL ⇒ non-zero exit):
 |-------|-----------|-----------|
 | `mpv` | binary missing (no playback) | — |
 | `uv` | — | missing (can't install/update) |
+| `jq` | — | missing (session id cannot be parsed; autoplay cannot enroll) |
 | `venv` | interpreter absent | — |
 | `disk` | `/tmp` free < 50 MiB | < 200 MiB |
 | `logs` | — | a log exceeds the rotation cap (rotation lagging) |
@@ -25,15 +26,16 @@ classifies each as **OK / WARN / FAIL** (any FAIL ⇒ non-zero exit):
 | `queue` | — | narration queue saturated (dropping oldest) |
 | `config` | — | a user config has an unknown key / bad type / bad enum |
 | `updates` | — | venv out of sync with `uv.lock` (run `bash setup/bootstrap.sh --force`) |
-| `scope`, `autoplay` | — | informational (ALL/SOLO, global mute) |
+| `scope`, `autoplay` | — | informational (opt-IN, ALL/SOLO, global mute) |
 
 A WARN means "degraded but running"; only a FAIL is "broken".
 
 ## Running unattended
 
-Nothing special is required — autoplay is on by default and the narrator
-daemon idle-exits between bursts of work. The properties that make multi-day
-unattended operation safe:
+Autoplay is opt-IN: nothing plays until a session enrolls with
+`/auto-speech-autoplay-on`. The narrator daemon idle-exits between
+bursts of work. The properties that make multi-day unattended
+operation safe:
 
 - **Logs are size-capped** (default 5 MiB, 3 backups). They cannot fill
   `/tmp`. Tune with `AUTO_SPEECH_LOG_MAX_BYTES` / `AUTO_SPEECH_LOG_BACKUPS`.
@@ -95,7 +97,8 @@ Config file search order (first found wins): `$AUTO_SPEECH_AUTOPLAY_CONFIG`
 ## Muting & scoping
 
 - **One session only:** `/auto-speech-scope solo` makes only the current
-  session read aloud; `/auto-speech-scope all` restores every session.
+  session read aloud; `/auto-speech-scope all` restores ALL scope (every
+  enrolled session).
 - **This session on:** `/auto-speech-autoplay-on` — autoplay is opt-IN, so
   nothing plays until a session enrolls.
 - **This session off:** `/auto-speech-autoplay-off` (withdraws enrollment).

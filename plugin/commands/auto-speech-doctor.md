@@ -1,5 +1,5 @@
 ---
-description: Health check for auto-speech — binaries, disk headroom, log sizes, narrator daemon, queue depth, autoplay scope. Add `json` for machine-readable output. Exits non-zero when unhealthy.
+description: Health check for auto-speech — binaries (mpv, uv, jq), disk headroom, log sizes, narrator daemon, queue depth, autoplay scope. Add `json` for machine-readable output. Exits non-zero when unhealthy.
 argument-hint: "[json]"
 allowed-tools: Bash
 ---
