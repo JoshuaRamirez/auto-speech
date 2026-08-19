@@ -107,6 +107,15 @@ class Doctor:
             r.add("uv", Status.OK, "found")
         else:
             r.add("uv", Status.WARN, "missing — install/update unavailable (brew install uv)")
+        if self._which("jq"):
+            r.add("jq", Status.OK, "found (session id parsing)")
+        else:
+            r.add(
+                "jq",
+                Status.WARN,
+                "missing — Stop hook cannot parse session id from the payload; "
+                "autoplay stays silent (brew install jq)",
+            )
 
     def _check_venv(self, r: HealthReport) -> None:
         if os.access(self._venv_python, os.X_OK):
@@ -175,11 +184,11 @@ class Doctor:
         if (self._home / ".claude" / "auto-speech.disabled").exists():
             r.add("autoplay", Status.WARN, "globally muted (~/.claude/auto-speech.disabled present)")
         else:
-            r.add("autoplay", Status.OK, "enabled (default)")
+            r.add("autoplay", Status.OK, "opt-IN (off until a session enrolls)")
         scope = SoloScope(home=self._home)
         held = scope.current()
         if held is None:
-            r.add("scope", Status.OK, "ALL — every session reads")
+            r.add("scope", Status.OK, "ALL — every enrolled session reads")
         else:
             r.add("scope", Status.OK, f"SOLO — only session {held} reads")
 

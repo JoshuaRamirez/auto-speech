@@ -98,7 +98,7 @@ def test_whitespace_marker_reads_as_all() -> None:
 
 def test_format_status() -> None:
     s = SoloScope(home=_home())
-    assert "ALL" in format_status(s, "sess-A")
+    assert "every enrolled session reads" in format_status(s, "sess-A")
     s.set_solo("sess-A")
     assert "THIS session" in format_status(s, "sess-A")
     assert "muted" in format_status(s, "sess-B")

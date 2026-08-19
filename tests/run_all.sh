@@ -62,6 +62,7 @@ CHEAP=(
     test_autoplay_gate.py
     test_autoplay_scope.py
     test_autoplay_enrollment.py
+    test_leftover_optout_docs.py
     test_autoplay_worker.py
     test_job_tracker.py
     test_narrator_phase_classifier.py

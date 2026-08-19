@@ -88,7 +88,7 @@ def format_status(scope: SoloScope, session_id: str | None) -> str:
     """One-line, human-readable scope summary for the CLI / status script."""
     held = scope.current()
     if held is None:
-        return "autoplay scope: ALL — every session reads (default)"
+        return "autoplay scope: ALL — every enrolled session reads (default)"
     if session_id and held == session_id:
         return f"autoplay scope: SOLO — only THIS session reads (spotlight={held})"
     return (

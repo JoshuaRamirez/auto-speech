@@ -54,10 +54,13 @@ def test_healthy_baseline() -> None:
         assert report.healthy is True
         assert report.exit_code == 0
         assert _check(report, "mpv").status is Status.OK
+        assert _check(report, "jq").status is Status.OK
         assert _check(report, "venv").status is Status.OK
         assert _check(report, "disk").status is Status.OK
         assert _check(report, "narrator").status is Status.OK  # not running = OK
         assert _check(report, "scope").status is Status.OK
+        assert "enrolled" in _check(report, "scope").detail
+        assert "opt-IN" in _check(report, "autoplay").detail
 
 
 def test_missing_mpv_is_fail() -> None:
@@ -73,6 +76,27 @@ def test_missing_uv_is_only_warn() -> None:
         report = _doctor(Path(h), Path(t), which=lambda n: None if n == "uv" else "/usr/bin/x").run()
         assert _check(report, "uv").status is Status.WARN
         assert report.healthy is True  # uv missing degrades, not breaks
+
+
+def test_missing_jq_is_only_warn() -> None:
+    with tempfile.TemporaryDirectory() as h, tempfile.TemporaryDirectory() as t:
+        report = _doctor(Path(h), Path(t), which=lambda n: None if n == "jq" else "/usr/bin/x").run()
+        jq = _check(report, "jq")
+        assert jq.status is Status.WARN
+        assert "session id" in jq.detail
+        assert report.healthy is True  # jq missing degrades autoplay, not all audio
+
+
+def test_autoplay_reports_opt_in_not_enabled_default() -> None:
+    with tempfile.TemporaryDirectory() as h, tempfile.TemporaryDirectory() as t:
+        report = _doctor(Path(h), Path(t)).run()
+        autoplay = _check(report, "autoplay")
+        assert autoplay.status is Status.OK
+        assert "opt-IN" in autoplay.detail
+        assert "enabled (default)" not in autoplay.detail
+        scope = _check(report, "scope")
+        assert "every enrolled session reads" in scope.detail
+        assert "every session reads" not in scope.detail.replace("every enrolled session reads", "")
 
 
 def test_missing_venv_is_fail() -> None:
@@ -182,7 +206,9 @@ def test_json_shape_and_exit() -> None:
         report = _doctor(Path(h), Path(t)).run()
         obj = json.loads(report.to_json())
         assert obj["healthy"] is True
-        assert {c["name"] for c in obj["checks"]} >= {"mpv", "venv", "disk", "logs", "narrator", "queue", "scope"}
+        assert {c["name"] for c in obj["checks"]} >= {
+            "mpv", "uv", "jq", "venv", "disk", "logs", "narrator", "queue", "scope", "autoplay",
+        }
 
 
 def main() -> int:
@@ -190,6 +216,8 @@ def main() -> int:
         test_healthy_baseline,
         test_missing_mpv_is_fail,
         test_missing_uv_is_only_warn,
+        test_missing_jq_is_only_warn,
+        test_autoplay_reports_opt_in_not_enabled_default,
         test_missing_venv_is_fail,
         test_low_disk_is_fail,
         test_oversize_log_warns_but_healthy,
