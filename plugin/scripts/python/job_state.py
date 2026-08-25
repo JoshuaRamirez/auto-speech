@@ -8,10 +8,9 @@ See ADR-014 + docs/micro-design/phase-17-fire-and-forget-speak.md.
 """
 from __future__ import annotations
 
-from dataclasses import dataclass, asdict
+from dataclasses import asdict, dataclass
 
 from state_machine import StateMachine
-
 
 PHASE_QUEUED = "queued"
 PHASE_REWRITING = "rewriting"

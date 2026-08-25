@@ -7,7 +7,7 @@ from __future__ import annotations
 import argparse
 import json
 import sys
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 
 from calibration_run import CalibrationRun
@@ -15,7 +15,6 @@ from tts_engine import TTSEngine
 from voice_profile import VoiceProfile
 from voice_profile_store import VoiceProfileStore
 from wav_inspector import WavInspector
-
 
 DEFAULT_VOICE_ID = "af_heart"
 DEFAULT_SPEED = 1.0
@@ -86,7 +85,7 @@ class Calibrator:
             voice_id=voice_id,
             speed=speed,
             chars_per_second=1.0,
-            calibrated_at=datetime.now(timezone.utc).isoformat(timespec="seconds").replace("+00:00", "Z"),
+            calibrated_at=datetime.now(UTC).isoformat(timespec="seconds").replace("+00:00", "Z"),
             calibration_source_chars=char_count,
         )
 
@@ -105,7 +104,7 @@ class Calibrator:
                 f"[{SANITY_MIN_CPS}, {SANITY_MAX_CPS}]"
             )
 
-        now = datetime.now(timezone.utc).isoformat(timespec="seconds").replace("+00:00", "Z")
+        now = datetime.now(UTC).isoformat(timespec="seconds").replace("+00:00", "Z")
         profile = VoiceProfile(
             voice_id=voice_id,
             speed=speed,

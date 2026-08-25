@@ -9,7 +9,6 @@ from duration_estimator import DurationEstimator
 from fibonacci import FibonacciSeq
 from voice_profile import VoiceProfile
 
-
 DEFAULT_BASE_DURATION_SECONDS = 4.0
 DEFAULT_TOLERANCE = 0.25
 

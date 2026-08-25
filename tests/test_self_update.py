@@ -13,7 +13,7 @@ from pathlib import Path
 SRC = Path(__file__).resolve().parents[1] / "plugin" / "scripts" / "python"
 sys.path.insert(0, str(SRC))
 
-import self_update as su  # noqa: E402
+import self_update as su
 
 
 def _tmp(content: bytes = b"lock-v1") -> Path:

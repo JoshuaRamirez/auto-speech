@@ -21,7 +21,7 @@ sys.path.insert(0, str(SRC))
 
 # Import the module so we can both call load_config() AND clear the env
 # var between cases without leaking state.
-import narrator_config  # noqa: E402
+import narrator_config
 
 
 def _with_override(toml_body: str):

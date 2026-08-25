@@ -1,7 +1,7 @@
 """VoiceProfile: calibrated voice record."""
 from __future__ import annotations
 
-from dataclasses import dataclass, asdict
+from dataclasses import asdict, dataclass
 
 
 @dataclass(frozen=True)
@@ -23,7 +23,7 @@ class VoiceProfile:
         return asdict(self)
 
     @classmethod
-    def from_dict(cls, data: dict) -> "VoiceProfile":
+    def from_dict(cls, data: dict) -> VoiceProfile:
         return cls(
             voice_id=data["voice_id"],
             speed=float(data["speed"]),

@@ -9,12 +9,12 @@ from pathlib import Path
 SRC = Path(__file__).resolve().parents[1] / "plugin" / "scripts" / "python"
 sys.path.insert(0, str(SRC))
 
-from audio_transcript import AudioTranscript  # noqa: E402
-from chunk_planner import ChunkPlanner  # noqa: E402
-from playback_queue import PlaybackQueue, SENTINEL  # noqa: E402
-from segment_producer import SegmentProducer  # noqa: E402
-from tts_engine import TTSEngine  # noqa: E402
-from voice_profile_store import VoiceProfileStore  # noqa: E402
+from audio_transcript import AudioTranscript
+from chunk_planner import ChunkPlanner
+from playback_queue import SENTINEL, PlaybackQueue
+from segment_producer import SegmentProducer
+from tts_engine import TTSEngine
+from voice_profile_store import VoiceProfileStore
 
 
 def main() -> int:

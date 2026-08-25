@@ -40,7 +40,7 @@ def load_config() -> dict:
                 raw = tomllib.loads(p.read_text(encoding="utf-8"))
                 config_path = p
                 break
-            except Exception as exc:
+            except (OSError, UnicodeDecodeError, tomllib.TOMLDecodeError, TypeError) as exc:
                 print(f"[narrator] could not parse {p}: {exc}", file=sys.stderr)
 
     section = (raw.get("narrator") if isinstance(raw, dict) else {}) or {}

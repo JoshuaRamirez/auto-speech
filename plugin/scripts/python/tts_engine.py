@@ -14,9 +14,7 @@ import wave
 from pathlib import Path
 
 import numpy as np
-
 from voice_profile import VoiceProfile
-
 
 KOKORO_SAMPLE_RATE = 24000
 

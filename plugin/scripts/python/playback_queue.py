@@ -4,7 +4,6 @@ from __future__ import annotations
 import queue
 from typing import Any
 
-
 SENTINEL: Any = object()
 
 

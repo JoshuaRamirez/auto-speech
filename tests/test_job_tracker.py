@@ -12,14 +12,14 @@ from pathlib import Path
 SRC = Path(__file__).resolve().parents[1] / "plugin" / "scripts" / "python"
 sys.path.insert(0, str(SRC))
 
-from job_state import (  # noqa: E402
+from job_state import (
     PHASE_FAILED,
     PHASE_GENERATING,
     PHASE_HANDED_OFF,
     PHASE_QUEUED,
     PHASE_REWRITING,
 )
-from job_tracker import JobTracker  # noqa: E402
+from job_tracker import JobTracker
 
 
 def test_begin_creates_queued_active_job() -> None:

@@ -12,8 +12,8 @@ from pathlib import Path
 SRC = Path(__file__).resolve().parents[1] / "plugin" / "scripts" / "python"
 sys.path.insert(0, str(SRC))
 
-from state_machine import IllegalTransition  # noqa: E402
-from worker_lifecycle import (  # noqa: E402
+from state_machine import IllegalTransition
+from worker_lifecycle import (
     AWAITING_TURN,
     BAILED,
     COALESCING,

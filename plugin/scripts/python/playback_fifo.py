@@ -93,7 +93,7 @@ class PlaybackFifo:
         self._log(f"enqueued ticket {self._ticket.name}")
         return self._ticket
 
-    def _on_signal(self, signum, frame) -> None:  # noqa: ANN001
+    def _on_signal(self, signum, frame) -> None:
         self.release()
         # Restore default disposition and re-raise so the process terminates.
         signal.signal(signum, signal.SIG_DFL)

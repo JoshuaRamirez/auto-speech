@@ -9,7 +9,7 @@ from pathlib import Path
 SRC = Path(__file__).resolve().parents[1] / "plugin" / "scripts" / "python"
 sys.path.insert(0, str(SRC))
 
-from wav_concatenator import WavConcatError, WavConcatenator  # noqa: E402
+from wav_concatenator import WavConcatenator, WavConcatError
 
 
 def _write_sine_wav(path: Path, frames: int, rate: int = 24000) -> None:

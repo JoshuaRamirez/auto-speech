@@ -1,7 +1,7 @@
 """CacheEntry: one persisted cache entry's metadata."""
 from __future__ import annotations
 
-from dataclasses import dataclass, asdict
+from dataclasses import asdict, dataclass
 
 
 @dataclass(frozen=True)
@@ -20,7 +20,7 @@ class CacheEntry:
         return asdict(self)
 
     @classmethod
-    def from_dict(cls, data: dict) -> "CacheEntry":
+    def from_dict(cls, data: dict) -> CacheEntry:
         return cls(
             source_hash=str(data["source_hash"]),
             voice_id=str(data["voice_id"]),

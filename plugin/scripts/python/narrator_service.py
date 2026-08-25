@@ -69,6 +69,7 @@ def _pid_cmdline(pid: int) -> str:
             capture_output=True,
             text=True,
             timeout=2,
+            check=False,
         )
     except (OSError, subprocess.SubprocessError):
         return ""
@@ -185,7 +186,7 @@ class NarratorService:
             _log("shutdown")
         return 0
 
-    def _on_signal(self, signum, frame):  # noqa: ARG002
+    def _on_signal(self, signum, frame):
         _log(f"signal {signum} → shutting down")
         if self._fsm.can(SIGNAL_SHUTDOWN):
             self._fsm.transition(SIGNAL_SHUTDOWN)  # RUNNING → SIGNAL_SHUTDOWN
@@ -370,7 +371,7 @@ class NarratorService:
         later instead."""
         try:
             self._get_summarizer()
-        except Exception as exc:
+        except Exception as exc:  # noqa: BLE001 — boot must not die on load
             _log(f"eager-load failed (will retry lazily on first phase): {exc!r}")
 
     def _tts_worker(self) -> None:
@@ -383,7 +384,7 @@ class NarratorService:
                 line = summ.summarize(phase)
                 if line:
                     self._speak(line)
-            except Exception as exc:
+            except Exception as exc:  # noqa: BLE001 — keep the worker loop alive
                 _log(f"tts_worker error: {exc!r}")
             finally:
                 self._tts_queue.task_done()
@@ -423,6 +424,7 @@ class NarratorService:
             capture_output=True,
             timeout=120,
             env=env,
+            check=False,
         )
         if proc.returncode != 0:
             _log(f"speak rc={proc.returncode} stderr={proc.stderr.decode(errors='replace')[:200]}")

@@ -4,7 +4,7 @@ from __future__ import annotations
 import threading
 
 from afplay_launcher import AfplayLauncher
-from playback_queue import PlaybackQueue, SENTINEL
+from playback_queue import SENTINEL, PlaybackQueue
 
 
 class PlaybackError(RuntimeError):

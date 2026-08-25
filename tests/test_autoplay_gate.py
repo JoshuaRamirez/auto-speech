@@ -13,7 +13,7 @@ from pathlib import Path
 SRC = Path(__file__).resolve().parents[1] / "plugin" / "scripts" / "python"
 sys.path.insert(0, str(SRC))
 
-from autoplay_gate import (  # noqa: E402
+from autoplay_gate import (
     DISABLED_GLOBAL,
     ENABLED,
     SUPPRESSED,

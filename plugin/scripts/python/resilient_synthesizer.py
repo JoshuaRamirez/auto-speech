@@ -31,7 +31,7 @@ from tts_engine import (
     TTSNoSpeakableContentError,
 )
 from voice_profile import VoiceProfile
-from wav_concatenator import WavConcatError, WavConcatenator
+from wav_concatenator import WavConcatenator, WavConcatError
 
 # Depth cap for the retry split (sentence → clause → word-halves → floor).
 MAX_SPLIT_DEPTH = 4

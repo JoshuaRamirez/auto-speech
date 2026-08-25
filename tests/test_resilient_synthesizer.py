@@ -21,10 +21,10 @@ from pathlib import Path
 SRC = Path(__file__).resolve().parents[1] / "plugin" / "scripts" / "python"
 sys.path.insert(0, str(SRC))
 
-from resilient_synthesizer import ResilientSynthesizer  # noqa: E402
-from span_splitter import SpanSplitter  # noqa: E402
-from tts_engine import TTSGenerationError, TTSNoSpeakableContentError  # noqa: E402
-from voice_profile import VoiceProfile  # noqa: E402
+from resilient_synthesizer import ResilientSynthesizer
+from span_splitter import SpanSplitter
+from tts_engine import TTSGenerationError, TTSNoSpeakableContentError
+from voice_profile import VoiceProfile
 
 POISON = "zzpoisonzz"
 

@@ -5,7 +5,8 @@ import shutil
 import sys
 import tempfile
 import threading
-from datetime import datetime, timezone
+import wave
+from datetime import UTC, datetime
 from pathlib import Path
 
 from audio_transcript import AudioTranscript
@@ -27,9 +28,8 @@ from short_path import ShortPathStrategy
 from tts_engine import TTSEngine, TTSGenerationError
 from voice_profile import VoiceProfile
 from voice_profile_store import VoiceProfileStore
-from wav_concatenator import WavConcatError, WavConcatenator
+from wav_concatenator import WavConcatenator, WavConcatError
 from wav_inspector import WavInspector
-
 
 EXIT_OK = 0
 EXIT_REWRITE_FAIL = 4
@@ -149,7 +149,7 @@ class PipelineOrchestrator:
         tmpdir = Path(
             tempfile.mkdtemp(
                 prefix=f"auto-speech-"
-                f"{datetime.now(timezone.utc).strftime('%Y%m%dT%H%M%S')}-"
+                f"{datetime.now(UTC).strftime('%Y%m%dT%H%M%S')}-"
             )
         )
         print(
@@ -214,7 +214,7 @@ class PipelineOrchestrator:
             return EXIT_TTS_FAIL
         try:
             duration = WavInspector.duration_seconds(full_wav)
-        except Exception as exc:
+        except (OSError, ValueError, wave.Error) as exc:
             print(f"[pipeline] promote inspect failed: {exc}", file=sys.stderr)
             return EXIT_TTS_FAIL
         entry = CacheEntry(
@@ -223,7 +223,7 @@ class PipelineOrchestrator:
             speed=profile.speed,
             char_count=transcript.char_count,
             duration_seconds=duration,
-            created_at=datetime.now(timezone.utc)
+            created_at=datetime.now(UTC)
             .isoformat(timespec="seconds")
             .replace("+00:00", "Z"),
             chars_per_second_at_creation=profile.chars_per_second,
@@ -262,7 +262,7 @@ class PipelineOrchestrator:
         producer = SegmentProducer(tts_engine, profile, tmpdir, queue, stop_event)
         try:
             producer.run(plan)
-        except Exception as exc:
+        except Exception as exc:  # noqa: BLE001 — producer re-raises any failure
             # SegmentProducer.run records the error (producer.error) before
             # re-raising; surface a one-line trail here too so the failure is
             # visible in the log, not just inferable from the exit code.

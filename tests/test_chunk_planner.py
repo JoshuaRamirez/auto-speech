@@ -9,9 +9,9 @@ from pathlib import Path
 SRC = Path(__file__).resolve().parents[1] / "plugin" / "scripts" / "python"
 sys.path.insert(0, str(SRC))
 
-from audio_transcript import AudioTranscript  # noqa: E402
-from chunk_planner import ChunkPlanner  # noqa: E402
-from voice_profile import VoiceProfile  # noqa: E402
+from audio_transcript import AudioTranscript
+from chunk_planner import ChunkPlanner
+from voice_profile import VoiceProfile
 
 
 def _profile() -> VoiceProfile:

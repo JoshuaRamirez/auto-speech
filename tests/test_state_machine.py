@@ -13,7 +13,7 @@ from pathlib import Path
 SRC = Path(__file__).resolve().parents[1] / "plugin" / "scripts" / "python"
 sys.path.insert(0, str(SRC))
 
-from state_machine import IllegalTransition, StateMachine  # noqa: E402
+from state_machine import IllegalTransition, StateMachine
 
 
 def _machine() -> StateMachine:

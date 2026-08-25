@@ -8,7 +8,10 @@ daemon OK path, scope reporting, exit codes, and JSON shape.
 """
 from __future__ import annotations
 
+import contextlib
+import io
 import json
+import os
 import sys
 import tempfile
 from pathlib import Path
@@ -17,8 +20,8 @@ from types import SimpleNamespace
 SRC = Path(__file__).resolve().parents[1] / "plugin" / "scripts" / "python"
 sys.path.insert(0, str(SRC))
 
-import doctor as doc  # noqa: E402
-from health_report import Status  # noqa: E402
+import doctor as doc
+from health_report import Status
 
 GIB = 1024 * 1024 * 1024
 
@@ -32,14 +35,14 @@ def _disk_free(n):
 
 
 def _doctor(home, tmp, **over):
-    kw = dict(
-        home=home,
-        tmp=tmp,
-        venv_python=Path(sys.executable),  # a real executable → venv OK
-        which=_which_all,
-        disk_usage=_disk_free(5 * GIB),
-        daemon_alive=lambda _pid: False,
-    )
+    kw = {
+        "home": home,
+        "tmp": tmp,
+        "venv_python": Path(sys.executable),  # a real executable → venv OK
+        "which": _which_all,
+        "disk_usage": _disk_free(5 * GIB),
+        "daemon_alive": lambda _pid: False,
+    }
     kw.update(over)
     return doc.Doctor(**kw)
 
@@ -201,6 +204,50 @@ def test_updates_out_of_sync_warns() -> None:
         assert report.healthy is True  # out-of-sync degrades, doesn't break
 
 
+def test_main_survives_non_table_narrator_section() -> None:
+    """A valid-TOML non-table `narrator` must not traceback out of main().
+
+    load_config() does section.get(...) on whatever raw["narrator"] is; a
+    string/int/true raises AttributeError. Doctor.main() has to keep going
+    so _check_config can report "[narrator] is not a table".
+    """
+    with tempfile.TemporaryDirectory() as h:
+        home = Path(h)
+        cfg_dir = home / ".config" / "auto-speech"
+        cfg_dir.mkdir(parents=True)
+        (cfg_dir / "narrator.toml").write_text('narrator = "bad"\n', encoding="utf-8")
+        saved_home = os.environ.get("HOME")
+        saved_override = os.environ.pop("AUTO_SPEECH_NARRATOR_CONFIG", None)
+        os.environ["HOME"] = str(home)
+        try:
+            import narrator_config
+
+            try:
+                narrator_config.load_config()
+            except AttributeError:
+                pass
+            else:
+                raise AssertionError(
+                    "non-table narrator must raise AttributeError from load_config"
+                )
+
+            buf = io.StringIO()
+            with contextlib.redirect_stdout(buf):
+                rc = doc.main(["doctor", "--json"])
+            obj = json.loads(buf.getvalue())
+            assert isinstance(rc, int)
+            assert "checks" in obj
+            cfg = next(c for c in obj["checks"] if c["name"] == "config")
+            assert "is not a table" in cfg["detail"]
+        finally:
+            if saved_home is None:
+                os.environ.pop("HOME", None)
+            else:
+                os.environ["HOME"] = saved_home
+            if saved_override is not None:
+                os.environ["AUTO_SPEECH_NARRATOR_CONFIG"] = saved_override
+
+
 def test_json_shape_and_exit() -> None:
     with tempfile.TemporaryDirectory() as h, tempfile.TemporaryDirectory() as t:
         report = _doctor(Path(h), Path(t)).run()
@@ -229,6 +276,7 @@ def main() -> int:
         test_clean_config_ok,
         test_updates_in_sync_ok,
         test_updates_out_of_sync_warns,
+        test_main_survives_non_table_narrator_section,
         test_json_shape_and_exit,
     ]
     for t in tests:

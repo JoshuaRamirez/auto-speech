@@ -6,7 +6,6 @@ from __future__ import annotations
 
 import re
 
-
 _PARAGRAPH_BREAK = re.compile(r"\n[ \t]*\n")
 _SENTENCE_END = re.compile(r"[.!?](?=\s|$)")
 _CLAUSE_END = re.compile(r"[,;:](?=\s|$)")

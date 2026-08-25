@@ -8,13 +8,12 @@ import signal
 import subprocess
 import sys
 import time
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 
 from mpv_ipc import MpvIpc, MpvIpcError
 from playback_state import IDLE, READY, STARTING, STOPPING, PlaybackStateMachine
 from session_dir import SessionDir
-
 
 # Serializes the wait-for-prior + spawn + await-socket sequence across
 # every process that calls MpvController.start() — autoplay workers,
@@ -116,7 +115,7 @@ class MpvController:
                 close_fds=True,
             )
             started_at = (
-                datetime.now(timezone.utc)
+                datetime.now(UTC)
                 .isoformat(timespec="seconds")
                 .replace("+00:00", "Z")
             )

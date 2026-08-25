@@ -42,10 +42,9 @@ import time
 import traceback
 import wave
 from concurrent.futures import ThreadPoolExecutor
-from datetime import datetime, timezone
+from contextlib import suppress
+from datetime import UTC, datetime
 from pathlib import Path
-
-from flask import Flask, Response, jsonify, render_template, request
 
 from audio_transcript import AudioTranscript
 from cache_entry import CacheEntry
@@ -65,6 +64,7 @@ from config_constants import (
     FALLBACK_CHARS_PER_SEC,
     SHORT_THRESHOLD_SECONDS,
 )
+from flask import Flask, Response, jsonify, render_template, request
 from job_state import (
     PHASE_GENERATING,
     PHASE_HANDED_OFF,
@@ -83,8 +83,7 @@ from short_path import ShortPathStrategy
 from tts_engine import TTSEngine, TTSGenerationError, TTSNoSpeakableContentError
 from voice_profile import VoiceProfile
 from voice_profile_store import VoiceProfileStore
-from wav_concatenator import WavConcatError, WavConcatenator
-
+from wav_concatenator import WavConcatenator, WavConcatError
 
 _DEFAULT_HOST = "127.0.0.1"
 _DEFAULT_PORT = 7860
@@ -116,7 +115,7 @@ def _synthesize_hash(text: str, voice_id: str, speed: float) -> str:
     key_input = (
         text.encode("utf-8")
         + b"\x00"
-        + f"{voice_id}:{speed}".encode("utf-8")
+        + f"{voice_id}:{speed}".encode()
         + b"\x00synthesize"
     )
     return hashlib.sha256(key_input).hexdigest()
@@ -138,11 +137,9 @@ def _supported_lang_prefixes() -> set[str]:
     """
     supported = set("abefhip")
     for prefix, module in (("j", "misaki.ja"), ("z", "misaki.zh")):
-        try:
+        with suppress(ImportError):
             __import__(module)
             supported.add(prefix)
-        except Exception:  # noqa: BLE001 — extra simply absent
-            pass
     return supported
 
 
@@ -330,7 +327,7 @@ class WebServer:
 
     def _prewarm_tts(self) -> None:
         # Run the load on the worker thread so MLX state binds to it.
-        future = self._tts_executor.submit(self._tts._ensure_loaded)  # noqa: SLF001
+        future = self._tts_executor.submit(self._tts._ensure_loaded)
         try:
             future.result()
         except Exception as exc:  # noqa: BLE001 — broad on purpose
@@ -557,7 +554,7 @@ class WebServer:
             traceback.print_exc(file=sys.stderr)
             try:
                 self._jobs.fail(f"crash: {exc!r}")
-            except Exception as exc2:
+            except Exception as exc2:  # noqa: BLE001 — do not mask the crash
                 # The crash is already logged above; this only guards the
                 # state update from masking it. Still surface the secondary
                 # failure rather than swallowing it entirely.
@@ -686,7 +683,7 @@ class WebServer:
                 speed=profile.speed,
                 char_count=len(text),
                 duration_seconds=duration,
-                created_at=datetime.now(timezone.utc)
+                created_at=datetime.now(UTC)
                 .isoformat(timespec="seconds")
                 .replace("+00:00", "Z"),
                 chars_per_second_at_creation=cps,
@@ -838,7 +835,7 @@ class WebServer:
                 ["seek", max(0.0, float(duration) - 0.5), "absolute"]
             )
 
-        if target.startswith("+") or target.startswith("-"):
+        if target.startswith(("+", "-")):
             try:
                 offset = float(target)
             except ValueError:
@@ -913,7 +910,7 @@ class WebServer:
         key_input = (
             text.encode("utf-8")
             + b"\x00"
-            + f"{self._profile.voice_id}:{self._profile.speed}".encode("utf-8")
+            + f"{self._profile.voice_id}:{self._profile.speed}".encode()
         )
         if mode != "rewrite":
             key_input += b"\x00" + mode.encode("utf-8")
@@ -926,7 +923,7 @@ def main(argv: list[str] | None = None) -> int:
     args = p.parse_args(argv)
 
     server = WebServer()
-    print(f"[web] start={datetime.now(timezone.utc).isoformat(timespec='seconds')}",
+    print(f"[web] start={datetime.now(UTC).isoformat(timespec='seconds')}",
           file=sys.stderr)
     try:
         server.run(host=_DEFAULT_HOST, port=args.port)

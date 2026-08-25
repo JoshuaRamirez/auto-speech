@@ -22,8 +22,8 @@ from pathlib import Path
 SRC = Path(__file__).resolve().parents[1] / "plugin" / "scripts" / "python"
 sys.path.insert(0, str(SRC))
 
-from playback_fifo import PlaybackFifo  # noqa: E402
-from playback_ticket import HEAD, RELEASED  # noqa: E402
+from playback_fifo import PlaybackFifo
+from playback_ticket import HEAD, RELEASED
 
 
 def _qdir() -> Path:

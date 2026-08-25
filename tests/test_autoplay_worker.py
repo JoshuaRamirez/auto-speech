@@ -20,9 +20,9 @@ from pathlib import Path
 SRC = Path(__file__).resolve().parents[1] / "plugin" / "scripts" / "python"
 sys.path.insert(0, str(SRC))
 
-import autoplay_worker as awmod  # noqa: E402
-from autoplay_worker import AutoplayWorker  # noqa: E402
-from worker_lifecycle import BAILED, DONE  # noqa: E402
+import autoplay_worker as awmod
+from autoplay_worker import AutoplayWorker
+from worker_lifecycle import BAILED, DONE
 
 
 class _StubGate:
@@ -97,14 +97,14 @@ _CFG = {"coalesce_seconds": 0, "narration_wait_max": 90, "queue_wait_max": 600, 
 
 
 def _worker(**kw):
-    base = dict(
-        config=_CFG,
-        gate=_StubGate(False),
-        beacon=_StubBeacon([False, False, False, False, False]),
-        fifo=_StubFifo(),
-        dedup=_StubDedup(False),
-        sleep=lambda s: None,
-    )
+    base = {
+        "config": _CFG,
+        "gate": _StubGate(False),
+        "beacon": _StubBeacon([False, False, False, False, False]),
+        "fifo": _StubFifo(),
+        "dedup": _StubDedup(False),
+        "sleep": lambda s: None,
+    }
     base.update(kw)
     return AutoplayWorker(0.0, "", "sid12345", **base)
 

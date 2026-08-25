@@ -82,9 +82,8 @@ def validate_section(section: dict, fields: tuple[Field, ...], section_name: str
                 problems.append(f"[{section_name}] {f.name} should be a number, got {val!r}")
             elif f.minimum is not None and val < f.minimum:
                 problems.append(f"[{section_name}] {f.name} must be >= {f.minimum:g}, got {val}")
-        elif f.kind == "enum":
-            if not isinstance(val, str) or val.lower() not in f.allowed:
-                problems.append(f"[{section_name}] {f.name} must be one of {f.allowed}, got {val!r}")
+        elif f.kind == "enum" and (not isinstance(val, str) or val.lower() not in f.allowed):
+            problems.append(f"[{section_name}] {f.name} must be one of {f.allowed}, got {val!r}")
 
     return problems
 
