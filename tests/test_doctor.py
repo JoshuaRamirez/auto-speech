@@ -220,6 +220,17 @@ def test_main_survives_non_table_narrator_section() -> None:
         saved_override = os.environ.pop("AUTO_SPEECH_NARRATOR_CONFIG", None)
         os.environ["HOME"] = str(home)
         try:
+            import narrator_config
+
+            try:
+                narrator_config.load_config()
+            except AttributeError:
+                pass
+            else:
+                raise AssertionError(
+                    "non-table narrator must raise AttributeError from load_config"
+                )
+
             buf = io.StringIO()
             with contextlib.redirect_stdout(buf):
                 rc = doc.main(["doctor", "--json"])
