@@ -8,7 +8,6 @@ from pathlib import Path
 from cache_store import CacheStore
 from mpv_controller import MpvController, MpvNotInstalledError, MpvStartupError
 
-
 EXIT_OK = 0
 EXIT_NO_CACHE_ENTRY = 2
 EXIT_PLAYBACK_FAIL = 6

@@ -18,7 +18,7 @@ from pathlib import Path
 SRC = Path(__file__).resolve().parents[1] / "plugin" / "scripts" / "python"
 sys.path.insert(0, str(SRC))
 
-from narrator_phase_classifier import (  # noqa: E402
+from narrator_phase_classifier import (
     Category,
     PhaseClassifier,
 )

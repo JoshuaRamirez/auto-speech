@@ -12,7 +12,6 @@ from pathlib import Path
 from message_selector import MessageSelector, NoSuchAssistantTurn
 from transcript_locator import TranscriptLocator, TranscriptNotFoundError
 
-
 EXIT_OK = 0
 EXIT_NO_SUCH_TURN = 2
 EXIT_NO_TRANSCRIPT = 3

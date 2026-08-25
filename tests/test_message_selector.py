@@ -13,19 +13,18 @@ from pathlib import Path
 SRC = Path(__file__).resolve().parents[1] / "plugin" / "scripts" / "python"
 sys.path.insert(0, str(SRC))
 
-from message_selector import MessageSelector, NoSuchAssistantTurn  # noqa: E402
-from transcript_reader import TranscriptReadError, TranscriptReader  # noqa: E402
+from message_selector import MessageSelector, NoSuchAssistantTurn
+from transcript_reader import TranscriptReader, TranscriptReadError
 
 
 def _write_jsonl(records: list[dict]) -> Path:
-    f = tempfile.NamedTemporaryFile(
+    with tempfile.NamedTemporaryFile(
         mode="w", suffix=".jsonl", delete=False, encoding="utf-8"
-    )
-    for r in records:
-        f.write(json.dumps(r))
-        f.write("\n")
-    f.close()
-    return Path(f.name)
+    ) as f:
+        for r in records:
+            f.write(json.dumps(r))
+            f.write("\n")
+        return Path(f.name)
 
 
 def _assistant(text: str, ts: str = "2026-05-16T00:00:00Z") -> dict:
@@ -227,15 +226,14 @@ def test_select_raises_on_zero_or_negative_n() -> None:
 
 
 def test_transcript_reader_skips_blank_lines() -> None:
-    f = tempfile.NamedTemporaryFile(
+    with tempfile.NamedTemporaryFile(
         mode="w", suffix=".jsonl", delete=False, encoding="utf-8"
-    )
-    f.write("\n")
-    f.write(json.dumps({"a": 1}) + "\n")
-    f.write("   \n")
-    f.write(json.dumps({"a": 2}) + "\n")
-    f.close()
-    path = Path(f.name)
+    ) as f:
+        f.write("\n")
+        f.write(json.dumps({"a": 1}) + "\n")
+        f.write("   \n")
+        f.write(json.dumps({"a": 2}) + "\n")
+        path = Path(f.name)
     try:
         records = list(TranscriptReader.iter_lines(path))
         assert records == [{"a": 1}, {"a": 2}]
@@ -244,13 +242,12 @@ def test_transcript_reader_skips_blank_lines() -> None:
 
 
 def test_transcript_reader_raises_on_malformed_line_with_line_number() -> None:
-    f = tempfile.NamedTemporaryFile(
+    with tempfile.NamedTemporaryFile(
         mode="w", suffix=".jsonl", delete=False, encoding="utf-8"
-    )
-    f.write(json.dumps({"ok": 1}) + "\n")
-    f.write("this is not json\n")
-    f.close()
-    path = Path(f.name)
+    ) as f:
+        f.write(json.dumps({"ok": 1}) + "\n")
+        f.write("this is not json\n")
+        path = Path(f.name)
     try:
         try:
             list(TranscriptReader.iter_lines(path))

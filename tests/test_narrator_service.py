@@ -22,7 +22,7 @@ from unittest.mock import patch
 SRC = Path(__file__).resolve().parents[1] / "plugin" / "scripts" / "python"
 sys.path.insert(0, str(SRC))
 
-import narrator_service  # noqa: E402
+import narrator_service
 
 
 def _bare_service(max_queue: int):
@@ -138,9 +138,11 @@ def test_sweep_removes_old_session_markers_but_not_fresh_ones() -> None:
 
 def test_sweep_tolerates_missing_dirs() -> None:
     # Should not raise when neither dir exists.
-    with tempfile.TemporaryDirectory() as home_str:
-        with patch.object(Path, "home", staticmethod(lambda: Path(home_str))):
-            narrator_service._sweep_stale_session_markers()
+    with (
+        tempfile.TemporaryDirectory() as home_str,
+        patch.object(Path, "home", staticmethod(lambda: Path(home_str))),
+    ):
+        narrator_service._sweep_stale_session_markers()
 
 
 def test_process_chunk_filters_events_without_session_marker() -> None:

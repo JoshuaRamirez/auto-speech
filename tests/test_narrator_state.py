@@ -11,7 +11,7 @@ from pathlib import Path
 SRC = Path(__file__).resolve().parents[1] / "plugin" / "scripts" / "python"
 sys.path.insert(0, str(SRC))
 
-from narrator_state import (  # noqa: E402
+from narrator_state import (
     IDLE_SHUTDOWN,
     NOT_RUNNING,
     RUNNING,
@@ -19,7 +19,7 @@ from narrator_state import (  # noqa: E402
     STARTING,
     NarratorStateMachine,
 )
-from state_machine import IllegalTransition  # noqa: E402
+from state_machine import IllegalTransition
 
 
 def test_idle_shutdown_lifecycle() -> None:

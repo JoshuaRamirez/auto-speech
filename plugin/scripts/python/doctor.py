@@ -218,7 +218,7 @@ def main(argv: list[str]) -> int:
         from narrator_config import load_config
 
         max_q = int(load_config().get("max_queue_depth", 32))
-    except Exception:
+    except (ImportError, OSError, TypeError, ValueError, KeyError):
         max_q = 32
     report = Doctor(max_queue_depth=max_q).run()
     print(report.to_json() if as_json else report.to_text())

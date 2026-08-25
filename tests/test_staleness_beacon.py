@@ -13,8 +13,8 @@ from pathlib import Path
 SRC = Path(__file__).resolve().parents[1] / "plugin" / "scripts" / "python"
 sys.path.insert(0, str(SRC))
 
-import staleness_beacon  # noqa: E402
-from staleness_beacon import FRESH, STALE, StalenessBeacon, beacon_path  # noqa: E402
+import staleness_beacon
+from staleness_beacon import FRESH, STALE, StalenessBeacon, beacon_path
 
 
 def test_path_derivation() -> None:

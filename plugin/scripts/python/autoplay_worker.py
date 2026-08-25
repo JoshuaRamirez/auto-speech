@@ -26,7 +26,7 @@ import os
 import subprocess
 import sys
 import time
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 
 from autoplay_gate import AutoplayGate
@@ -109,7 +109,7 @@ def resolve_config() -> dict:
         nw = cfg.get("narration_wait_max_seconds")
         # bash does int(float(...)) so arithmetic doesn't choke on a decimal.
         narration_cfg = int(float(nw)) if nw is not None else None
-    except Exception as exc:
+    except (ImportError, OSError, TypeError, ValueError) as exc:
         # Don't crash the worker on a bad/unreadable config (e.g. a wrong-
         # typed narration_wait value): fall back to env/defaults below. But
         # log it — silent fallback hides a misconfiguration from the operator.
@@ -178,7 +178,7 @@ class AutoplayWorker:
         if self._user_log is not None:
             self._user_log(msg)
             return
-        ts = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+        ts = datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
         sid = self._session_id[:8] if self._session_id else "no-sid"
         print(f"[{ts}] [worker pid={os.getpid()} sid={sid}] {msg}", flush=True)
 
@@ -189,21 +189,25 @@ class AutoplayWorker:
     # ---- subprocess plumbing --------------------------------------------
     def _default_runner(self, argv, *, stdin_text=None, stdout_path=None):
         """Run argv; return (returncode, stdout_text). For real invocations."""
-        stdout_target = open(stdout_path, "wb") if stdout_path else subprocess.PIPE
-        try:
-            proc = subprocess.run(
-                argv,
-                input=stdin_text.encode("utf-8") if stdin_text is not None else None,
-                stdout=stdout_target if stdout_path else subprocess.PIPE,
-                stderr=subprocess.DEVNULL,
-                check=False,
-            )
-            if stdout_path:
-                return proc.returncode, None
-            return proc.returncode, proc.stdout.decode("utf-8", "replace")
-        finally:
-            if stdout_path:
-                stdout_target.close()
+        stdin_bytes = stdin_text.encode("utf-8") if stdin_text is not None else None
+        if stdout_path:
+            with open(stdout_path, "wb") as stdout_target:
+                proc = subprocess.run(
+                    argv,
+                    input=stdin_bytes,
+                    stdout=stdout_target,
+                    stderr=subprocess.DEVNULL,
+                    check=False,
+                )
+            return proc.returncode, None
+        proc = subprocess.run(
+            argv,
+            input=stdin_bytes,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.DEVNULL,
+            check=False,
+        )
+        return proc.returncode, proc.stdout.decode("utf-8", "replace")
 
     # ---- queue-turn collaborators ---------------------------------------
     def _mpv_running(self) -> bool:

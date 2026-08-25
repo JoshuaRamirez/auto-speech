@@ -54,12 +54,11 @@ def _install_fake_mlx_lm():
 
 
 def _make_prompt_file(body: str) -> Path:
-    f = tempfile.NamedTemporaryFile(
+    with tempfile.NamedTemporaryFile(
         mode="w", suffix=".txt", delete=False, encoding="utf-8"
-    )
-    f.write(body)
-    f.close()
-    return Path(f.name)
+    ) as f:
+        f.write(body)
+        return Path(f.name)
 
 
 def _phase(events: list[str], category_value: str = "edit"):

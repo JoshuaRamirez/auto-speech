@@ -15,8 +15,8 @@ from pathlib import Path
 SRC = Path(__file__).resolve().parents[1] / "plugin" / "scripts" / "python"
 sys.path.insert(0, str(SRC))
 
-import cli_rewrite  # noqa: E402
-import claude_cli_rewriter  # noqa: E402
+import claude_cli_rewriter
+import cli_rewrite
 
 
 class _StubRewriter:
@@ -81,7 +81,7 @@ def test_empty_stdin_returns_failure() -> None:
 
 def test_config_default_picks_summary_small_prompt() -> None:
     with _with_autoplay_override("") as _:
-        rc, out = _run([], stdin_text="hello world")
+        rc, _out = _run([], stdin_text="hello world")
     assert rc == cli_rewrite.EXIT_OK
     assert "ONE TO THREE SENTENCES" in _StubRewriter.last_template, (
         f"expected small (1-3 sentence) prompt loaded; got: {_StubRewriter.last_template[:200]}"
@@ -90,7 +90,7 @@ def test_config_default_picks_summary_small_prompt() -> None:
 
 def test_mode_flag_overrides_config_to_verbatim() -> None:
     with _with_autoplay_override('[autoplay]\nmode = "summary"\nsummary_size = "small"\n'):
-        rc, out = _run(["--mode", "verbatim"], stdin_text="hello")
+        rc, _out = _run(["--mode", "verbatim"], stdin_text="hello")
     assert rc == cli_rewrite.EXIT_OK
     # Verbatim template has "Transform form, never meaning." marker.
     assert "Transform form" in _StubRewriter.last_template, (

@@ -7,6 +7,7 @@ lazily so missing optional deps don't break the import.
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
+from typing import ClassVar
 
 from narrator_phase_classifier import Phase
 
@@ -21,7 +22,7 @@ class MockSummarizer(Summarizer):
     configured provider's deps are missing. Less rich than an LLM
     summary but at least it's a complete sentence."""
 
-    _PRESENT_PROGRESSIVE = {
+    _PRESENT_PROGRESSIVE: ClassVar[dict[str, str]] = {
         "explore": "exploring",
         "edit": "editing",
         "run": "running",
@@ -29,7 +30,7 @@ class MockSummarizer(Summarizer):
         "reason": "reasoning through",
         "other": "performing",
     }
-    _PAST = {
+    _PAST: ClassVar[dict[str, str]] = {
         "explore": "explored",
         "edit": "edited",
         "run": "ran",
@@ -76,7 +77,7 @@ def load_summarizer(config: dict) -> Summarizer:
                 prompt_template_path=config["prompt_template_path"],
                 max_tokens=int(config.get("max_tokens", 60)),
             )
-        except Exception as exc:
+        except Exception as exc:  # noqa: BLE001 — any provider failure → Mock
             import sys
 
             print(
@@ -96,7 +97,7 @@ def load_summarizer(config: dict) -> Summarizer:
                 max_tokens=int(config.get("max_tokens", 60)),
                 host=config.get("ollama_host"),
             )
-        except Exception as exc:
+        except Exception as exc:  # noqa: BLE001 — any provider failure → Mock
             import sys
 
             print(

@@ -16,7 +16,7 @@ from pathlib import Path
 SRC = Path(__file__).resolve().parents[1] / "plugin" / "scripts" / "python"
 sys.path.insert(0, str(SRC))
 
-from dedup_guard import DedupGuard  # noqa: E402
+from dedup_guard import DedupGuard
 
 HASH = "abc123"
 

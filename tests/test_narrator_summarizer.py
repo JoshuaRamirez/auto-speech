@@ -12,8 +12,8 @@ from pathlib import Path
 SRC = Path(__file__).resolve().parents[1] / "plugin" / "scripts" / "python"
 sys.path.insert(0, str(SRC))
 
-from narrator_phase_classifier import Category, Phase, ToolEvent  # noqa: E402
-from narrator_summarizer import (  # noqa: E402
+from narrator_phase_classifier import Category, Phase, ToolEvent
+from narrator_summarizer import (
     MockSummarizer,
     load_summarizer,
 )
@@ -143,16 +143,16 @@ def test_factory_returns_ollama_summarizer_when_provider_is_ollama() -> None:
     import tempfile
     from pathlib import Path
 
-    tmp = tempfile.NamedTemporaryFile(
+    with tempfile.NamedTemporaryFile(
         mode="w", suffix=".txt", delete=False, encoding="utf-8"
-    )
-    tmp.write("body {events}")
-    tmp.close()
+    ) as tmp:
+        tmp.write("body {events}")
+        tmp_name = tmp.name
     try:
         summ = load_summarizer({
             "provider": "ollama",
             "model": "qwen2.5:3b",
-            "prompt_template_path": tmp.name,
+            "prompt_template_path": tmp_name,
             "max_tokens": 50,
             "ollama_host": "http://127.0.0.1:11434",
         })
@@ -162,7 +162,7 @@ def test_factory_returns_ollama_summarizer_when_provider_is_ollama() -> None:
             f"unexpected: {summ.__class__.__name__}"
         )
     finally:
-        Path(tmp.name).unlink()
+        Path(tmp_name).unlink()
 
 
 def test_factory_raises_on_unknown_provider() -> None:

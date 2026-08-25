@@ -16,8 +16,8 @@ from pathlib import Path
 SRC = Path(__file__).resolve().parents[1] / "plugin" / "scripts" / "python"
 sys.path.insert(0, str(SRC))
 
-import mpv_controller  # noqa: E402
-from mpv_controller import MpvController  # noqa: E402
+import mpv_controller
+from mpv_controller import MpvController
 
 
 class _FakeSessionDir:

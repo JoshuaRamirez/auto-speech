@@ -11,8 +11,7 @@ from pathlib import Path
 SRC = Path(__file__).resolve().parents[1] / "plugin" / "scripts" / "python"
 sys.path.insert(0, str(SRC))
 
-from fibonacci import FibonacciSeq  # noqa: E402
-
+from fibonacci import FibonacciSeq
 
 _EXPECTED_FIRST_15 = [1, 1, 2, 3, 5, 8, 13, 21, 34, 55, 89, 144, 233, 377, 610]
 

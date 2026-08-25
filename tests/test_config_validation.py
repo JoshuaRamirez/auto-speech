@@ -13,7 +13,7 @@ from pathlib import Path
 SRC = Path(__file__).resolve().parents[1] / "plugin" / "scripts" / "python"
 sys.path.insert(0, str(SRC))
 
-import config_validation as cv  # noqa: E402
+import config_validation as cv
 
 
 def test_valid_autoplay_section_clean() -> None:

@@ -13,7 +13,7 @@ from pathlib import Path
 SRC = Path(__file__).resolve().parents[1] / "plugin" / "scripts" / "python"
 sys.path.insert(0, str(SRC))
 
-import autoplay_config  # noqa: E402
+import autoplay_config
 
 
 def _with_override(toml_body: str):

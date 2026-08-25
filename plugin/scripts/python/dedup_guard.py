@@ -127,19 +127,18 @@ class DedupGuard:
         behavior on the rare path where /tmp is not writable.
         """
         try:
-            lock_fd = open(self._lock, "w")
+            with open(self._lock, "w") as lock_fd:
+                fcntl.flock(lock_fd.fileno(), fcntl.LOCK_EX)
+                try:
+                    if self._fresh_same_hash(source_hash):
+                        return False
+                    self.write_now_playing(source_hash)
+                    return True
+                finally:
+                    fcntl.flock(lock_fd.fileno(), fcntl.LOCK_UN)
         except OSError:
             self.write_now_playing(source_hash)
             return True
-        try:
-            fcntl.flock(lock_fd.fileno(), fcntl.LOCK_EX)
-            if self._fresh_same_hash(source_hash):
-                return False
-            self.write_now_playing(source_hash)
-            return True
-        finally:
-            fcntl.flock(lock_fd.fileno(), fcntl.LOCK_UN)
-            lock_fd.close()
 
     def write_now_playing(self, source_hash: str) -> None:
         """Stamp the now-playing marker with our source hash (best effort)."""

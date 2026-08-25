@@ -6,7 +6,6 @@ import threading
 import time
 from pathlib import Path
 
-
 POLL_INTERVAL_SECONDS = 0.1
 
 

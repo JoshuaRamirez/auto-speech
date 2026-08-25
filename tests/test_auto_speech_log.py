@@ -16,7 +16,7 @@ from unittest.mock import patch
 SRC = Path(__file__).resolve().parents[1] / "plugin" / "scripts" / "python"
 sys.path.insert(0, str(SRC))
 
-import auto_speech_log as asl  # noqa: E402
+import auto_speech_log as asl
 
 
 def test_cap_defaults_and_override() -> None:

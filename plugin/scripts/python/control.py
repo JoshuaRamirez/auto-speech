@@ -7,7 +7,6 @@ import sys
 from mpv_ipc import MpvIpc, MpvIpcError
 from session_dir import SessionDir
 
-
 EXIT_OK = 0
 EXIT_NO_SESSION = 2
 EXIT_IPC_FAIL = 3
@@ -87,7 +86,7 @@ def _cmd_seek(args: argparse.Namespace) -> int:
         # Seek to half-a-second before the end so mpv emits a final moment of audio.
         target_seconds = max(0.0, float(duration) - 0.5)
         return _send(["seek", target_seconds, "absolute"])
-    if target.startswith("+") or target.startswith("-"):
+    if target.startswith(("+", "-")):
         try:
             offset = float(target)
         except ValueError:

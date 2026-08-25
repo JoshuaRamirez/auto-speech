@@ -17,8 +17,8 @@ from types import SimpleNamespace
 SRC = Path(__file__).resolve().parents[1] / "plugin" / "scripts" / "python"
 sys.path.insert(0, str(SRC))
 
-import doctor as doc  # noqa: E402
-from health_report import Status  # noqa: E402
+import doctor as doc
+from health_report import Status
 
 GIB = 1024 * 1024 * 1024
 
@@ -32,14 +32,14 @@ def _disk_free(n):
 
 
 def _doctor(home, tmp, **over):
-    kw = dict(
-        home=home,
-        tmp=tmp,
-        venv_python=Path(sys.executable),  # a real executable → venv OK
-        which=_which_all,
-        disk_usage=_disk_free(5 * GIB),
-        daemon_alive=lambda _pid: False,
-    )
+    kw = {
+        "home": home,
+        "tmp": tmp,
+        "venv_python": Path(sys.executable),  # a real executable → venv OK
+        "which": _which_all,
+        "disk_usage": _disk_free(5 * GIB),
+        "daemon_alive": lambda _pid: False,
+    }
     kw.update(over)
     return doc.Doctor(**kw)
 

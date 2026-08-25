@@ -10,7 +10,6 @@ from pathlib import Path
 
 from cache_entry import CacheEntry
 
-
 CACHE_PREFIX_LENGTH = 16  # hex chars; 64 bits — plenty for a single user
 _HEX_RE = re.compile(r"^[0-9a-f]{64}$")
 

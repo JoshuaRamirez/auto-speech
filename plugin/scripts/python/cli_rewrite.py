@@ -30,7 +30,6 @@ from claude_cli_rewriter import (
     load_default_template,
 )
 
-
 EXIT_OK = 0
 EXIT_REWRITE_FAIL = 1
 EXIT_NO_CLAUDE = 2

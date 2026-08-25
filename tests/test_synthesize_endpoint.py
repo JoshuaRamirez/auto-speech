@@ -41,7 +41,7 @@ def _make_server(tmp_path: Path):
 
     synth_calls = {"n": 0}
 
-    def fake_synthesize(text, profile, out_path):  # noqa: ANN001 — instance attr, no self
+    def fake_synthesize(text, profile, out_path):
         synth_calls["n"] += 1
         _write_tiny_wav(Path(out_path))
 
@@ -52,14 +52,14 @@ def _make_server(tmp_path: Path):
         mock.patch("tts_engine.TTSEngine._ensure_loaded", lambda self: None), \
         mock.patch("web_server.MpvController"):
         server = web_server.WebServer()
-    server._tts.synthesize = fake_synthesize  # noqa: SLF001
+    server._tts.synthesize = fake_synthesize
     return server, synth_calls
 
 
 def test_empty_text_rejected() -> None:
     with tempfile.TemporaryDirectory() as td:
         server, _ = _make_server(Path(td))
-        client = server._app.test_client()  # noqa: SLF001
+        client = server._app.test_client()
         resp = client.post("/api/synthesize", json={"text": "   "})
         assert resp.status_code == 400
 
@@ -67,7 +67,7 @@ def test_empty_text_rejected() -> None:
 def test_oversize_text_rejected() -> None:
     with tempfile.TemporaryDirectory() as td:
         server, _ = _make_server(Path(td))
-        client = server._app.test_client()  # noqa: SLF001
+        client = server._app.test_client()
         resp = client.post("/api/synthesize", json={"text": "x" * 20001})
         assert resp.status_code == 413
 
@@ -75,7 +75,7 @@ def test_oversize_text_rejected() -> None:
 def test_synthesize_returns_wav_and_caches() -> None:
     with tempfile.TemporaryDirectory() as td:
         server, synth_calls = _make_server(Path(td))
-        client = server._app.test_client()  # noqa: SLF001
+        client = server._app.test_client()
 
         r1 = client.post(
             "/api/synthesize",
@@ -103,11 +103,11 @@ def test_no_speakable_content_returns_422() -> None:
     with tempfile.TemporaryDirectory() as td:
         server, _ = _make_server(Path(td))
 
-        def raise_unspeakable(text, profile, out_path):  # noqa: ANN001
+        def raise_unspeakable(text, profile, out_path):
             raise tts_engine.TTSNoSpeakableContentError("no phonemes")
 
-        server._tts.synthesize = raise_unspeakable  # noqa: SLF001
-        client = server._app.test_client()  # noqa: SLF001
+        server._tts.synthesize = raise_unspeakable
+        client = server._app.test_client()
         resp = client.post("/api/synthesize", json={"text": "★ • #"})
         assert resp.status_code == 422
         assert resp.get_json()["error"] == "no speakable text"
@@ -147,14 +147,14 @@ def test_resilient_split_recovers_from_generate_fault() -> None:
 
         # Simulate the mlx-audio bug: fail on any span longer than 3 words,
         # succeed (emit a tiny WAV) on shorter ones.
-        def flaky(text, profile, out_path):  # noqa: ANN001
+        def flaky(text, profile, out_path):
             if len(text.split()) > 3:
                 raise web_server.TTSGenerationError("simulated broadcast bug")
             _write_tiny_wav(Path(out_path))
 
-        server._tts.synthesize = flaky  # noqa: SLF001
+        server._tts.synthesize = flaky
         out = tmp_path / "chunk.wav"
-        wavs = server._synth.synthesize_parts(  # noqa: SLF001
+        wavs = server._synth.synthesize_parts(
             "alpha beta gamma delta epsilon zeta eta", server._profile, out
         )
         assert len(wavs) >= 2
@@ -170,7 +170,7 @@ def test_resilient_split_skips_unspeakable_leaf() -> None:
         tmp_path = Path(td)
         server, _ = _make_server(tmp_path)
 
-        def synth(text, profile, out_path):  # noqa: ANN001
+        def synth(text, profile, out_path):
             t = text.strip()
             if t == "★":
                 raise web_server.TTSNoSpeakableContentError("no phonemes")
@@ -178,10 +178,10 @@ def test_resilient_split_skips_unspeakable_leaf() -> None:
                 raise web_server.TTSGenerationError("simulated broadcast bug")
             _write_tiny_wav(Path(out_path))
 
-        server._tts.synthesize = synth  # noqa: SLF001
+        server._tts.synthesize = synth
         out = tmp_path / "chunk.wav"
         # Splits to words; "hello" and "world" speak, lone "★" is skipped.
-        wavs = server._synth.synthesize_parts(  # noqa: SLF001
+        wavs = server._synth.synthesize_parts(
             "hello ★ world", server._profile, out
         )
         assert len(wavs) == 2
@@ -196,7 +196,7 @@ def test_non_string_fields_are_client_errors_not_crashes() -> None:
     """
     with tempfile.TemporaryDirectory() as td:
         server, _ = _make_server(Path(td))
-        client = server._app.test_client()  # noqa: SLF001
+        client = server._app.test_client()
 
         cases = [
             ("/api/synthesize", {"text": 123}),
@@ -216,7 +216,7 @@ def test_non_string_fields_are_client_errors_not_crashes() -> None:
 def test_options_preflight() -> None:
     with tempfile.TemporaryDirectory() as td:
         server, _ = _make_server(Path(td))
-        client = server._app.test_client()  # noqa: SLF001
+        client = server._app.test_client()
         resp = client.open(
             "/api/synthesize", method="OPTIONS", headers={"Origin": EXT_ORIGIN}
         )
@@ -242,18 +242,18 @@ def test_synthesize_not_blocked_by_inflight_rewrite() -> None:
 
     with tempfile.TemporaryDirectory() as td:
         server, _ = _make_server(Path(td))
-        client = server._app.test_client()  # noqa: SLF001
+        client = server._app.test_client()
 
         release = threading.Event()
         started = threading.Event()
 
-        def slow_rewrite(text, timeout_seconds=600.0):  # noqa: ANN001, ARG001
+        def slow_rewrite(text, timeout_seconds=600.0):
             started.set()
             release.wait(timeout=30)
             return text
 
-        server._rewriter.rewrite = slow_rewrite  # noqa: SLF001
-        server._rewriter.is_available = lambda: True  # noqa: SLF001
+        server._rewriter.rewrite = slow_rewrite
+        server._rewriter.is_available = lambda: True
 
         with mock.patch.object(web_server, "PipelineOrchestrator") as po_cls:
             po_cls.return_value.run.return_value = web_server.EXIT_OK
@@ -272,7 +272,7 @@ def test_synthesize_not_blocked_by_inflight_rewrite() -> None:
                 release.set()
                 # Drain the speak job INSIDE the patch so it finishes against
                 # the stub pipeline, never the real cache/mpv.
-                server._job_executor.shutdown(wait=True)  # noqa: SLF001
+                server._job_executor.shutdown(wait=True)
             # The stubbed pipeline must have been what ran.
             po_cls.return_value.run.assert_called_once()
 
@@ -281,7 +281,7 @@ def test_cors_denied_for_web_and_absent_origins() -> None:
     """Non-extension origins get NO ACAO header — pages can't read responses."""
     with tempfile.TemporaryDirectory() as td:
         server, _ = _make_server(Path(td))
-        client = server._app.test_client()  # noqa: SLF001
+        client = server._app.test_client()
 
         # A regular web origin: response carries no CORS grant.
         r_web = client.post(
