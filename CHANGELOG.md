@@ -9,6 +9,14 @@ The Chrome extension under `chrome-extension/` is versioned independently
 
 ## [Unreleased]
 
+### Added
+- **`speak` MCP server.** A stdio MCP server
+  (`plugin/scripts/shell/run_mcp.sh`) with one tool, `speak(text)`, that
+  says the words it gets aloud, verbatim. It returns as soon as the words
+  are queued. A detached worker waits in the cross-session playback FIFO,
+  honors the global mute, and never cuts off another playback. Register
+  it with `bash setup/install-mcp.sh`.
+
 ## [0.2.0] - 2026-08-12
 
 Autoplay actually works now — and it no longer speaks unless asked.

@@ -34,6 +34,7 @@ Optional extras:
 ```bash
 bash setup/install-bootstrap-hook.sh   # SessionStart self-update (uv sync when uv.lock changes)
 bash setup/install-narrator-hooks.sh   # real-time narration hooks (see Narration)
+bash setup/install-mcp.sh              # `speak` MCP tool: say any words aloud (see MCP server)
 bash setup/install-plugin.sh --with-extras   # + 13 extra slash commands
 ```
 
@@ -89,6 +90,25 @@ The read shape is set via `/auto-speech-autoplay-mode` (or
 | `small` | 1-3 sentence summary (default) | quick status |
 | `medium` | 3-5 sentence summary | balanced |
 | `large` | 6-10 sentence summary, preserves nuance | long technical replies |
+
+## MCP server: `speak`
+
+A small stdio MCP server with one tool, `speak(text)`, which says the
+words it gets aloud with the local Kokoro voice. It reads them exactly as
+written: no transcript lookup, no LLM rewrite, no summary. So the caller
+should write text the way it should sound.
+
+```bash
+bash setup/install-mcp.sh      # claude mcp add --scope user auto-speech
+```
+
+Other MCP clients can launch `plugin/scripts/shell/run_mcp.sh` as a stdio
+server. The call returns as soon as the words are queued. A detached
+worker then waits its turn in the same cross-session FIFO as autoplay,
+so it never cuts off another playback, and speaks. Repeated calls are
+spoken in order. The global mute (`~/.claude/auto-speech.disabled`)
+silences it too. Text is capped at 20,000 characters, and worker logs go
+to `/tmp/auto-speech-say.log`. Remove it with `bash setup/uninstall-mcp.sh`.
 
 ## Web app
 

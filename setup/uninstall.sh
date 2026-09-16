@@ -4,6 +4,7 @@
 # Removes everything we ever wrote into ~/.claude or /tmp:
 #   - slash command symlinks under ~/.claude/commands/
 #   - Stop hook entry in ~/.claude/settings.json (via uninstall-hook.sh)
+#   - the `speak` MCP server registration (via uninstall-mcp.sh)
 #   - the autoplay disable marker
 #   - any running web_server.py and mpv processes we own
 #   - /tmp/auto-speech* working files
@@ -83,6 +84,13 @@ if [[ -x "$PROJECT_ROOT/setup/uninstall-bootstrap-hook.sh" ]]; then
     "$PROJECT_ROOT/setup/uninstall-bootstrap-hook.sh" || true
 else
     echo "[uninstall] uninstall-bootstrap-hook.sh missing; skipping bootstrap hook"
+fi
+
+# 2b-3. Unregister the `speak` MCP server (needs the claude CLI).
+if [[ -x "$PROJECT_ROOT/setup/uninstall-mcp.sh" ]] && command -v claude >/dev/null 2>&1; then
+    "$PROJECT_ROOT/setup/uninstall-mcp.sh" || true
+else
+    echo "[uninstall] uninstall-mcp.sh or claude CLI missing; skipping MCP server"
 fi
 
 # 2c. Stop the narrator daemon if running.

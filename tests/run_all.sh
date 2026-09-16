@@ -63,6 +63,8 @@ CHEAP=(
     test_autoplay_scope.py
     test_autoplay_enrollment.py
     test_autoplay_worker.py
+    test_say_worker.py
+    test_mcp_server.py
     test_job_tracker.py
     test_narrator_phase_classifier.py
     test_narrator_summarizer.py
