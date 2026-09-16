@@ -90,6 +90,36 @@ def _num_env(name: str, cast):
         return None
 
 
+def mpv_running() -> bool:
+    """True iff the mpv pid file names a live process."""
+    try:
+        raw = MPV_PID_PATH.read_text(encoding="utf-8").strip()
+    except OSError:
+        return False
+    if not raw:
+        return False
+    try:
+        return _pid_alive(int(raw))
+    except ValueError:
+        return False
+
+
+def narrator_depth() -> int:
+    """Pending narrator utterances, or 0 when the narrator daemon isn't live."""
+    if not (NARRATION_DAEMON_PID_FILE.is_file() and NARRATION_DEPTH_FILE.is_file()):
+        return 0
+    try:
+        narr_pid = int(NARRATION_DAEMON_PID_FILE.read_text(encoding="utf-8").strip())
+    except (OSError, ValueError):
+        return 0
+    if not _pid_alive(narr_pid):
+        return 0
+    try:
+        return int(NARRATION_DEPTH_FILE.read_text(encoding="utf-8").strip() or "0")
+    except (OSError, ValueError):
+        return 0
+
+
 def resolve_config() -> dict:
     """Resolve coalesce / narration-wait / queue-wait / min-len.
 
@@ -207,30 +237,10 @@ class AutoplayWorker:
 
     # ---- queue-turn collaborators ---------------------------------------
     def _mpv_running(self) -> bool:
-        try:
-            raw = MPV_PID_PATH.read_text(encoding="utf-8").strip()
-        except OSError:
-            return False
-        if not raw:
-            return False
-        try:
-            return _pid_alive(int(raw))
-        except ValueError:
-            return False
+        return mpv_running()
 
     def _narrator_depth(self) -> int:
-        if not (NARRATION_DAEMON_PID_FILE.is_file() and NARRATION_DEPTH_FILE.is_file()):
-            return 0
-        try:
-            narr_pid = int(NARRATION_DAEMON_PID_FILE.read_text(encoding="utf-8").strip())
-        except (OSError, ValueError):
-            return 0
-        if not _pid_alive(narr_pid):
-            return 0
-        try:
-            return int(NARRATION_DEPTH_FILE.read_text(encoding="utf-8").strip() or "0")
-        except (OSError, ValueError):
-            return 0
+        return narrator_depth()
 
     def _wait_turn(self) -> bool:
         return self._fifo.wait_for_queue_turn(
