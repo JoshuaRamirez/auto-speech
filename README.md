@@ -102,8 +102,10 @@ should write text the way it should sound.
 bash setup/install-mcp.sh      # claude mcp add --scope user auto-speech
 ```
 
-Other MCP clients can launch `plugin/scripts/shell/run_mcp.sh` as a stdio
-server. The call returns as soon as the words are queued. A detached
+Installed as a managed plugin, the server is auto-discovered from
+`plugin/.mcp.json` and needs no separate step; `/auto-speech-doctor`
+reports whether it is registered. Other MCP clients can launch
+`plugin/scripts/shell/run_mcp.sh` as a stdio server. The call returns as soon as the words are queued. A detached
 worker then waits its turn in the same cross-session FIFO as autoplay,
 so it never cuts off another playback, and speaks. Repeated calls are
 spoken in order. The global mute (`~/.claude/auto-speech.disabled`)

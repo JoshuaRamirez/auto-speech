@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import io
 import json
+import os
 import sys
 import tempfile
 from pathlib import Path
@@ -167,6 +168,18 @@ def test_serve_writes_one_line_per_request() -> None:
     assert spoken == ["hi — ünïcode"]
 
 
+def test_plugin_mcp_manifest_points_at_the_launcher() -> None:
+    """plugin/.mcp.json is what a managed-plugin install auto-discovers."""
+    plugin_root = Path(__file__).resolve().parents[1] / "plugin"
+    manifest = json.loads((plugin_root / ".mcp.json").read_text(encoding="utf-8"))
+    entry = manifest["mcpServers"]["auto-speech"]
+    assert entry["command"] == "bash"
+    (arg,) = entry["args"]
+    assert arg.startswith("${CLAUDE_PLUGIN_ROOT}/")
+    launcher = plugin_root / arg.removeprefix("${CLAUDE_PLUGIN_ROOT}/")
+    assert launcher.is_file() and os.access(launcher, os.X_OK), launcher
+
+
 def main() -> int:
     tests = [
         test_initialize_echoes_supported_protocol,
@@ -182,6 +195,7 @@ def main() -> int:
         test_protocol_errors,
         test_response_messages_are_ignored,
         test_serve_writes_one_line_per_request,
+        test_plugin_mcp_manifest_points_at_the_launcher,
     ]
     for t in tests:
         t()

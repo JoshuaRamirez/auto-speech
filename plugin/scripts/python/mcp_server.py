@@ -40,12 +40,14 @@ INVALID_PARAMS = -32602
 
 SPEAK_TOOL = {
     "name": "speak",
-    "title": "Speak text aloud",
+    "title": "Speak text aloud (local text-to-speech)",
     "description": (
-        "Say the given words aloud on this Mac using the local auto-speech "
-        "voice. The text is spoken verbatim, so write it the way it should "
-        "sound (no markdown, code, or tables). Returns immediately; speech "
-        "is queued behind anything already playing."
+        "Speak text aloud: say, read out loud, voice, narrate, or vocalize "
+        "the given words as audio on this Mac's speakers. Local text-to-"
+        "speech (TTS) with the Kokoro voice — no cloud service, no API key. "
+        "The text is spoken verbatim, so write it the way it should sound "
+        "(no markdown, code, or tables). Returns immediately; speech is "
+        "queued behind anything already playing."
     ),
     "inputSchema": {
         "type": "object",
@@ -147,8 +149,10 @@ class McpServer:
             "capabilities": {"tools": {"listChanged": False}},
             "serverInfo": {"name": SERVER_NAME, "version": SERVER_VERSION},
             "instructions": (
-                "Use the speak tool to say words aloud to the user. Write "
-                "the text exactly as it should be heard."
+                "Use the speak tool whenever the user asks to hear something "
+                "out loud — say it, read it aloud, speak it, voice it, text-"
+                "to-speech it. It plays audio on this Mac. Write the text "
+                "exactly as it should be heard."
             ),
         }
 

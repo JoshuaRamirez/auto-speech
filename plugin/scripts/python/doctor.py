@@ -10,6 +10,7 @@ Every system probe is injectable so the checks are hermetically testable.
 """
 from __future__ import annotations
 
+import json
 import os
 import shutil
 import sys
@@ -44,6 +45,10 @@ def _default_venv_python() -> Path:
     return _project_root() / ".venv" / "bin" / "python"
 
 
+def _default_mcp_server_script() -> Path:
+    return _project_root() / "plugin" / "scripts" / "shell" / "run_mcp.sh"
+
+
 def _default_daemon_alive(pid: int) -> bool:
     # Reuse the narrator's PID-identity guard (handles reuse, not just kill -0).
     from narrator_service import _pid_is_our_daemon
@@ -62,6 +67,8 @@ class Doctor:
         lock_path: Path | None = None,
         stamp_path: Path | None = None,
         max_queue_depth: int = 32,
+        mcp_config_path: Path | None = None,
+        mcp_server_script: Path | None = None,
         which=shutil.which,
         disk_usage=shutil.disk_usage,
         daemon_alive=_default_daemon_alive,
@@ -79,6 +86,15 @@ class Doctor:
         )
         self._venv_python = Path(venv_python) if venv_python is not None else _default_venv_python()
         self._max_queue_depth = max_queue_depth
+        # User-scope MCP registrations live in ~/.claude.json under "mcpServers".
+        self._mcp_config_path = (
+            Path(mcp_config_path) if mcp_config_path is not None else self._home / ".claude.json"
+        )
+        self._mcp_server_script = (
+            Path(mcp_server_script)
+            if mcp_server_script is not None
+            else _default_mcp_server_script()
+        )
         self._which = which
         self._disk_usage = disk_usage
         self._daemon_alive = daemon_alive
@@ -92,6 +108,7 @@ class Doctor:
         self._check_daemon(r)
         self._check_queue(r)
         self._check_scope(r)
+        self._check_mcp(r)
         self._check_config(r)
         self._check_updates(r)
         return r
@@ -182,6 +199,37 @@ class Doctor:
             r.add("scope", Status.OK, "ALL — every session reads")
         else:
             r.add("scope", Status.OK, f"SOLO — only session {held} reads")
+
+    def _check_mcp(self, r: HealthReport) -> None:
+        """Is the `speak` MCP server launchable, and is it registered?
+
+        Registration is read from the client config rather than shelled out
+        to `claude mcp get` — doctor must stay fast and hermetic. A plugin-
+        managed install registers via plugin/.mcp.json instead, which this
+        probe cannot see, so an unregistered server is a WARN, never a FAIL.
+        """
+        if not os.access(self._mcp_server_script, os.X_OK):
+            r.add(
+                "mcp",
+                Status.FAIL,
+                f"server script missing or not executable: {self._mcp_server_script}",
+            )
+            return
+        try:
+            config = json.loads(self._mcp_config_path.read_text(encoding="utf-8"))
+            servers = config.get("mcpServers") or {}
+            registered = "auto-speech" in servers
+        except (OSError, ValueError, AttributeError):
+            registered = False
+        if registered:
+            r.add("mcp", Status.OK, "speak tool registered (user scope)")
+        else:
+            r.add(
+                "mcp",
+                Status.WARN,
+                "speak tool not registered in ~/.claude.json — run setup/install-mcp.sh "
+                "(ignore if installed as a managed plugin)",
+            )
 
     def _check_config(self, r: HealthReport) -> None:
         problems = validate_user_configs(self._config_dir)

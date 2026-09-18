@@ -1,0 +1,8 @@
+{
+  "mcpServers": {
+    "auto-speech": {
+      "command": "bash",
+      "args": ["${CLAUDE_PLUGIN_ROOT}/scripts/shell/run_mcp.sh"]
+    }
+  }
+}

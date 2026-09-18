@@ -36,6 +36,7 @@ def _doctor(home, tmp, **over):
         home=home,
         tmp=tmp,
         venv_python=Path(sys.executable),  # a real executable → venv OK
+        mcp_server_script=Path(sys.executable),  # ditto for the MCP launcher
         which=_which_all,
         disk_usage=_disk_free(5 * GIB),
         daemon_alive=lambda _pid: False,
@@ -58,6 +59,42 @@ def test_healthy_baseline() -> None:
         assert _check(report, "disk").status is Status.OK
         assert _check(report, "narrator").status is Status.OK  # not running = OK
         assert _check(report, "scope").status is Status.OK
+
+
+def _register_mcp(home: Path) -> None:
+    (home / ".claude.json").write_text(
+        json.dumps({"mcpServers": {"auto-speech": {"command": "bash"}}}), encoding="utf-8"
+    )
+
+
+def test_registered_mcp_server_ok() -> None:
+    with tempfile.TemporaryDirectory() as h, tempfile.TemporaryDirectory() as t:
+        _register_mcp(Path(h))
+        report = _doctor(Path(h), Path(t)).run()
+        assert _check(report, "mcp").status is Status.OK
+
+
+def test_unregistered_mcp_server_warns() -> None:
+    with tempfile.TemporaryDirectory() as h, tempfile.TemporaryDirectory() as t:
+        # No ~/.claude.json at all, then one without our entry, then junk.
+        for write in (
+            None,
+            lambda p: p.write_text(json.dumps({"mcpServers": {"other": {}}}), encoding="utf-8"),
+            lambda p: p.write_text("{not json", encoding="utf-8"),
+        ):
+            if write is not None:
+                write(Path(h) / ".claude.json")
+            report = _doctor(Path(h), Path(t)).run()
+            assert _check(report, "mcp").status is Status.WARN
+            assert report.healthy is True  # not registered ≠ broken
+
+
+def test_missing_mcp_server_script_is_fail() -> None:
+    with tempfile.TemporaryDirectory() as h, tempfile.TemporaryDirectory() as t:
+        _register_mcp(Path(h))
+        report = _doctor(Path(h), Path(t), mcp_server_script=Path(t) / "no-run-mcp.sh").run()
+        assert _check(report, "mcp").status is Status.FAIL
+        assert report.exit_code == 1
 
 
 def test_missing_mpv_is_fail() -> None:
@@ -188,6 +225,9 @@ def test_json_shape_and_exit() -> None:
 def main() -> int:
     tests = [
         test_healthy_baseline,
+        test_registered_mcp_server_ok,
+        test_unregistered_mcp_server_warns,
+        test_missing_mcp_server_script_is_fail,
         test_missing_mpv_is_fail,
         test_missing_uv_is_only_warn,
         test_missing_venv_is_fail,
