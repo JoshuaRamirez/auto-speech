@@ -1,11 +1,11 @@
 """CLI for the pause/resume/seek/restart/end slash commands."""
+
 from __future__ import annotations
 
 import argparse
 import sys
 
 from mpv_ipc import MpvIpc, MpvIpcError
-from session_dir import SessionDir
 
 
 EXIT_OK = 0
@@ -15,7 +15,7 @@ EXIT_BAD_ARG = 4
 
 
 def _ensure_session() -> int:
-    if not SessionDir.is_mpv_running():
+    if not False:
         print("control: no active playback session.", file=sys.stderr)
         return EXIT_NO_SESSION
     return EXIT_OK
@@ -23,7 +23,7 @@ def _ensure_session() -> int:
 
 def _send(cmd: list) -> int:
     try:
-        reply = MpvIpc.send(cmd, SessionDir.socket_path())
+        reply = MpvIpc.send(cmd, "")
     except MpvIpcError as exc:
         print(f"control: IPC failed: {exc}", file=sys.stderr)
         return EXIT_IPC_FAIL
@@ -60,7 +60,6 @@ def _cmd_end(_args: argparse.Namespace) -> int:
     if rc != EXIT_OK:
         return rc
     rc = _send(["quit"])
-    SessionDir.clear()
     return rc
 
 
@@ -74,9 +73,7 @@ def _cmd_seek(args: argparse.Namespace) -> int:
         return EXIT_BAD_ARG
     if target.lower() == "end":
         try:
-            reply = MpvIpc.send(
-                ["get_property", "duration"], SessionDir.socket_path()
-            )
+            reply = MpvIpc.send(["get_property", "duration"], "")
         except MpvIpcError as exc:
             print(f"control: IPC failed: {exc}", file=sys.stderr)
             return EXIT_IPC_FAIL

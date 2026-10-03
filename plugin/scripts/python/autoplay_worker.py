@@ -15,11 +15,12 @@ reproduce the bash worker's behavior step for step:
 ALWAYS exits 0. Every failure is logged (greppable `[worker pid sid]`
 form) and never bubbles up.
 
-The shell wrappers run_extract.sh / compute_hash.sh / run_speak.sh and
+The shell wrappers run_extract.sh / compute_hash.sh / speak.py and
 cli_rewrite.py are invoked via subprocess (extract/hash/TTS are not
 reimplemented). Collaborators and the subprocess runners are injectable
 so the full lifecycle can be walked in tests with no real audio/LLM.
 """
+
 from __future__ import annotations
 
 import os
@@ -49,13 +50,13 @@ _PROJECT_ROOT = _PLUGIN_SCRIPTS_DIR.parent.parent
 
 EXTRACT = _PLUGIN_SCRIPTS_DIR / "shell" / "run_extract.sh"
 COMPUTE_HASH = _PLUGIN_SCRIPTS_DIR / "shell" / "compute_hash.sh"
-SPEAK = _PLUGIN_SCRIPTS_DIR / "shell" / "run_speak.sh"
+SPEAK = _PLUGIN_SCRIPTS_DIR / "shell" / "speak.py"
 CLI_REWRITE = _PLUGIN_SCRIPTS_DIR / "python" / "cli_rewrite.py"
 VENV = _PROJECT_ROOT / ".venv"
 
 NARRATION_DEPTH_FILE = Path("/tmp/auto-speech-narration-depth")
 NARRATION_DAEMON_PID_FILE = Path("/tmp/auto-speech-narrator-daemon.pid")
-MPV_PID_PATH = Path("/tmp/auto-speech/mpv.pid")
+MPV_PID_PATH = Path("/tmp/auto-speech-mpv.pid")
 CLAUDE_STDERR_LOG = Path("/tmp/auto-speech-claude-stderr.log")
 
 
@@ -296,9 +297,7 @@ class AutoplayWorker:
             return 0
 
         # Compute cache key.
-        rc, source_hash = self._runner(
-            ["bash", str(COMPUTE_HASH)], stdin_text=src
-        )
+        rc, source_hash = self._runner(["bash", str(COMPUTE_HASH)], stdin_text=src)
         source_hash = (source_hash or "").strip()
         if rc != 0 or not source_hash:
             self._log("compute_hash failed; skipping")
@@ -377,7 +376,9 @@ class AutoplayWorker:
             self._machine.transition(BAILED)
             return 0
         if not self._dedup.try_claim(source_hash):
-            self._log("same hash claimed by a sibling worker; skipping duplicate (post-rewrite path)")
+            self._log(
+                "same hash claimed by a sibling worker; skipping duplicate (post-rewrite path)"
+            )
             self._machine.transition(BAILED)
             return 0
         self._speak(source_hash, stdin_text=rewrite, path_label="after rewrite")
@@ -400,7 +401,7 @@ class AutoplayWorker:
 def main(argv: list[str] | None = None) -> int:
     """Entry point matching the shim arg contract:
 
-        autoplay_worker.py BEACON_MTIME [TRANSCRIPT_PATH] [SESSION_ID]
+    autoplay_worker.py BEACON_MTIME [TRANSCRIPT_PATH] [SESSION_ID]
     """
     args = list(sys.argv[1:] if argv is None else argv)
     beacon_mtime = float(args[0]) if len(args) >= 1 and args[0] else 0.0

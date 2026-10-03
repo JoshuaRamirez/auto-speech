@@ -1,4 +1,5 @@
 """CacheEntry: one persisted cache entry's metadata."""
+
 from __future__ import annotations
 
 from dataclasses import dataclass, asdict

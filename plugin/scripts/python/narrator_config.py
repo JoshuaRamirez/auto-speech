@@ -8,6 +8,7 @@ Search order:
 Returns a flat dict with keys: provider, model, prompt_template_path,
 max_tokens, silence_seconds, idle_shutdown_seconds.
 """
+
 from __future__ import annotations
 
 import os

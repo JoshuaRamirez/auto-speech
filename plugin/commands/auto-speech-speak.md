@@ -60,7 +60,7 @@ REWRITE_CHARS=$(wc -c < "$REWRITE_FILE" | tr -d ' ')
 
 # 3. Speak (TTS + mpv). Both stdout and stderr to log — nothing on
 #    stdout we'd want to see.
-"$PROJECT_ROOT/plugin/scripts/shell/run_speak.sh" \
+"$PROJECT_ROOT/plugin/scripts/shell/speak.py" \
     --ordinal ORDINAL --source-hash "$SOURCE_HASH" < "$REWRITE_FILE" >>"$LOG" 2>&1 \
     || dump_log_and_fail $? speak
 

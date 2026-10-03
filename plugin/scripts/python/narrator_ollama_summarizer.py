@@ -16,6 +16,7 @@ Config (in ~/.config/auto-speech/narrator.toml):
     # Optional override (defaults to env or http://127.0.0.1:11434):
     # ollama_host = "http://127.0.0.1:11434"
 """
+
 from __future__ import annotations
 
 import json
@@ -41,9 +42,7 @@ class OllamaSummarizer(Summarizer):
         self._model = model
         self._max_tokens = max_tokens
         self._host = (
-            host
-            or os.environ.get("AUTO_SPEECH_OLLAMA_HOST")
-            or self._DEFAULT_HOST
+            host or os.environ.get("AUTO_SPEECH_OLLAMA_HOST") or self._DEFAULT_HOST
         ).rstrip("/")
         self._template = Path(prompt_template_path).read_text(encoding="utf-8")
 
@@ -55,12 +54,14 @@ class OllamaSummarizer(Summarizer):
             duration=f"{phase.duration_s:.0f}",
             events=events_str,
         )
-        body = json.dumps({
-            "model": self._model,
-            "prompt": user_prompt,
-            "stream": False,
-            "options": {"num_predict": self._max_tokens},
-        }).encode("utf-8")
+        body = json.dumps(
+            {
+                "model": self._model,
+                "prompt": user_prompt,
+                "stream": False,
+                "options": {"num_predict": self._max_tokens},
+            }
+        ).encode("utf-8")
         req = urllib.request.Request(
             f"{self._host}/api/generate",
             data=body,
@@ -86,5 +87,5 @@ def _first_line(text: str) -> str:
     line = next((ln.strip() for ln in text.splitlines() if ln.strip()), "")
     for prefix in ('"', "'", "* ", "- ", "1. "):
         if line.startswith(prefix):
-            line = line[len(prefix):].lstrip()
+            line = line[len(prefix) :].lstrip()
     return line

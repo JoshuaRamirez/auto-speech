@@ -9,6 +9,7 @@ span keeps the largest prosodic unit that still synthesizes:
 Stateless and referentially transparent: the same input always yields
 the same decomposition, and nothing outside the returned list changes.
 """
+
 from __future__ import annotations
 
 import re

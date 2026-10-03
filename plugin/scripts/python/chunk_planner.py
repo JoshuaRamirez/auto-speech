@@ -1,4 +1,5 @@
 """ChunkPlanner: decompose an AudioTranscript into a ChunkPlan."""
+
 from __future__ import annotations
 
 from audio_transcript import AudioTranscript

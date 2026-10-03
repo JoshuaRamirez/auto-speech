@@ -24,6 +24,7 @@ Caps are env-overridable so retention can be tuned without code changes:
   AUTO_SPEECH_LOG_MAX_BYTES   (default 5 MiB)
   AUTO_SPEECH_LOG_BACKUPS     (default 3)
 """
+
 from __future__ import annotations
 
 import logging

@@ -16,6 +16,7 @@ Exit codes:
     1  rewriter error or empty output
     2  claude binary not found
 """
+
 from __future__ import annotations
 
 import argparse
@@ -78,6 +79,7 @@ def main(argv: list[str] | None = None) -> int:
     # If either was overridden, re-resolve the prompt path.
     if args.mode is not None or args.size is not None:
         from autoplay_config import _resolve_prompt  # local re-import for resolver
+
         cfg["prompt_path"] = str(_resolve_prompt(cfg["mode"], cfg["summary_size"]))
 
     template = _load_template(cfg["prompt_path"])

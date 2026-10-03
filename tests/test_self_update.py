@@ -4,6 +4,7 @@ Covers hash determinism, needs_sync across the four cases (no stamp, match,
 mismatch, missing lock), record_sync round-trip, and the CLI exit codes the
 bootstrap shell relies on. Hermetic: temp files only.
 """
+
 from __future__ import annotations
 
 import sys

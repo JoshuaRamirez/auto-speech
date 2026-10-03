@@ -2,6 +2,7 @@
 
 Priority: paragraph > sentence > clause > word > hard fallback.
 """
+
 from __future__ import annotations
 
 import re

@@ -6,6 +6,7 @@ PHASE_QUEUED, then replaces it with a new Job at each transition
 
 See ADR-014 + docs/micro-design/phase-17-fire-and-forget-speak.md.
 """
+
 from __future__ import annotations
 
 from dataclasses import dataclass, asdict
@@ -36,10 +37,10 @@ _LEGAL_NEXT = {
 class Job:
     """Immutable descriptor; phase advances by replacement."""
 
-    id: str               # 16-hex-char (uuid4().hex[:16])
-    phase: str            # one of PHASE_*
-    started_at: float     # epoch seconds (time.time())
-    mode: str             # "rewrite" | "passthrough"
+    id: str  # 16-hex-char (uuid4().hex[:16])
+    phase: str  # one of PHASE_*
+    started_at: float  # epoch seconds (time.time())
+    mode: str  # "rewrite" | "passthrough"
     source_chars: int
     rewrite_chars: int | None = None
     hash: str | None = None

@@ -1,4 +1,5 @@
 """MpvIpc: one-shot JSON-line send/receive over mpv's Unix socket."""
+
 from __future__ import annotations
 
 import json

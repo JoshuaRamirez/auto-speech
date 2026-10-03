@@ -3,6 +3,7 @@
 The autoplay chunk planner relies on this generator producing a strict
 1, 1, 2, 3, 5, 8, ... sequence. Pin the contract.
 """
+
 from __future__ import annotations
 
 import sys
@@ -53,7 +54,7 @@ def test_first_two_are_both_one() -> None:
 def test_grows_monotonically_after_position_2() -> None:
     seq = FibonacciSeq()
     prev = seq.next_target()  # 1
-    seq.next_target()         # 1 (duplicate)
+    seq.next_target()  # 1 (duplicate)
     prev = 1
     for _ in range(20):
         nxt = seq.next_target()

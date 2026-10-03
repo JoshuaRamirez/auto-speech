@@ -3,6 +3,7 @@
 Builds synthetic JSONL transcripts and verifies the ring-buffer
 ordering, qualifying-message filter, and error paths.
 """
+
 from __future__ import annotations
 
 import json
@@ -18,9 +19,7 @@ from transcript_reader import TranscriptReadError, TranscriptReader  # noqa: E40
 
 
 def _write_jsonl(records: list[dict]) -> Path:
-    f = tempfile.NamedTemporaryFile(
-        mode="w", suffix=".jsonl", delete=False, encoding="utf-8"
-    )
+    f = tempfile.NamedTemporaryFile(mode="w", suffix=".jsonl", delete=False, encoding="utf-8")
     for r in records:
         f.write(json.dumps(r))
         f.write("\n")
@@ -47,12 +46,14 @@ def _user(text: str) -> dict:
 
 
 def test_select_first_picks_most_recent_assistant() -> None:
-    path = _write_jsonl([
-        _user("hi"),
-        _assistant("first reply", ts="2026-05-16T01:00:00Z"),
-        _user("ok"),
-        _assistant("second reply", ts="2026-05-16T02:00:00Z"),
-    ])
+    path = _write_jsonl(
+        [
+            _user("hi"),
+            _assistant("first reply", ts="2026-05-16T01:00:00Z"),
+            _user("ok"),
+            _assistant("second reply", ts="2026-05-16T02:00:00Z"),
+        ]
+    )
     try:
         msg = MessageSelector().select(path, 1)
         assert msg.text == "second reply"
@@ -63,11 +64,13 @@ def test_select_first_picks_most_recent_assistant() -> None:
 
 
 def test_select_nth_oldest_in_window() -> None:
-    path = _write_jsonl([
-        _assistant("oldest", ts="t1"),
-        _assistant("middle", ts="t2"),
-        _assistant("newest", ts="t3"),
-    ])
+    path = _write_jsonl(
+        [
+            _assistant("oldest", ts="t1"),
+            _assistant("middle", ts="t2"),
+            _assistant("newest", ts="t3"),
+        ]
+    )
     try:
         # n=1 → newest, n=2 → middle, n=3 → oldest.
         assert MessageSelector().select(path, 1).text == "newest"
@@ -86,10 +89,12 @@ def test_select_skips_tool_only_assistant_turns() -> None:
             "content": [{"type": "tool_use", "id": "x", "name": "Bash"}],
         },
     }
-    path = _write_jsonl([
-        _assistant("real reply", ts="t1"),
-        tool_only,
-    ])
+    path = _write_jsonl(
+        [
+            _assistant("real reply", ts="t1"),
+            tool_only,
+        ]
+    )
     try:
         msg = MessageSelector().select(path, 1)
         # The most-recent QUALIFYING assistant turn is "real reply".
@@ -106,10 +111,12 @@ def test_select_skips_blank_text_blocks() -> None:
             "content": [{"type": "text", "text": "   \n  "}],
         },
     }
-    path = _write_jsonl([
-        _assistant("substantive", ts="t1"),
-        blank,
-    ])
+    path = _write_jsonl(
+        [
+            _assistant("substantive", ts="t1"),
+            blank,
+        ]
+    )
     try:
         msg = MessageSelector().select(path, 1)
         assert msg.text == "substantive"
@@ -157,10 +164,12 @@ def test_exclude_regex_skips_matching_assistant_messages() -> None:
     """Regression for the /auto-speech-speak self-reference loop: a
     repeated invocation was extracting its own previous status line
     ("spoke message #1 — ...") instead of the real prior content."""
-    path = _write_jsonl([
-        _assistant("real technical answer with the actual content"),
-        _assistant("spoke message #1 — 28 source chars, 48 rewrite chars"),
-    ])
+    path = _write_jsonl(
+        [
+            _assistant("real technical answer with the actual content"),
+            _assistant("spoke message #1 — 28 source chars, 48 rewrite chars"),
+        ]
+    )
     try:
         # Without the filter, ordinal=1 = the speak status echo.
         msg = MessageSelector().select(path, 1)
@@ -169,9 +178,7 @@ def test_exclude_regex_skips_matching_assistant_messages() -> None:
         )
 
         # With the filter, ordinal=1 = the real content (status is skipped).
-        msg = MessageSelector().select(
-            path, 1, exclude_regex=r"^spoke message #\d+"
-        )
+        msg = MessageSelector().select(path, 1, exclude_regex=r"^spoke message #\d+")
         assert msg.text == "real technical answer with the actual content", (
             f"filter should have skipped the speak echo. Got: {msg.text!r}"
         )
@@ -182,15 +189,15 @@ def test_exclude_regex_skips_matching_assistant_messages() -> None:
 def test_exclude_regex_consecutive_echoes_all_skipped() -> None:
     """Two prior /speak invocations, only one real message. ordinal=1
     with the filter still hits the real message."""
-    path = _write_jsonl([
-        _assistant("real content"),
-        _assistant("spoke message #1 — 50 source chars, 80 rewrite chars"),
-        _assistant("spoke message #1 — 80 source chars, 95 rewrite chars"),
-    ])
+    path = _write_jsonl(
+        [
+            _assistant("real content"),
+            _assistant("spoke message #1 — 50 source chars, 80 rewrite chars"),
+            _assistant("spoke message #1 — 80 source chars, 95 rewrite chars"),
+        ]
+    )
     try:
-        msg = MessageSelector().select(
-            path, 1, exclude_regex=r"^spoke message #\d+"
-        )
+        msg = MessageSelector().select(path, 1, exclude_regex=r"^spoke message #\d+")
         assert msg.text == "real content"
     finally:
         path.unlink()
@@ -199,10 +206,12 @@ def test_exclude_regex_consecutive_echoes_all_skipped() -> None:
 def test_exclude_regex_raises_when_all_messages_match() -> None:
     """If every qualifying message matches the filter, ordinal=1 should
     raise NoSuchAssistantTurn (filtered count is zero)."""
-    path = _write_jsonl([
-        _assistant("spoke message #1 — first"),
-        _assistant("spoke message #1 — second"),
-    ])
+    path = _write_jsonl(
+        [
+            _assistant("spoke message #1 — first"),
+            _assistant("spoke message #1 — second"),
+        ]
+    )
     try:
         try:
             MessageSelector().select(path, 1, exclude_regex=r"^spoke message")
@@ -227,9 +236,7 @@ def test_select_raises_on_zero_or_negative_n() -> None:
 
 
 def test_transcript_reader_skips_blank_lines() -> None:
-    f = tempfile.NamedTemporaryFile(
-        mode="w", suffix=".jsonl", delete=False, encoding="utf-8"
-    )
+    f = tempfile.NamedTemporaryFile(mode="w", suffix=".jsonl", delete=False, encoding="utf-8")
     f.write("\n")
     f.write(json.dumps({"a": 1}) + "\n")
     f.write("   \n")
@@ -244,9 +251,7 @@ def test_transcript_reader_skips_blank_lines() -> None:
 
 
 def test_transcript_reader_raises_on_malformed_line_with_line_number() -> None:
-    f = tempfile.NamedTemporaryFile(
-        mode="w", suffix=".jsonl", delete=False, encoding="utf-8"
-    )
+    f = tempfile.NamedTemporaryFile(mode="w", suffix=".jsonl", delete=False, encoding="utf-8")
     f.write(json.dumps({"ok": 1}) + "\n")
     f.write("this is not json\n")
     f.close()

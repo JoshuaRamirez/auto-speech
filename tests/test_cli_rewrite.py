@@ -4,6 +4,7 @@ The real script shells out to `claude -p`, which we don't want to do
 in tests. Instead we monkeypatch ClaudeCliRewriter.rewrite to a stub
 and verify cli_rewrite picks the right prompt template by mode/size.
 """
+
 from __future__ import annotations
 
 import io

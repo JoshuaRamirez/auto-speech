@@ -5,6 +5,7 @@ allow decision under both scopes, the empty-session-id safety rule
 (never mute an unidentifiable session), atomic re-claim, and the
 human-readable status formatter.
 """
+
 from __future__ import annotations
 
 import sys

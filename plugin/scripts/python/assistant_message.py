@@ -1,4 +1,5 @@
 """AssistantMessage: a single assistant turn's text content."""
+
 from __future__ import annotations
 
 from dataclasses import dataclass

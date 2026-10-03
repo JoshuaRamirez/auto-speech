@@ -19,6 +19,7 @@ Two entry points:
 
 Both are decisions about audio only; neither touches playback or cache.
 """
+
 from __future__ import annotations
 
 import sys
@@ -91,14 +92,10 @@ class ResilientSynthesizer:
             results: list[Path] = []
             for i, part in enumerate(parts):
                 sub = out_path.with_name(f"{out_path.stem}-{depth}_{i}.wav")
-                results.extend(
-                    self.synthesize_parts(part, profile, sub, depth + 1)
-                )
+                results.extend(self.synthesize_parts(part, profile, sub, depth + 1))
             return results
 
-    def synthesize_one(
-        self, text: str, profile: VoiceProfile, out_path: Path
-    ) -> bool:
+    def synthesize_one(self, text: str, profile: VoiceProfile, out_path: Path) -> bool:
         """Produce exactly `out_path`, recovering from generation faults.
 
         Returns True when `out_path` holds audio, False when nothing in
@@ -116,9 +113,7 @@ class ResilientSynthesizer:
         try:
             WavConcatenator.concat(parts, out_path)
         except WavConcatError as exc:
-            raise TTSGenerationError(
-                f"could not join recovered fragments: {exc}"
-            ) from exc
+            raise TTSGenerationError(f"could not join recovered fragments: {exc}") from exc
         for p in parts:
             if p != out_path:
                 p.unlink(missing_ok=True)

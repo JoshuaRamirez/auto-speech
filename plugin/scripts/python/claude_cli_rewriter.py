@@ -7,6 +7,7 @@ shared file under plugin/prompts/.
 
 See docs/decisions/ADR-011-claude-cli-rewriter.md.
 """
+
 from __future__ import annotations
 
 import os
@@ -88,9 +89,7 @@ class ClaudeCliRewriter:
             ) from exc
         except subprocess.CalledProcessError as exc:
             stderr = (exc.stderr or "").strip()
-            raise ClaudeCliRewriteError(
-                f"claude exited {exc.returncode}: {stderr[:500]}"
-            ) from exc
+            raise ClaudeCliRewriteError(f"claude exited {exc.returncode}: {stderr[:500]}") from exc
 
         out = (result.stdout or "").strip()
         if not out:

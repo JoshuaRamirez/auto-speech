@@ -3,6 +3,7 @@
 Exercises every legal edge of the playback lifecycle plus representative
 illegal transitions out of IDLE.
 """
+
 from __future__ import annotations
 
 import sys
@@ -62,7 +63,7 @@ def _expect_illegal(m: PlaybackStateMachine, to: str) -> None:
 
 
 def test_illegal_transitions_from_idle() -> None:
-    _expect_illegal(PlaybackStateMachine(), READY)     # IDLE → READY
+    _expect_illegal(PlaybackStateMachine(), READY)  # IDLE → READY
     _expect_illegal(PlaybackStateMachine(), STOPPING)  # IDLE → STOPPING
 
 

@@ -1,7 +1,7 @@
 {
-  "voice_id": "af_heart",
+  "voice_id": "af_nova",
   "speed": 1.0,
-  "chars_per_second": 15.841584158415841,
-  "calibrated_at": "2026-04-23T21:07:34Z",
+  "chars_per_second": 15.84,
+  "calibrated_at": "2026-10-03T06:17:00Z",
   "calibration_source_chars": 600
 }

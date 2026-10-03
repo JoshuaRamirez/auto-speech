@@ -1,4 +1,5 @@
 """PlaybackConsumer: dequeue AudioSegments and play each via afplay."""
+
 from __future__ import annotations
 
 import threading
@@ -47,9 +48,7 @@ class PlaybackConsumer:
                 )
                 rc = self._launcher.play(seg.wav_path, self._stop_event)
                 if rc != 0 and not self._stop_event.is_set():
-                    raise PlaybackError(
-                        f"afplay exit {rc} on chunk #{seg.descriptor.index}"
-                    )
+                    raise PlaybackError(f"afplay exit {rc} on chunk #{seg.descriptor.index}")
                 self.played_count += 1
         except Exception as exc:
             self.error = exc

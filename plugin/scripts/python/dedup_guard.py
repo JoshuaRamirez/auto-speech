@@ -15,6 +15,7 @@ This guard suppresses that duplicate.
 Direct port of already_playing_same_hash + write_now_playing in
 autoplay_worker.sh.
 """
+
 from __future__ import annotations
 
 import fcntl
@@ -25,7 +26,7 @@ from pathlib import Path
 NOW_PLAYING_MARKER = Path("/tmp/auto-speech-now-playing-hash")
 NOW_PLAYING_LOCK = Path("/tmp/auto-speech-now-playing.lock")
 AGE_CAP_SECONDS = 120
-MPV_PID_PATH = Path("/tmp/auto-speech/mpv.pid")
+MPV_PID_PATH = Path("/tmp/auto-speech-mpv.pid")
 
 
 def _pid_alive(pid: int) -> bool:

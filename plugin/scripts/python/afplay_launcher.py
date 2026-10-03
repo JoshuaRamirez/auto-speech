@@ -1,4 +1,5 @@
 """AfplayLauncher: spawn `afplay` for one WAV with cooperative cancellation."""
+
 from __future__ import annotations
 
 import subprocess

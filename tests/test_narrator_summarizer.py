@@ -4,6 +4,7 @@ MlxSummarizer is intentionally not tested here — exercising it would
 require the mlx-lm dep and a 2-4 GB model download. Provider="mock" is
 the safe path and what the factory falls back to on MLX failure.
 """
+
 from __future__ import annotations
 
 import sys
@@ -51,9 +52,7 @@ def test_mock_single_event_each_category() -> None:
         assert line.startswith(expected_verb_prefix), (
             f"category={cat.value}: expected prefix {expected_verb_prefix!r}, got {line!r}"
         )
-        assert expected_arg in line, (
-            f"category={cat.value}: expected {expected_arg!r} in {line!r}"
-        )
+        assert expected_arg in line, f"category={cat.value}: expected {expected_arg!r} in {line!r}"
 
 
 def test_mock_multi_event_includes_count_and_first() -> None:
@@ -88,8 +87,7 @@ def test_mock_NEVER_uses_canned_assistant_or_ai_subject() -> None:
         line = summ.summarize(p).lower()
         for phrase in banned:
             assert phrase not in line, (
-                f"mock summary leaked the canned narrator subject "
-                f"{phrase!r}: {line!r}"
+                f"mock summary leaked the canned narrator subject {phrase!r}: {line!r}"
             )
 
 
@@ -125,15 +123,15 @@ def test_factory_falls_back_to_mock_on_mlx_failure() -> None:
     # Point at a model that almost certainly doesn't resolve, with a
     # non-existent prompt template path. MLX import + load should raise;
     # factory must catch and downgrade.
-    summ = load_summarizer({
-        "provider": "mlx",
-        "model": "definitely-not-a-real-model-xyz-12345",
-        "prompt_template_path": "/nonexistent/prompt.txt",
-        "max_tokens": 10,
-    })
-    assert isinstance(summ, MockSummarizer), (
-        "MLX failure must downgrade to Mock, not crash"
+    summ = load_summarizer(
+        {
+            "provider": "mlx",
+            "model": "definitely-not-a-real-model-xyz-12345",
+            "prompt_template_path": "/nonexistent/prompt.txt",
+            "max_tokens": 10,
+        }
     )
+    assert isinstance(summ, MockSummarizer), "MLX failure must downgrade to Mock, not crash"
 
 
 def test_factory_returns_ollama_summarizer_when_provider_is_ollama() -> None:
@@ -143,19 +141,19 @@ def test_factory_returns_ollama_summarizer_when_provider_is_ollama() -> None:
     import tempfile
     from pathlib import Path
 
-    tmp = tempfile.NamedTemporaryFile(
-        mode="w", suffix=".txt", delete=False, encoding="utf-8"
-    )
+    tmp = tempfile.NamedTemporaryFile(mode="w", suffix=".txt", delete=False, encoding="utf-8")
     tmp.write("body {events}")
     tmp.close()
     try:
-        summ = load_summarizer({
-            "provider": "ollama",
-            "model": "qwen2.5:3b",
-            "prompt_template_path": tmp.name,
-            "max_tokens": 50,
-            "ollama_host": "http://127.0.0.1:11434",
-        })
+        summ = load_summarizer(
+            {
+                "provider": "ollama",
+                "model": "qwen2.5:3b",
+                "prompt_template_path": tmp.name,
+                "max_tokens": 50,
+                "ollama_host": "http://127.0.0.1:11434",
+            }
+        )
         # On success it's OllamaSummarizer; on import/init failure the
         # factory's exception handler downgrades to Mock.
         assert summ.__class__.__name__ in ("OllamaSummarizer", "MockSummarizer"), (

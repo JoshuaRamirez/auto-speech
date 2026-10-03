@@ -4,6 +4,7 @@ Used for inspecting the classifier against a captured events log:
 
     cat /tmp/auto-speech-narrator-events.jsonl | python narrator_classify_cli.py
 """
+
 from __future__ import annotations
 
 import json
@@ -33,10 +34,7 @@ def main() -> int:
 
 def _print_phase(p, flush: bool = False) -> None:
     tag = " [flush]" if flush else ""
-    print(
-        f"PHASE {p.category.value}{tag}  events={len(p.events)}  "
-        f"duration={p.duration_s:.1f}s"
-    )
+    print(f"PHASE {p.category.value}{tag}  events={len(p.events)}  duration={p.duration_s:.1f}s")
     for e in p.events:
         print(f"  - {e.summary}")
 

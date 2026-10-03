@@ -7,6 +7,7 @@ and reuses it for the life of the process.
 Atomicity: writes to <out_path>.partial and renames on success, so
 PlaybackQueue consumers never see a half-written WAV.
 """
+
 from __future__ import annotations
 
 import os
@@ -61,6 +62,7 @@ class TTSEngine:
             return
         # Local import so module import cost is paid only when used.
         from mlx_audio.tts.utils import load_model  # type: ignore
+
         print(f"[tts_engine] loading {self._model_id} ...")
         self._model = load_model(self._model_id)
         print("[tts_engine] model loaded")

@@ -8,6 +8,7 @@ check FAILs so it can gate scripts and monitors.
 
 Every system probe is injectable so the checks are hermetically testable.
 """
+
 from __future__ import annotations
 
 import json
@@ -76,9 +77,7 @@ class Doctor:
         self._home = Path(home) if home is not None else Path(os.path.expanduser("~"))
         self._tmp = Path(tmp) if tmp is not None else Path("/tmp")
         self._config_dir = (
-            Path(config_dir)
-            if config_dir is not None
-            else self._home / ".config" / "auto-speech"
+            Path(config_dir) if config_dir is not None else self._home / ".config" / "auto-speech"
         )
         self._lock_path = Path(lock_path) if lock_path is not None else _project_root() / "uv.lock"
         self._stamp_path = (
@@ -129,7 +128,11 @@ class Doctor:
         if os.access(self._venv_python, os.X_OK):
             r.add("venv", Status.OK, f"python present at {self._venv_python}")
         else:
-            r.add("venv", Status.FAIL, f"interpreter missing at {self._venv_python} (run setup/install.sh)")
+            r.add(
+                "venv",
+                Status.FAIL,
+                f"interpreter missing at {self._venv_python} (run setup/install.sh)",
+            )
 
     def _check_disk(self, r: HealthReport) -> None:
         try:
@@ -174,7 +177,11 @@ class Doctor:
         if self._daemon_alive(pid):
             r.add("narrator", Status.OK, f"running (pid={pid})")
         else:
-            r.add("narrator", Status.WARN, f"stale pid {pid} (dead/recycled) — reclaimed on next start")
+            r.add(
+                "narrator",
+                Status.WARN,
+                f"stale pid {pid} (dead/recycled) — reclaimed on next start",
+            )
 
     def _check_queue(self, r: HealthReport) -> None:
         depth_file = self._tmp / "auto-speech-narration-depth"
@@ -184,13 +191,19 @@ class Doctor:
             r.add("queue", Status.OK, "idle")
             return
         if depth >= self._max_queue_depth:
-            r.add("queue", Status.WARN, f"saturated (depth={depth}/{self._max_queue_depth}) — dropping oldest")
+            r.add(
+                "queue",
+                Status.WARN,
+                f"saturated (depth={depth}/{self._max_queue_depth}) — dropping oldest",
+            )
         else:
             r.add("queue", Status.OK, f"depth={depth}/{self._max_queue_depth}")
 
     def _check_scope(self, r: HealthReport) -> None:
         if (self._home / ".claude" / "auto-speech.disabled").exists():
-            r.add("autoplay", Status.WARN, "globally muted (~/.claude/auto-speech.disabled present)")
+            r.add(
+                "autoplay", Status.WARN, "globally muted (~/.claude/auto-speech.disabled present)"
+            )
         else:
             r.add("autoplay", Status.OK, "enabled (default)")
         scope = SoloScope(home=self._home)

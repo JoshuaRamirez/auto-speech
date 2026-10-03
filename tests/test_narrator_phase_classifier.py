@@ -10,6 +10,7 @@ Plus invariants: empty/missing fields are tolerated, OTHER category is
 emitted faithfully (suppression happens in the daemon, not the classifier),
 and the classifier's internal state resets after each close.
 """
+
 from __future__ import annotations
 
 import sys

@@ -1,4 +1,5 @@
 """DurationEstimator: estimate spoken duration from char count."""
+
 from __future__ import annotations
 
 from voice_profile import VoiceProfile

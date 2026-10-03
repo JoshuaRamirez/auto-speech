@@ -10,6 +10,7 @@ Tests cover:
 We patch the locator's PROJECTS_ROOT class attribute to a temp dir so we
 can synthesize jsonl files without touching the real ~/.claude.
 """
+
 from __future__ import annotations
 
 import os
@@ -105,9 +106,7 @@ def test_claude_code_session_id_env_is_also_honored() -> None:
                 else:
                     os.environ["CLAUDE_CODE_SESSION_ID"] = prev_new
 
-            assert result == cc_target, (
-                f"CLAUDE_CODE_SESSION_ID should be honored; got {result}"
-            )
+            assert result == cc_target, f"CLAUDE_CODE_SESSION_ID should be honored; got {result}"
 
 
 def test_session_id_env_picks_named_file_when_present() -> None:
@@ -133,9 +132,7 @@ def test_session_id_env_picks_named_file_when_present() -> None:
                 else:
                     os.environ["CLAUDE_SESSION_ID"] = prev
 
-            assert result == named, (
-                f"env-var session should win over newer file; got {result}"
-            )
+            assert result == named, f"env-var session should win over newer file; got {result}"
 
 
 def test_env_var_set_but_file_missing_falls_back_to_newest() -> None:
@@ -183,9 +180,7 @@ def test_no_env_var_uses_newest_jsonl() -> None:
                 if prev is not None:
                     os.environ["CLAUDE_SESSION_ID"] = prev
 
-            assert result.name == "c.jsonl", (
-                f"expected newest jsonl c.jsonl; got {result.name}"
-            )
+            assert result.name == "c.jsonl", f"expected newest jsonl c.jsonl; got {result.name}"
 
 
 def test_raises_when_slug_dir_missing() -> None:
@@ -249,6 +244,7 @@ def _patch_resolve_to_self(target: Path):
     /Users/me/... path doesn't get rewritten on macOS via /private/var
     or similar symlinks."""
     from unittest.mock import patch
+
     with patch.object(Path, "resolve", lambda self, strict=False: target):
         yield
 

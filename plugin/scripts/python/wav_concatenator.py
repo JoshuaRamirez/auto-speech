@@ -4,6 +4,7 @@ Stdlib-only. Atomic: writes to `<dest>.partial` and renames on success.
 Enforces format parity across sources — if any source disagrees on channels,
 sample width, or sample rate, the whole concat fails loud.
 """
+
 from __future__ import annotations
 
 import os

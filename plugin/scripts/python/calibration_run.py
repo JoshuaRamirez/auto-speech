@@ -1,4 +1,5 @@
 """CalibrationRun: one historical measurement record."""
+
 from __future__ import annotations
 
 from dataclasses import dataclass, asdict

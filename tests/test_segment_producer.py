@@ -1,4 +1,5 @@
 """Build a 3-chunk plan and run the producer in isolation (no consumer)."""
+
 from __future__ import annotations
 
 import sys
@@ -60,9 +61,7 @@ def main() -> int:
         print(f"[test] producer error: {producer.error}", file=sys.stderr)
         return 1
 
-    assert len(collected) == len(plan), (
-        f"expected {len(plan)} segments, got {len(collected)}"
-    )
+    assert len(collected) == len(plan), f"expected {len(plan)} segments, got {len(collected)}"
     for seg in collected:
         assert seg.wav_path.exists() and seg.wav_path.stat().st_size > 0
     print(f"[test] ok: {len(collected)} segments, tmpdir={tmpdir}")

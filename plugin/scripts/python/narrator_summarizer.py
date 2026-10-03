@@ -4,6 +4,7 @@ Providers are pluggable. The first impl is MLX (Apple Silicon native);
 future impls will be Ollama, OpenAI, Anthropic. Providers are imported
 lazily so missing optional deps don't break the import.
 """
+
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
@@ -80,8 +81,7 @@ def load_summarizer(config: dict) -> Summarizer:
             import sys
 
             print(
-                f"[narrator] mlx provider unavailable ({exc}); "
-                f"falling back to MockSummarizer",
+                f"[narrator] mlx provider unavailable ({exc}); falling back to MockSummarizer",
                 file=sys.stderr,
             )
             return MockSummarizer()
@@ -100,8 +100,7 @@ def load_summarizer(config: dict) -> Summarizer:
             import sys
 
             print(
-                f"[narrator] ollama provider unavailable ({exc}); "
-                f"falling back to MockSummarizer",
+                f"[narrator] ollama provider unavailable ({exc}); falling back to MockSummarizer",
                 file=sys.stderr,
             )
             return MockSummarizer()

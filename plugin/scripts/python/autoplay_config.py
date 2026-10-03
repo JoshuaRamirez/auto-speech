@@ -14,6 +14,7 @@ Returns a dict with: mode, summary_size, prompt_path, config_path.
 Mode is one of "verbatim" | "summary".
 summary_size is one of "small" | "medium" | "large".
 """
+
 from __future__ import annotations
 
 import os

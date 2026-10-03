@@ -14,6 +14,7 @@ another playback.
 ALWAYS exits 0. Failures are logged, never raised. The text file is
 removed as soon as it has been read.
 """
+
 from __future__ import annotations
 
 import os

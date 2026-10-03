@@ -11,6 +11,7 @@ Verifies:
   - {category}, {count}, {duration}, {events} are all substituted
   - _first_sentence strips leading bullets/quotes and takes first line
 """
+
 from __future__ import annotations
 
 import sys
@@ -36,12 +37,14 @@ def _fake_load(model_id: str):
 
 
 def _fake_generate(model, tokenizer, prompt=None, max_tokens=60, verbose=False):
-    _GENERATE_CALLS.append({
-        "model": model,
-        "prompt": prompt,
-        "max_tokens": max_tokens,
-        "verbose": verbose,
-    })
+    _GENERATE_CALLS.append(
+        {
+            "model": model,
+            "prompt": prompt,
+            "max_tokens": max_tokens,
+            "verbose": verbose,
+        }
+    )
     return "  Stubbed summary line one.\n  bogus second line"
 
 
@@ -54,9 +57,7 @@ def _install_fake_mlx_lm():
 
 
 def _make_prompt_file(body: str) -> Path:
-    f = tempfile.NamedTemporaryFile(
-        mode="w", suffix=".txt", delete=False, encoding="utf-8"
-    )
+    f = tempfile.NamedTemporaryFile(mode="w", suffix=".txt", delete=False, encoding="utf-8")
     f.write(body)
     f.close()
     return Path(f.name)
@@ -132,7 +133,7 @@ def test_summarize_strips_leading_quote_or_bullet() -> None:
         del sys.modules["narrator_mlx_summarizer"]
     from narrator_mlx_summarizer import _first_sentence
 
-    assert _first_sentence('"quoted line"\nrest') == "quoted line\""
+    assert _first_sentence('"quoted line"\nrest') == 'quoted line"'
     assert _first_sentence("- bulleted line\nrest") == "bulleted line"
     assert _first_sentence("1. numbered line\nrest") == "numbered line"
     assert _first_sentence("plain\n  next") == "plain"

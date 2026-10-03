@@ -6,6 +6,7 @@ HTTP layer uses `is_active()` to decide whether a new POST returns
 concurrent reads/writes from Flask worker threads and the TTS
 executor thread are race-free.
 """
+
 from __future__ import annotations
 
 import threading
@@ -55,8 +56,7 @@ class JobTracker:
         with self._lock:
             if self._current is not None and self._current.phase in ACTIVE_PHASES:
                 raise RuntimeError(
-                    f"cannot begin: job {self._current.id} still in phase "
-                    f"{self._current.phase}"
+                    f"cannot begin: job {self._current.id} still in phase {self._current.phase}"
                 )
             job = Job(
                 id=uuid.uuid4().hex[:16],
@@ -85,9 +85,7 @@ class JobTracker:
             try:
                 self._machine.transition(new_phase)  # type: ignore[union-attr]
             except IllegalTransition:
-                raise ValueError(
-                    f"illegal phase transition {cur.phase!r} → {new_phase!r}"
-                )
+                raise ValueError(f"illegal phase transition {cur.phase!r} → {new_phase!r}")
             data = cur.to_dict()
             data["phase"] = new_phase
             data.update(fields)

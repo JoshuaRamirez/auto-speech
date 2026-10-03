@@ -1,4 +1,5 @@
 """TranscriptLocator: resolve the JSONL path for the current session."""
+
 from __future__ import annotations
 
 import os
@@ -82,8 +83,10 @@ class TranscriptLocator:
         # fallback. The arg form lets callers pass the session_id from
         # the hook payload directly (more reliable than env propagation,
         # which broke between Claude Code versions — see commit 03301c8).
-        sid = session_id or os.environ.get("CLAUDE_SESSION_ID") or os.environ.get(
-            "CLAUDE_CODE_SESSION_ID"
+        sid = (
+            session_id
+            or os.environ.get("CLAUDE_SESSION_ID")
+            or os.environ.get("CLAUDE_CODE_SESSION_ID")
         )
         if sid:
             candidate = slug_dir / f"{sid}.jsonl"
@@ -91,8 +94,7 @@ class TranscriptLocator:
                 print(f"[locator] using session_id file {candidate}", file=sys.stderr)
                 return candidate
             print(
-                f"[locator] session_id={sid} but {candidate} missing; "
-                f"falling back to newest-jsonl",
+                f"[locator] session_id={sid} but {candidate} missing; falling back to newest-jsonl",
                 file=sys.stderr,
             )
 

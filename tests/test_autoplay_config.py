@@ -3,6 +3,7 @@
 Covers mode/size validation, prompt-path resolution by mode-size combo,
 and bad input handling (fall back to defaults, don't crash).
 """
+
 from __future__ import annotations
 
 import os
@@ -122,7 +123,9 @@ def test_small_prompt_targets_one_to_three_sentences() -> None:
     # what happened. Pin the instruction in the shipped small prompt.
     prompt = (
         Path(__file__).resolve().parents[1]
-        / "plugin" / "prompts" / "audio_summary_small_prompt.txt"
+        / "plugin"
+        / "prompts"
+        / "audio_summary_small_prompt.txt"
     )
     body = prompt.read_text(encoding="utf-8")
     assert "ONE TO THREE SENTENCES" in body, "small prompt must instruct 1-3 sentences"

@@ -6,6 +6,7 @@ fresh machine. The decision is a content-hash comparison: hash uv.lock and
 compare it to a stamp written after the last successful sync. A sync then
 runs exactly when dependencies changed, not on every session.
 """
+
 from __future__ import annotations
 
 import hashlib

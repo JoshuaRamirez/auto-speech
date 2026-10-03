@@ -6,6 +6,7 @@ invalid enum). This module validates the user's TOML against the known
 schema and returns human-readable problems WITHOUT changing runtime
 behavior; the doctor surfaces them as a loud WARN. Nothing here raises.
 """
+
 from __future__ import annotations
 
 import tomllib
@@ -71,7 +72,9 @@ def validate_section(section: dict, fields: tuple[Field, ...], section_name: str
         val = section[f.name]
         if f.kind == "str":
             if not isinstance(val, str):
-                problems.append(f"[{section_name}] {f.name} should be a string, got {type(val).__name__}")
+                problems.append(
+                    f"[{section_name}] {f.name} should be a string, got {type(val).__name__}"
+                )
         elif f.kind == "int":
             if not _is_int(val):
                 problems.append(f"[{section_name}] {f.name} should be an integer, got {val!r}")
@@ -84,7 +87,9 @@ def validate_section(section: dict, fields: tuple[Field, ...], section_name: str
                 problems.append(f"[{section_name}] {f.name} must be >= {f.minimum:g}, got {val}")
         elif f.kind == "enum":
             if not isinstance(val, str) or val.lower() not in f.allowed:
-                problems.append(f"[{section_name}] {f.name} must be one of {f.allowed}, got {val!r}")
+                problems.append(
+                    f"[{section_name}] {f.name} must be one of {f.allowed}, got {val!r}"
+                )
 
     return problems
 

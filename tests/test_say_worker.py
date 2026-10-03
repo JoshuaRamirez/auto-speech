@@ -10,6 +10,7 @@ real FIFO state is touched. Covers:
   - speak failure (non-zero exit or OSError) still returns 0
   - run() always returns 0
 """
+
 from __future__ import annotations
 
 import sys

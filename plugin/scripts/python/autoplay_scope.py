@@ -14,6 +14,7 @@ autoplay_hook.sh — so the detached worker keeps its minimal single-check
 scope. This module is the testable MODEL of that decision and the writer
 used by the /auto-speech-scope command. `home` is overridable for tests.
 """
+
 from __future__ import annotations
 
 import os
@@ -91,10 +92,7 @@ def format_status(scope: SoloScope, session_id: str | None) -> str:
         return "autoplay scope: ALL — every session reads (default)"
     if session_id and held == session_id:
         return f"autoplay scope: SOLO — only THIS session reads (spotlight={held})"
-    return (
-        f"autoplay scope: SOLO — only session {held} reads; "
-        "this session is muted"
-    )
+    return f"autoplay scope: SOLO — only session {held} reads; this session is muted"
 
 
 if __name__ == "__main__":

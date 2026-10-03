@@ -24,6 +24,7 @@ Like SoloScope, this is the testable MODEL of a decision the hook makes in
 shell (autoplay_hook.sh) plus the writer used by the /auto-speech-autoplay-on
 and /auto-speech-autoplay-off commands. `home` is overridable for tests.
 """
+
 from __future__ import annotations
 
 import os

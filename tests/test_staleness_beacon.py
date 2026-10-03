@@ -4,6 +4,7 @@ Covers the per-session vs global beacon path derivation, the re-stat
 is_stale() semantics (absent beacon, fresh beacon, advanced beacon), and
 the monotonic FRESH→STALE latch.
 """
+
 from __future__ import annotations
 
 import sys
@@ -86,8 +87,7 @@ def test_hook_captured_mtime_is_not_stale() -> None:
     b = StalenessBeacon(start_mtime=float(captured))
     b._path = p
     assert b.is_stale() is False, (
-        f"fresh beacon read as stale: captured={captured} "
-        f"actual={p.stat().st_mtime!r}"
+        f"fresh beacon read as stale: captured={captured} actual={p.stat().st_mtime!r}"
     )
     assert b.state == FRESH
 

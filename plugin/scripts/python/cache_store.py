@@ -1,4 +1,5 @@
 """CacheStore: lookup, promote, and list entries under config/cache/."""
+
 from __future__ import annotations
 
 import json
@@ -78,13 +79,9 @@ class CacheStore:
     ) -> Path:
         _validate_hash(source_hash)
         if entry.source_hash != source_hash:
-            raise CachePromotionError(
-                "entry.source_hash does not match provided source_hash"
-            )
+            raise CachePromotionError("entry.source_hash does not match provided source_hash")
         if not source_full_wav.is_file() or source_full_wav.stat().st_size == 0:
-            raise CachePromotionError(
-                f"source full.wav missing or empty: {source_full_wav}"
-            )
+            raise CachePromotionError(f"source full.wav missing or empty: {source_full_wav}")
 
         entry_dir = self.path_for(source_hash)
         entry_dir.mkdir(parents=True, exist_ok=True)
@@ -151,6 +148,4 @@ class CacheStore:
 
 def _validate_hash(source_hash: str) -> None:
     if not _HEX_RE.match(source_hash):
-        raise ValueError(
-            f"source_hash must be 64 lowercase hex chars, got {source_hash!r}"
-        )
+        raise ValueError(f"source_hash must be 64 lowercase hex chars, got {source_hash!r}")

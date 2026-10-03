@@ -6,6 +6,7 @@ baseline, each FAIL condition (mpv, venv, disk), the WARN conditions
 (oversize log, stale daemon, saturated queue, global mute), the running-
 daemon OK path, scope reporting, exit codes, and JSON shape.
 """
+
 from __future__ import annotations
 
 import json
@@ -99,7 +100,9 @@ def test_missing_mcp_server_script_is_fail() -> None:
 
 def test_missing_mpv_is_fail() -> None:
     with tempfile.TemporaryDirectory() as h, tempfile.TemporaryDirectory() as t:
-        report = _doctor(Path(h), Path(t), which=lambda n: None if n == "mpv" else "/usr/bin/x").run()
+        report = _doctor(
+            Path(h), Path(t), which=lambda n: None if n == "mpv" else "/usr/bin/x"
+        ).run()
         assert _check(report, "mpv").status is Status.FAIL
         assert report.healthy is False
         assert report.exit_code == 1
@@ -107,7 +110,9 @@ def test_missing_mpv_is_fail() -> None:
 
 def test_missing_uv_is_only_warn() -> None:
     with tempfile.TemporaryDirectory() as h, tempfile.TemporaryDirectory() as t:
-        report = _doctor(Path(h), Path(t), which=lambda n: None if n == "uv" else "/usr/bin/x").run()
+        report = _doctor(
+            Path(h), Path(t), which=lambda n: None if n == "uv" else "/usr/bin/x"
+        ).run()
         assert _check(report, "uv").status is Status.WARN
         assert report.healthy is True  # uv missing degrades, not breaks
 
@@ -172,8 +177,11 @@ def test_global_mute_and_solo_scope() -> None:
 
 
 def test_bad_config_warns_but_healthy() -> None:
-    with tempfile.TemporaryDirectory() as h, tempfile.TemporaryDirectory() as t, \
-            tempfile.TemporaryDirectory() as c:
+    with (
+        tempfile.TemporaryDirectory() as h,
+        tempfile.TemporaryDirectory() as t,
+        tempfile.TemporaryDirectory() as c,
+    ):
         (Path(c) / "autoplay.toml").write_text('[autoplay]\nmode = "nope"\n', encoding="utf-8")
         report = _doctor(Path(h), Path(t), config_dir=Path(c)).run()
         cfg = _check(report, "config")
@@ -183,27 +191,37 @@ def test_bad_config_warns_but_healthy() -> None:
 
 
 def test_clean_config_ok() -> None:
-    with tempfile.TemporaryDirectory() as h, tempfile.TemporaryDirectory() as t, \
-            tempfile.TemporaryDirectory() as c:
+    with (
+        tempfile.TemporaryDirectory() as h,
+        tempfile.TemporaryDirectory() as t,
+        tempfile.TemporaryDirectory() as c,
+    ):
         report = _doctor(Path(h), Path(t), config_dir=Path(c)).run()
         assert _check(report, "config").status is Status.OK
 
 
 def test_updates_in_sync_ok() -> None:
-    with tempfile.TemporaryDirectory() as h, tempfile.TemporaryDirectory() as t, \
-            tempfile.TemporaryDirectory() as p:
+    with (
+        tempfile.TemporaryDirectory() as h,
+        tempfile.TemporaryDirectory() as t,
+        tempfile.TemporaryDirectory() as p,
+    ):
         lock = Path(p) / "uv.lock"
         stamp = Path(p) / ".synced"
         lock.write_bytes(b"locked")
         import self_update
+
         self_update.record_sync(lock, stamp)  # stamp matches lock
         report = _doctor(Path(h), Path(t), lock_path=lock, stamp_path=stamp).run()
         assert _check(report, "updates").status is Status.OK
 
 
 def test_updates_out_of_sync_warns() -> None:
-    with tempfile.TemporaryDirectory() as h, tempfile.TemporaryDirectory() as t, \
-            tempfile.TemporaryDirectory() as p:
+    with (
+        tempfile.TemporaryDirectory() as h,
+        tempfile.TemporaryDirectory() as t,
+        tempfile.TemporaryDirectory() as p,
+    ):
         lock = Path(p) / "uv.lock"
         stamp = Path(p) / ".synced"
         lock.write_bytes(b"locked")  # no stamp written → out of sync
@@ -219,7 +237,15 @@ def test_json_shape_and_exit() -> None:
         report = _doctor(Path(h), Path(t)).run()
         obj = json.loads(report.to_json())
         assert obj["healthy"] is True
-        assert {c["name"] for c in obj["checks"]} >= {"mpv", "venv", "disk", "logs", "narrator", "queue", "scope"}
+        assert {c["name"] for c in obj["checks"]} >= {
+            "mpv",
+            "venv",
+            "disk",
+            "logs",
+            "narrator",
+            "queue",
+            "scope",
+        }
 
 
 def main() -> int:

@@ -2,6 +2,7 @@
 
 Runs once at install, and on-demand any time the voice or speed changes.
 """
+
 from __future__ import annotations
 
 import argparse
@@ -86,7 +87,9 @@ class Calibrator:
             voice_id=voice_id,
             speed=speed,
             chars_per_second=1.0,
-            calibrated_at=datetime.now(timezone.utc).isoformat(timespec="seconds").replace("+00:00", "Z"),
+            calibrated_at=datetime.now(timezone.utc)
+            .isoformat(timespec="seconds")
+            .replace("+00:00", "Z"),
             calibration_source_chars=char_count,
         )
 

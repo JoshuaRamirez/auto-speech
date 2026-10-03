@@ -11,6 +11,7 @@ Lifecycle:
 
 with STARTING → NOT_RUNNING for a failed start.
 """
+
 from __future__ import annotations
 
 from state_machine import StateMachine
@@ -23,7 +24,7 @@ SIGNAL_SHUTDOWN = "signal_shutdown"
 
 _LEGAL_NEXT: dict[str, set[str]] = {
     NOT_RUNNING: {STARTING},
-    STARTING: {RUNNING, NOT_RUNNING},   # NOT_RUNNING = start failed
+    STARTING: {RUNNING, NOT_RUNNING},  # NOT_RUNNING = start failed
     RUNNING: {IDLE_SHUTDOWN, SIGNAL_SHUTDOWN},
     IDLE_SHUTDOWN: {NOT_RUNNING},
     SIGNAL_SHUTDOWN: {NOT_RUNNING},

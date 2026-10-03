@@ -1,4 +1,5 @@
 """ChunkDescriptor: one planned chunk in a ChunkPlan."""
+
 from __future__ import annotations
 
 from dataclasses import dataclass

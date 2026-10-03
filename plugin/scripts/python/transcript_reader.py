@@ -1,4 +1,5 @@
 """TranscriptReader: stream a JSONL transcript line-by-line."""
+
 from __future__ import annotations
 
 import json
@@ -26,6 +27,4 @@ class TranscriptReader:
                 try:
                     yield json.loads(raw)
                 except json.JSONDecodeError as exc:
-                    raise TranscriptReadError(
-                        f"invalid JSON at {path}:{lineno}: {exc}"
-                    ) from exc
+                    raise TranscriptReadError(f"invalid JSON at {path}:{lineno}: {exc}") from exc

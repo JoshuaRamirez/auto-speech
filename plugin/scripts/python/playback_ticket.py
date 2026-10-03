@@ -13,6 +13,7 @@ The state is the local view; the cross-process truth is the set of
 ticket files in the queue directory. This machine guards the local
 sequencing and makes the worker's queue position assertable.
 """
+
 from __future__ import annotations
 
 from state_machine import StateMachine
@@ -23,7 +24,7 @@ PLAYING = "playing"
 RELEASED = "released"
 
 _LEGAL_NEXT: dict[str, set[str]] = {
-    QUEUED: {HEAD, RELEASED},   # RELEASED = bailed/exited before our turn
+    QUEUED: {HEAD, RELEASED},  # RELEASED = bailed/exited before our turn
     HEAD: {PLAYING, RELEASED},
     PLAYING: {RELEASED},
     RELEASED: set(),

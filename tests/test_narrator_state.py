@@ -3,6 +3,7 @@
 Covers both shutdown lifecycle paths and a representative illegal
 transition out of the NOT_RUNNING rest state.
 """
+
 from __future__ import annotations
 
 import sys

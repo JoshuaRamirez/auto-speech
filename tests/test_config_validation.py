@@ -4,6 +4,7 @@ Covers the schema checks (unknown key, wrong type, bad enum, out-of-range,
 bool-is-not-int) for both sections, and the file-level wrapper (missing
 file = clean, malformed TOML = one problem, valid file = clean). Hermetic.
 """
+
 from __future__ import annotations
 
 import sys
@@ -17,8 +18,12 @@ import config_validation as cv  # noqa: E402
 
 
 def test_valid_autoplay_section_clean() -> None:
-    section = {"mode": "summary", "summary_size": "small", "coalesce_seconds": 1.0,
-               "narration_wait_max_seconds": 90.0}
+    section = {
+        "mode": "summary",
+        "summary_size": "small",
+        "coalesce_seconds": 1.0,
+        "narration_wait_max_seconds": 90.0,
+    }
     assert cv.validate_section(section, cv.AUTOPLAY_FIELDS, "autoplay") == []
 
 
@@ -38,7 +43,9 @@ def test_wrong_type_number_flagged() -> None:
 
 
 def test_negative_number_flagged() -> None:
-    problems = cv.validate_section({"narration_wait_max_seconds": -5}, cv.AUTOPLAY_FIELDS, "autoplay")
+    problems = cv.validate_section(
+        {"narration_wait_max_seconds": -5}, cv.AUTOPLAY_FIELDS, "autoplay"
+    )
     assert any("must be >= 0" in p for p in problems)
 
 
@@ -51,9 +58,15 @@ def test_int_field_rejects_bool_and_below_min() -> None:
 
 
 def test_valid_narrator_section_clean() -> None:
-    section = {"provider": "mlx", "model": "x", "max_tokens": 60,
-               "silence_seconds": 8.0, "idle_shutdown_seconds": 600.0,
-               "min_events_per_phase": 1, "max_queue_depth": 32}
+    section = {
+        "provider": "mlx",
+        "model": "x",
+        "max_tokens": 60,
+        "silence_seconds": 8.0,
+        "idle_shutdown_seconds": 600.0,
+        "min_events_per_phase": 1,
+        "max_queue_depth": 32,
+    }
     assert cv.validate_section(section, cv.NARRATOR_FIELDS, "narrator") == []
 
 
@@ -80,7 +93,7 @@ def test_validate_user_configs_aggregates() -> None:
     with tempfile.TemporaryDirectory() as d:
         cfg = Path(d)
         (cfg / "autoplay.toml").write_text('[autoplay]\nmode = "bogus"\n', encoding="utf-8")
-        (cfg / "narrator.toml").write_text('[narrator]\nmax_queue_depth = 0\n', encoding="utf-8")
+        (cfg / "narrator.toml").write_text("[narrator]\nmax_queue_depth = 0\n", encoding="utf-8")
         problems = cv.validate_user_configs(cfg)
         assert any("mode must be one of" in p for p in problems)
         assert any("max_queue_depth must be >= 1" in p for p in problems)

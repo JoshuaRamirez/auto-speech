@@ -1,4 +1,5 @@
 """Invariant tests for ChunkPlanner. Run directly; no pytest required."""
+
 from __future__ import annotations
 
 import random

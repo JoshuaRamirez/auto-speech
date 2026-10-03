@@ -14,6 +14,7 @@ enforced in autoplay_hook.sh BEFORE the worker is ever spawned. They are modeled
 completeness, but only worker_gated_off() — the global-disable check —
 gates the worker, preserving the exact bash scope.
 """
+
 from __future__ import annotations
 
 import os

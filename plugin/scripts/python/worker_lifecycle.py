@@ -16,26 +16,27 @@ DONE is reachable ONLY from SPEAKING: the worker cannot declare itself
 done without having passed through the queue turn and a speak attempt.
 Terminal set = {DONE, BAILED}.
 """
+
 from __future__ import annotations
 
 from state_machine import StateMachine
 
-SPAWNED = "spawned"            # process just started; pre-disable-check
-COALESCING = "coalescing"      # sleeping the coalesce window
-QUEUED = "queued"              # ticket enqueued in the FIFO playback queue
-RESOLVING = "resolving"        # extract + min-len + hash + cache decision
+SPAWNED = "spawned"  # process just started; pre-disable-check
+COALESCING = "coalescing"  # sleeping the coalesce window
+QUEUED = "queued"  # ticket enqueued in the FIFO playback queue
+RESOLVING = "resolving"  # extract + min-len + hash + cache decision
 AWAITING_TURN = "awaiting_turn"  # waiting for head-of-queue + mpv idle
-SPEAKING = "speaking"          # now-playing marker written; speak invoked
-DONE = "done"                  # terminal: speak attempt completed
-BAILED = "bailed"              # terminal: an early-exit condition fired
+SPEAKING = "speaking"  # now-playing marker written; speak invoked
+DONE = "done"  # terminal: speak attempt completed
+BAILED = "bailed"  # terminal: an early-exit condition fired
 
 _LEGAL_NEXT: dict[str, set[str]] = {
-    SPAWNED: {COALESCING, BAILED},        # disable marker → BAILED
-    COALESCING: {QUEUED, BAILED},         # stale during coalesce → BAILED
-    QUEUED: {RESOLVING, BAILED},          # extract/min-len/hash fail → BAILED
-    RESOLVING: {AWAITING_TURN, BAILED},   # stale/dedup/empty rewrite → BAILED
-    AWAITING_TURN: {SPEAKING, BAILED},    # staled out mid-wait → BAILED
-    SPEAKING: {DONE},                     # speak attempt always lands DONE
+    SPAWNED: {COALESCING, BAILED},  # disable marker → BAILED
+    COALESCING: {QUEUED, BAILED},  # stale during coalesce → BAILED
+    QUEUED: {RESOLVING, BAILED},  # extract/min-len/hash fail → BAILED
+    RESOLVING: {AWAITING_TURN, BAILED},  # stale/dedup/empty rewrite → BAILED
+    AWAITING_TURN: {SPEAKING, BAILED},  # staled out mid-wait → BAILED
+    SPEAKING: {DONE},  # speak attempt always lands DONE
     DONE: set(),
     BAILED: set(),
 }

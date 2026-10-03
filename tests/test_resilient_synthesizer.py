@@ -3,7 +3,7 @@
 Regression context: mlx-audio's Kokoro `generate` raises on certain inputs
 (content-dependent, not length-dependent). That fault used to abort the
 whole CLI/autoplay run — /auto-speech-speak exited 5 with no audio at all,
-because SegmentProducer and ShortPathStrategy called TTSEngine.synthesize()
+because SegmentProducer and FastTrack called TTSEngine.synthesize()
 directly and let the error propagate. Recovery existed only inside
 web_server.py. These tests pin the shared behavior: a poisoned phrase is
 isolated and dropped, everything else is still spoken.
@@ -11,6 +11,7 @@ isolated and dropped, everything else is still spoken.
 A fake engine stands in for Kokoro: it "fails" on any span containing the
 poison token and writes a real (tiny) WAV otherwise.
 """
+
 from __future__ import annotations
 
 import sys
@@ -92,9 +93,7 @@ def test_poisoned_phrase_is_dropped_rest_survives() -> None:
 
     assert len(parts) >= 2, "surviving sentences must still be synthesized"
     assert all(p.is_file() for p in parts)
-    joined = " ".join(
-        c for c in eng.calls if POISON not in c and c in text
-    )
+    joined = " ".join(c for c in eng.calls if POISON not in c and c in text)
     assert "Good first sentence." in eng.calls
     assert "Good last sentence." in eng.calls
     assert joined  # non-empty: real audio was produced around the fault
@@ -105,9 +104,7 @@ def test_synthesize_one_collapses_to_single_file() -> None:
     d = _tmp()
     out = d / "chunk-001.wav"
     text = f"Alpha sentence. Beta {POISON} sentence. Gamma sentence."
-    ok = ResilientSynthesizer(eng, log=lambda _m: None).synthesize_one(
-        text, _profile(), out
-    )
+    ok = ResilientSynthesizer(eng, log=lambda _m: None).synthesize_one(text, _profile(), out)
     assert ok is True
     assert out.is_file(), "caller's single-file contract must hold"
     with wave.open(str(out), "rb") as wf:
@@ -119,9 +116,7 @@ def test_synthesize_one_collapses_to_single_file() -> None:
 def test_wholly_unspeakable_returns_false_without_raising() -> None:
     eng = _FakeEngine(unspeakable="")  # every span is unspeakable
     out = _tmp() / "span.wav"
-    ok = ResilientSynthesizer(eng, log=lambda _m: None).synthesize_one(
-        "• • •", _profile(), out
-    )
+    ok = ResilientSynthesizer(eng, log=lambda _m: None).synthesize_one("• • •", _profile(), out)
     assert ok is False
     assert not out.exists()
 
@@ -130,9 +125,7 @@ def test_single_word_fault_stops_at_the_floor() -> None:
     """No infinite recursion when the smallest unit still faults."""
     eng = _FakeEngine()
     out = _tmp() / "span.wav"
-    parts = ResilientSynthesizer(eng, log=lambda _m: None).synthesize_parts(
-        POISON, _profile(), out
-    )
+    parts = ResilientSynthesizer(eng, log=lambda _m: None).synthesize_parts(POISON, _profile(), out)
     assert parts == []
     assert len(eng.calls) == 1, "must not retry a span it cannot split"
 

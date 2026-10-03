@@ -74,7 +74,6 @@ CHEAP=(
     test_transcript_locator.py
     test_fibonacci.py
     test_cli_rewrite.py
-    test_mpv_wait.py
     test_mlx_summarizer.py
     test_narrator_service.py
 )

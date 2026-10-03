@@ -1,4 +1,5 @@
 """SegmentProducer: walks a ChunkPlan, synthesizes each chunk, enqueues segments."""
+
 from __future__ import annotations
 
 import threading
@@ -52,19 +53,14 @@ class SegmentProducer:
                     f"chars={descriptor.actual_char_count} -> {wav_path.name}"
                 )
                 t0 = time.monotonic()
-                produced = self._synth.synthesize_one(
-                    descriptor.text, self._voice, wav_path
-                )
+                produced = self._synth.synthesize_one(descriptor.text, self._voice, wav_path)
                 elapsed = time.monotonic() - t0
                 if not produced:
                     # Nothing speakable survived this chunk. Skip it rather
                     # than fail the run; the concat step only joins the
                     # chunks that exist.
                     self.skipped_indices.append(descriptor.index)
-                    print(
-                        f"[producer] skip #{descriptor.index} "
-                        "(no speakable audio recovered)"
-                    )
+                    print(f"[producer] skip #{descriptor.index} (no speakable audio recovered)")
                     continue
                 duration = WavInspector.duration_seconds(wav_path)
                 segment = AudioSegment(
@@ -74,8 +70,7 @@ class SegmentProducer:
                     generation_elapsed_seconds=elapsed,
                 )
                 print(
-                    f"[producer] enqueue #{descriptor.index} "
-                    f"gen={elapsed:.2f}s dur={duration:.2f}s"
+                    f"[producer] enqueue #{descriptor.index} gen={elapsed:.2f}s dur={duration:.2f}s"
                 )
                 self._queue.put(segment)
         except Exception as exc:

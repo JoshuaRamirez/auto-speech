@@ -11,6 +11,7 @@ process, audio, or real mute marker is touched. Covers:
   - unknown tool, unknown method, bad params, parse error, invalid request
   - serve() writes one JSON line per request and none per notification
 """
+
 from __future__ import annotations
 
 import io

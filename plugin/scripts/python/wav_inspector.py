@@ -1,4 +1,5 @@
 """WavInspector: read WAV duration via stdlib."""
+
 from __future__ import annotations
 
 import wave

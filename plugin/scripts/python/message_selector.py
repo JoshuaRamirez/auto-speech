@@ -1,4 +1,5 @@
 """MessageSelector: pick the Nth-most-recent qualifying AssistantMessage."""
+
 from __future__ import annotations
 
 import re
@@ -71,8 +72,7 @@ class MessageSelector:
 
         if len(buf) < n:
             raise NoSuchAssistantTurn(
-                f"only {len(buf)} qualifying assistant messages available; "
-                f"you asked for #{n}"
+                f"only {len(buf)} qualifying assistant messages available; you asked for #{n}"
             )
 
         # The ring buffer holds the LAST n items in chronological order.

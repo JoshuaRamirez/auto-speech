@@ -4,6 +4,7 @@ Exercises the full success path, every BAILED early-exit edge, and the
 prohibition that DONE is reachable only through SPEAKING (never directly
 from RESOLVING or AWAITING_TURN).
 """
+
 from __future__ import annotations
 
 import sys

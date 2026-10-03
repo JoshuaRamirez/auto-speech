@@ -4,6 +4,7 @@ Covers legal advancement, illegal-transition rejection with a clear
 message, terminal detection, and a thread-safety smoke test that
 concurrent transitions never leave the machine in a corrupt state.
 """
+
 from __future__ import annotations
 
 import sys

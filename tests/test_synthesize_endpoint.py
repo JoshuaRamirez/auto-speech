@@ -11,6 +11,7 @@ TTSEngine is stubbed to emit a tiny valid WAV. Pins:
 Runs under tests/run_all.sh (no pytest): full mode and the --web lane.
 Needs Flask + numpy, so it is listed in NEEDS_DEPS (skipped hermetic).
 """
+
 from __future__ import annotations
 
 import sys
@@ -48,9 +49,10 @@ def _make_server(tmp_path: Path):
     # Patch only construction (cache location, model prewarm, mpv). The
     # instance's synthesize is then replaced so it persists for the whole
     # test — the request path runs after this function returns.
-    with mock.patch.object(web_server, "_cache_root", lambda: tmp_path / "cache"), \
-        mock.patch("tts_engine.TTSEngine._ensure_loaded", lambda self: None), \
-        mock.patch("web_server.MpvController"):
+    with (
+        mock.patch.object(web_server, "_cache_root", lambda: tmp_path / "cache"),
+        mock.patch("tts_engine.TTSEngine._ensure_loaded", lambda self: None),
+    ):
         server = web_server.WebServer()
     server._tts.synthesize = fake_synthesize  # noqa: SLF001
     return server, synth_calls
@@ -217,9 +219,7 @@ def test_options_preflight() -> None:
     with tempfile.TemporaryDirectory() as td:
         server, _ = _make_server(Path(td))
         client = server._app.test_client()  # noqa: SLF001
-        resp = client.open(
-            "/api/synthesize", method="OPTIONS", headers={"Origin": EXT_ORIGIN}
-        )
+        resp = client.open("/api/synthesize", method="OPTIONS", headers={"Origin": EXT_ORIGIN})
         assert resp.status_code == 204
         assert resp.headers.get("Access-Control-Allow-Origin") == EXT_ORIGIN
 
@@ -232,7 +232,7 @@ def test_synthesize_not_blocked_by_inflight_rewrite() -> None:
     request completes.
 
     The whole flow — including the drain in `finally` — runs with
-    PipelineOrchestrator patched out. Without that, the drained speak job
+    JobTracker patched out. Without that, the drained speak job
     would run the REAL pipeline: write into the live replay cache
     (config/cache/), spawn a real mpv, and potentially wait minutes on an
     active playback session."""
@@ -255,12 +255,10 @@ def test_synthesize_not_blocked_by_inflight_rewrite() -> None:
         server._rewriter.rewrite = slow_rewrite  # noqa: SLF001
         server._rewriter.is_available = lambda: True  # noqa: SLF001
 
-        with mock.patch.object(web_server, "PipelineOrchestrator") as po_cls:
+        with mock.patch.object(web_server, "JobTracker") as po_cls:
             po_cls.return_value.run.return_value = web_server.EXIT_OK
             try:
-                r = client.post(
-                    "/api/speak", json={"text": "long paste", "rewrite": True}
-                )
+                r = client.post("/api/speak", json={"text": "long paste", "rewrite": True})
                 assert r.status_code == 202
                 assert started.wait(timeout=10), "rewrite never started"
 
@@ -297,9 +295,7 @@ def test_cors_denied_for_web_and_absent_origins() -> None:
 
         # Near-miss origins: wrong alphabet (q) and wrong length (31).
         for bad in ("chrome-extension://" + "q" * 32, "chrome-extension://" + "a" * 31):
-            r_bad = client.post(
-                "/api/synthesize", json={"text": "hi"}, headers={"Origin": bad}
-            )
+            r_bad = client.post("/api/synthesize", json={"text": "hi"}, headers={"Origin": bad})
             assert "Access-Control-Allow-Origin" not in r_bad.headers
 
 

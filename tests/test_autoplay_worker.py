@@ -10,6 +10,7 @@ or beacon state is touched. Covers:
   - dedup bail on cache-hit path
   - run() always returns 0
 """
+
 from __future__ import annotations
 
 import os
@@ -152,7 +153,7 @@ def test_cache_hit_success_path() -> None:
             return 0, long_msg
         if str(prog).endswith("compute_hash.sh"):
             return 0, full_hash + "\n"
-        if str(prog).endswith("run_speak.sh"):
+        if str(prog).endswith("speak.py"):
             spoke["called"] = True
             spoke["hash"] = argv[argv.index("--source-hash") + 1]
             spoke["stdin"] = stdin

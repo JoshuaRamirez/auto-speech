@@ -7,6 +7,7 @@ directory, because every marker in it was written by someone asking for
 SILENCE, and reading them as enrollments would turn autoplay on for
 exactly the wrong sessions.
 """
+
 from __future__ import annotations
 
 import sys

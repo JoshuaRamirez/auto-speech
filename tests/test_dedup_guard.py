@@ -4,6 +4,7 @@ Reproduces the coverage of the retired test_autoplay_dedup.sh: marker
 absent, hash mismatch, no mpv, matching hash + live mpv, stale marker
 (>120s), and a dead mpv pid.
 """
+
 from __future__ import annotations
 
 import os
@@ -111,9 +112,7 @@ def test_try_claim_after_age_cap_allows_replay() -> None:
     marker, pid, lock = _claim_files()
     DedupGuard(marker_path=marker, mpv_pid_path=pid, lock_path=lock).try_claim(HASH)
     mtime = marker.stat().st_mtime
-    late = DedupGuard(
-        marker_path=marker, mpv_pid_path=pid, lock_path=lock, now=lambda: mtime + 200
-    )
+    late = DedupGuard(marker_path=marker, mpv_pid_path=pid, lock_path=lock, now=lambda: mtime + 200)
     assert late.try_claim(HASH) is True
 
 

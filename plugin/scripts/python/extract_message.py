@@ -3,6 +3,7 @@
 Usage: python extract_message.py [--ordinal N] [--cwd PATH]
 Default ordinal is 1 (most recent).
 """
+
 from __future__ import annotations
 
 import argparse
@@ -71,9 +72,7 @@ def main(argv: list[str] | None = None) -> int:
             return EXIT_NO_TRANSCRIPT
 
     try:
-        msg = MessageSelector().select(
-            path, args.ordinal, exclude_regex=args.exclude_regex
-        )
+        msg = MessageSelector().select(path, args.ordinal, exclude_regex=args.exclude_regex)
     except NoSuchAssistantTurn as exc:
         print(f"error: {exc}", file=sys.stderr)
         return EXIT_NO_SUCH_TURN

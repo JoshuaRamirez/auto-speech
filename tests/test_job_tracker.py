@@ -4,6 +4,7 @@ Pins the public API/exception semantics: begin/transition/fail/current/
 is_active, RuntimeError for no-current-job, ValueError for illegal
 transition. These must hold regardless of the shared FSM backing.
 """
+
 from __future__ import annotations
 
 import sys

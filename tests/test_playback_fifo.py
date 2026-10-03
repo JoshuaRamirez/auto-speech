@@ -12,6 +12,7 @@ test, exercising the helpers directly:
     proceeds on cap expiry
   - release removes the ticket
 """
+
 from __future__ import annotations
 
 import os

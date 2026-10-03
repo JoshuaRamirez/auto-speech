@@ -1,4 +1,5 @@
 """PlaybackQueue: thin wrapper over queue.Queue adding a SENTINEL close()."""
+
 from __future__ import annotations
 
 import queue

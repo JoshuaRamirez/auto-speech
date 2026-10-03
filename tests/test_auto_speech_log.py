@@ -5,6 +5,7 @@ mid-run rotation via RotatingFileHandler, and rotate_if_oversize's
 pre-spawn cascade (under cap = no-op, over cap = rename + oldest dropped).
 All hermetic: temp dirs only, no /tmp, no real daemon.
 """
+
 from __future__ import annotations
 
 import logging
@@ -27,7 +28,9 @@ def test_cap_defaults_and_override() -> None:
         os.environ.pop("AUTO_SPEECH_LOG_BACKUPS", None)
         assert asl.max_bytes() == asl.DEFAULT_MAX_BYTES
         assert asl.backup_count() == asl.DEFAULT_BACKUPS
-    with patch.dict("os.environ", {"AUTO_SPEECH_LOG_MAX_BYTES": "123", "AUTO_SPEECH_LOG_BACKUPS": "2"}):
+    with patch.dict(
+        "os.environ", {"AUTO_SPEECH_LOG_MAX_BYTES": "123", "AUTO_SPEECH_LOG_BACKUPS": "2"}
+    ):
         assert asl.max_bytes() == 123
         assert asl.backup_count() == 2
     with patch.dict("os.environ", {"AUTO_SPEECH_LOG_MAX_BYTES": "not-an-int"}):
@@ -41,14 +44,20 @@ def test_get_logger_is_idempotent() -> None:
         b = asl.get_logger("test.idem", path)
         assert a is b
         # No duplicate handlers stacked for the same (name, path).
-        rot = [h for h in a.handlers if getattr(h, "_auto_speech_id", None) == f"auto-speech-rot:{path}"]
+        rot = [
+            h
+            for h in a.handlers
+            if getattr(h, "_auto_speech_id", None) == f"auto-speech-rot:{path}"
+        ]
         assert len(rot) == 1
 
 
 def test_get_logger_rotates_mid_run() -> None:
     with tempfile.TemporaryDirectory() as d:
         path = Path(d) / "daemon.log"
-        with patch.dict("os.environ", {"AUTO_SPEECH_LOG_MAX_BYTES": "200", "AUTO_SPEECH_LOG_BACKUPS": "2"}):
+        with patch.dict(
+            "os.environ", {"AUTO_SPEECH_LOG_MAX_BYTES": "200", "AUTO_SPEECH_LOG_BACKUPS": "2"}
+        ):
             logger = asl.get_logger("test.rotate.midrun", path)
             for i in range(50):
                 logger.info("x" * 40 + f" line {i}")

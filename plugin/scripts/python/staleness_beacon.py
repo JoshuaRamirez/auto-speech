@@ -14,6 +14,7 @@ when a session_id is present, else the legacy global beacon.
 is_stale() re-stats on every call (like the bash is_stale function) so a
 caller polling in a wait loop observes the beacon advancing in real time.
 """
+
 from __future__ import annotations
 
 from pathlib import Path

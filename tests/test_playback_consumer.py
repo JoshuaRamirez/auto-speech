@@ -1,4 +1,5 @@
 """Feed 3 hand-built WAVs to the consumer; listen."""
+
 from __future__ import annotations
 
 import sys

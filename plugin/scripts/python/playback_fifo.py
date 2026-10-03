@@ -12,7 +12,7 @@ idle AND the narrator FIFO is drained. The ticket is held until the
 worker process exits so arrival order survives the multi-second rewrite
 step.
 
-Lives OUTSIDE /tmp/auto-speech (which SessionDir.clear() rmtree's) at
+Lives OUTSIDE /tmp/auto-speech (which socket disconnect rmtree's) at
 /tmp/auto-speech-playback-queue. Direct port of the enqueue_ticket /
 ticket_is_head / wait_for_queue_turn helpers in autoplay_worker.sh.
 
@@ -21,6 +21,7 @@ a signalled shutdown always removes the ticket — matching the bash EXIT
 trap. A kill -9 (no trap) leaves an orphan ticket; ticket_is_head()
 garbage-collects such tickets whose owner pid is dead, exactly as bash.
 """
+
 from __future__ import annotations
 
 import atexit

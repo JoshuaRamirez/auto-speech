@@ -5,6 +5,7 @@ Aggregation rule: the system is UNHEALTHY iff any check FAILed (warnings are
 degradations, not failures), which drives the process exit code so the
 command is usable in scripts and monitors.
 """
+
 from __future__ import annotations
 
 import json

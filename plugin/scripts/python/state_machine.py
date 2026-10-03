@@ -10,6 +10,7 @@ defined in exactly one place per machine.
 Tiny and dependency-free. Thread-safe via an internal lock so concurrent
 callers cannot interleave a read of the current state with a write.
 """
+
 from __future__ import annotations
 
 import threading
@@ -57,9 +58,7 @@ class StateMachine:
         """
         with self._lock:
             if to not in self._transitions.get(self._state, set()):
-                raise IllegalTransition(
-                    f"illegal transition {self._state!r} → {to!r}"
-                )
+                raise IllegalTransition(f"illegal transition {self._state!r} → {to!r}")
             self._state = to
             return to
 

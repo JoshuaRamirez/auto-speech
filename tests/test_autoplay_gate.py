@@ -4,6 +4,7 @@ Covers global-disable classification, suppress-hooks classification and
 its precedence over disable, the ENABLED default, and the scoped
 worker_gated_off() check (global-disable only).
 """
+
 from __future__ import annotations
 
 import sys

@@ -12,6 +12,7 @@ another playback) and speaks them. The global mute
 
 stdout carries protocol messages only; diagnostics go to stderr.
 """
+
 from __future__ import annotations
 
 import json

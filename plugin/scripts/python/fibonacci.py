@@ -1,4 +1,5 @@
 """FibonacciSeq: on-demand Fibonacci generator (F(1)=F(2)=1, F(3)=2, ...)."""
+
 from __future__ import annotations
 
 
