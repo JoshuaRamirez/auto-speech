@@ -174,6 +174,25 @@ class TestSpeakClientSocketMockUnit(unittest.TestCase):
             self.assertIn("cannot connect to auto-speech daemon", mock_stderr.getvalue())
 
     @mock.patch("socket.socket")
+    def test_send_speech_request_retries_transient_connection_refused(
+        self, mock_socket_cls: mock.MagicMock
+    ) -> None:
+        """Verifies ConnectionRefusedError triggers retry and succeeds on subsequent attempt."""
+        sock1 = mock.MagicMock()
+        sock1.connect.side_effect = ConnectionRefusedError("Connection refused")
+        sock2 = mock.MagicMock()
+
+        mock_socket_cls.side_effect = [sock1, sock2]
+
+        rc = speak.send_speech_request("Retry test", socket_path="/tmp/test.sock")
+        self.assertEqual(rc, 0)
+        self.assertEqual(mock_socket_cls.call_count, 2)
+        sock1.close.assert_called_once()
+        sock2.connect.assert_called_once_with("/tmp/test.sock")
+        sock2.sendall.assert_called_once_with(b"Retry test")
+        sock2.close.assert_called_once()
+
+    @mock.patch("socket.socket")
     def test_send_speech_request_handles_missing_socket(
         self, mock_socket_cls: mock.MagicMock
     ) -> None:

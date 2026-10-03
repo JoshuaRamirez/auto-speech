@@ -32,12 +32,15 @@ import threading
 import time
 import unittest
 from pathlib import Path
+from typing import Any
+from unittest import mock
 
 SRC = Path(__file__).resolve().parents[1] / "plugin" / "scripts" / "python"
 if str(SRC) not in sys.path:
     sys.path.insert(0, str(SRC))
 
 import speak  # noqa: E402
+from tts_executor import TTSExecutor
 from narrator_service import (  # noqa: E402
     NarratorService,
     _DaemonSocketServer,
@@ -54,12 +57,10 @@ class TestSocketIPCStress(unittest.TestCase):
     def tearDown(self) -> None:
         self.temp_dir.cleanup()
 
-    def test_high_concurrency_default_backlog_bottleneck(self) -> None:
-        """EMPIRICAL DEFECT 1: Unmodified _DaemonSocketServer has request_queue_size=5.
+    def test_high_concurrency_default_backlog_resolution(self) -> None:
+        """Verifies _DaemonSocketServer default request_queue_size=128 resolves backlog bottleneck.
 
-        When 50 concurrent clients attempt to connect simultaneously, the OS kernel
-        socket listen backlog overflows, resulting in ECONNREFUSED ([Errno 61])
-        and dropping 70-90% of speech requests.
+        When 50 concurrent clients attempt to connect simultaneously, all 50 succeed with 0 failures.
         """
         svc = NarratorService(socket_path=self.socket_path)
         svc._max_queue = 200
@@ -93,17 +94,10 @@ class TestSocketIPCStress(unittest.TestCase):
         svc._stop_socket_server()
 
         print(
-            f"\n[Defect 1: Concurrency Backlog 5] Successes: {len(successes)}/50, Failures: {len(errors)}/50"
+            f"\n[Default Backlog 128 Concurrency] Successes: {len(successes)}/50, Failures: {len(errors)}/50"
         )
-        # Assert that failure occurred due to the default backlog limitation
-        self.assertGreater(
-            len(errors),
-            0,
-            "Expected connection failures under default request_queue_size=5 with 50 concurrent clients",
-        )
-        for _, err_type, err_msg in errors:
-            self.assertEqual(err_type, "ConnectionRefusedError")
-            self.assertIn("Connection refused", err_msg)
+        self.assertEqual(len(errors), 0, f"Expected 0 errors with default backlog 128, got: {errors}")
+        self.assertEqual(len(successes), 50)
 
     def test_high_concurrency_adequate_backlog_resolution(self) -> None:
         """Verifies that increasing request_queue_size to 128 enables all 50+ clients to succeed."""
@@ -276,32 +270,37 @@ class TestSocketIPCStress(unittest.TestCase):
         finally:
             _DaemonSocketServer.request_queue_size = orig_backlog
 
-    def test_abrupt_disconnect_erroneously_enqueues_truncated_payload(self) -> None:
-        """EMPIRICAL DEFECT 2: Mid-transmission abrupt socket abort causes truncated text to be enqueued.
+    def test_abrupt_disconnect_discards_truncated_payload(self) -> None:
+        """Verifies mid-transmission abrupt socket abort causes partial text to be discarded.
 
-        In _DaemonRequestHandler, when recv() raises ConnectionResetError/BrokenPipeError,
-        the exception is caught and broken out of the loop without discarding received chunks.
-        The server subsequently decodes and enqueues the partial/truncated bytes into _tts_queue.
+        In _DaemonRequestHandler, when recv() raises ConnectionResetError/BrokenPipeError/OSError,
+        the stream is marked aborted and partial chunks are discarded without enqueuing into _tts_queue.
         """
-        orig_backlog = _DaemonSocketServer.request_queue_size
+        svc = NarratorService(socket_path=self.socket_path)
+        svc._start_socket_server()
+        time.sleep(0.05)
+
         try:
-            _DaemonSocketServer.request_queue_size = 128
-
-            svc = NarratorService(socket_path=self.socket_path)
-            svc._start_socket_server()
-            time.sleep(0.05)
-
-            linger_opt = struct.pack("ii", 1, 0)
             partial_text = "This is a partial sentence that was aborted mid-stream by"
 
             s = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
             s.connect(str(self.socket_path))
-            s.send(partial_text.encode("utf-8"))
-            # Abort immediately via RST
-            s.setsockopt(socket.SOL_SOCKET, socket.SO_LINGER, linger_opt)
-            s.close()
 
-            time.sleep(0.2)
+            real_recv = socket.socket.recv
+
+            def aborted_recv(sock_self: socket.socket, *args: Any, **kwargs: Any) -> bytes:
+                data = real_recv(sock_self, *args, **kwargs)
+                if data:
+                    # After receiving partial data, simulate abrupt socket error mid-stream
+                    raise ConnectionResetError("Connection reset by peer mid-stream")
+                return data
+
+            with mock.patch.object(socket.socket, "recv", aborted_recv):
+                s.sendall(partial_text.encode("utf-8"))
+                time.sleep(0.2)
+
+            s.close()
+            time.sleep(0.1)
 
             # Check what got enqueued
             enqueued_items: list[str] = []
@@ -309,18 +308,41 @@ class TestSocketIPCStress(unittest.TestCase):
                 enqueued_items.append(svc._tts_queue.get_nowait())
 
             print(
-                f"\n[Defect 2: Abrupt Disconnect Enqueue] Enqueued items count: {len(enqueued_items)}"
+                f"\n[Abrupt Disconnect Discard] Enqueued items count: {len(enqueued_items)}"
             )
-            if enqueued_items:
-                print(f"[Defect 2: Abrupt Disconnect Enqueue] Enqueued item: {enqueued_items[0]!r}")
 
-            # Empirically confirms the defect: the aborted fragment was enqueued!
-            self.assertEqual(len(enqueued_items), 1)
-            self.assertEqual(enqueued_items[0], partial_text)
-
-            svc._stop_socket_server()
+            # Verifies that partial text was cleanly discarded and NOT enqueued
+            self.assertEqual(len(enqueued_items), 0)
         finally:
-            _DaemonSocketServer.request_queue_size = orig_backlog
+            svc._stop_socket_server()
+
+    def test_client_retry_on_transient_connection_refused(self) -> None:
+        """Verifies speak.send_speech_request retries on transient ConnectionRefusedError."""
+        real_connect = socket.socket.connect
+        attempts = 0
+
+        def flaky_connect(sock_self: socket.socket, addr: Any) -> None:
+            nonlocal attempts
+            attempts += 1
+            if attempts == 1:
+                raise ConnectionRefusedError("Transient backlog overflow")
+            real_connect(sock_self, addr)
+
+        svc = NarratorService(socket_path=self.socket_path)
+        svc._start_socket_server()
+        time.sleep(0.05)
+
+        try:
+            with mock.patch.object(socket.socket, "connect", flaky_connect):
+                rc = speak.send_speech_request("Retry test message", socket_path=self.socket_path)
+
+            self.assertEqual(rc, 0)
+            self.assertEqual(attempts, 2)
+            time.sleep(0.1)
+            self.assertFalse(svc._tts_queue.empty())
+            self.assertEqual(svc._tts_queue.get_nowait(), "Retry test message")
+        finally:
+            svc._stop_socket_server()
 
     def test_latency_benchmark_under_20ms(self) -> None:
         """Measures client roundtrip latency for 100 typical utterances (target < 20ms)."""

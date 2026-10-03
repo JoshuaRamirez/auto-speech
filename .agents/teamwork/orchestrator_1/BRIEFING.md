@@ -50,13 +50,15 @@ Refactor auto-speech architecture into a Unified Daemon Server with in-process T
 ## Key Decisions Made
 - Milestone M1 completed and verified (gate PASSED).
 - E2E test suite published (41 tests, Tiers 1-4).
-- Milestone M2 exploration completed by 3 subagents.
-- Dispatched worker_m2 to implement speak.py thin client, daemon UNIX socket server, and test suites.
+- Milestone M2 Iteration 1 failed gate due to Challenger findings (listen backlog queue bottleneck, abrupt disconnect truncation).
+- Dispatched worker_m2_r2 to implement backlog=128, client retries, abrupt disconnect discard, and thread safety fixes.
 
 ## Team Roster
 | Agent | Type | Work Item | Status | Conv ID |
 |-------|------|-----------|--------|---------|
-| worker_m2 | teamwork_preview_worker | M2: Implement thin client speak.py & socket server | running | 6abd0a2e-e346-4b90-a35a-48786d39e10e |
+| explorer_m2_r3_1 | teamwork_preview_explorer | M2 R3: Architecture restoration plan | running | c0d0f0e9-9791-4ac2-b0f7-4d89efc4e683 |
+| explorer_m2_r3_2 | teamwork_preview_explorer | M2 R3: Collaborator contracts & test fixture plan | running | 6c3b6149-4b49-4943-a62d-7f3836857386 |
+| spec_miner_m2_r3_3 | teamwork_preview_spec_miner | M2 R3: Repository hygiene & lint plan | running | 133c2e9d-f346-4d3e-b2f1-5f490c9f078e |
 
 ## Succession Status
 - Succession status: runtime handles all specialist subagent invocations directly under top-level Project Orchestrator

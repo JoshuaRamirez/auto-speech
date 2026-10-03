@@ -411,6 +411,12 @@ def test_speak_invokes_synthesizer_and_audio_sink() -> None:
     svc._synth = synth
     svc._profile = profile
     svc._engine = None
+    class MockExecutor:
+        def submit(self, fn, *args, **kwargs): return fn(*args, **kwargs)
+        def ensure_loaded(self): pass
+        @property
+        def synth(self): return svc._synth
+    svc._tts_executor = MockExecutor()
 
     svc._speak("Hello from in-process TTS")
 
@@ -434,6 +440,12 @@ def test_speak_skips_unspeakable_content() -> None:
     svc._synth = synth
     svc._profile = profile
     svc._engine = None
+    class MockExecutor:
+        def submit(self, fn, *args, **kwargs): return fn(*args, **kwargs)
+        def ensure_loaded(self): pass
+        @property
+        def synth(self): return svc._synth
+    svc._tts_executor = MockExecutor()
 
     svc._speak("•••")
 
@@ -456,6 +468,12 @@ def test_speak_cleans_up_on_synthesis_fault() -> None:
     svc._synth = synth
     svc._profile = profile
     svc._engine = None
+    class MockExecutor:
+        def submit(self, fn, *args, **kwargs): return fn(*args, **kwargs)
+        def ensure_loaded(self): pass
+        @property
+        def synth(self): return svc._synth
+    svc._tts_executor = MockExecutor()
 
     # Must not raise
     svc._speak("Crashing content")
@@ -482,6 +500,12 @@ def test_speak_cleans_up_on_playback_failure() -> None:
     svc._synth = synth
     svc._profile = profile
     svc._engine = None
+    class MockExecutor:
+        def submit(self, fn, *args, **kwargs): return fn(*args, **kwargs)
+        def ensure_loaded(self): pass
+        @property
+        def synth(self): return svc._synth
+    svc._tts_executor = MockExecutor()
 
     # Must not crash
     svc._speak("Test playback failure")
@@ -537,6 +561,12 @@ def test_tts_worker_recovers_from_item_error() -> None:
     svc._synth = synth
     svc._profile = profile
     svc._engine = None
+    class MockExecutor:
+        def submit(self, fn, *args, **kwargs): return fn(*args, **kwargs)
+        def ensure_loaded(self): pass
+        @property
+        def synth(self): return svc._synth
+    svc._tts_executor = MockExecutor()
     svc._tts_queue = queue.Queue()
     svc._update_depth = lambda d: None
 

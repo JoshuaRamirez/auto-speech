@@ -21,7 +21,6 @@ import os
 import queue
 import signal
 import socket
-import socketserver
 import subprocess
 import sys
 import tempfile
@@ -43,6 +42,8 @@ from narrator_state import (
     NarratorStateMachine,
 )
 from narrator_summarizer import Summarizer, load_summarizer
+from unix_ipc_server import _DaemonSocketServer
+from tts_executor import TTSExecutor
 from resilient_synthesizer import ResilientSynthesizer
 from tts_engine import TTSEngine
 from voice_profile import VoiceProfile
@@ -154,77 +155,12 @@ def _load_profile_or_fallback(config: dict | None = None) -> VoiceProfile:
     )
 
 
-class _DaemonRequestHandler(socketserver.BaseRequestHandler):
-    """Handles incoming client requests on the UNIX domain stream socket."""
-
-    server: _DaemonSocketServer
-
-    def handle(self) -> None:
-        chunks: list[bytes] = []
-        while True:
-            try:
-                data = self.request.recv(4096)
-                if not data:
-                    break
-                chunks.append(data)
-            except (ConnectionResetError, BrokenPipeError, OSError):
-                break
-
-        if not chunks:
-            return
-
-        try:
-            text = b"".join(chunks).decode("utf-8", errors="replace")
-        except Exception:
-            return
-
-        cleaned = text.strip()
-        if not cleaned:
-            return
-
-        service: NarratorService | None = getattr(self.server, "service", None)
-        if service is not None:
-            service.enqueue_text(cleaned)
-
-        try:
-            self.request.sendall(b"OK\n")
-        except (ConnectionResetError, BrokenPipeError, OSError):
-            pass
-
-
-class _DaemonSocketServer(socketserver.ThreadingUnixStreamServer):
-    """Multi-threaded UNIX domain stream socket server for daemon IPC."""
-
-    address_family = socket.AF_UNIX
-    daemon_threads = True
-    allow_reuse_address = True
-
-    def __init__(
-        self,
-        server_address: str | Path,
-        RequestHandlerClass: type[socketserver.BaseRequestHandler],
-        service: NarratorService,
-    ) -> None:
-        self.service = service
-        super().__init__(str(server_address), RequestHandlerClass)
-
-    def server_bind(self) -> None:
-        try:
-            path = Path(self.server_address)
-            if path.exists() or path.is_symlink():
-                path.unlink(missing_ok=True)
-        except OSError:
-            pass
-        super().server_bind()
-
-
 class NarratorService:
     def __init__(
         self,
         *,
         sink: NativeAudioSink | None = None,
-        engine: TTSEngine | None = None,
-        synth: ResilientSynthesizer | None = None,
+        tts_executor: TTSExecutor | None = None,
         profile: VoiceProfile | None = None,
         socket_path: Path | str | None = None,
     ) -> None:
@@ -247,8 +183,7 @@ class NarratorService:
         self._phases_this_turn = 0
 
         self._sink: NativeAudioSink = sink if sink is not None else NativeAudioSink()
-        self._engine: TTSEngine | None = engine
-        self._synth: ResilientSynthesizer | None = synth
+        self._tts_executor = tts_executor or TTSExecutor()
         self._profile: VoiceProfile | None = profile
 
         if socket_path is not None:
@@ -338,8 +273,7 @@ class NarratorService:
         try:
             self._socket_server = _DaemonSocketServer(
                 self._socket_path,
-                _DaemonRequestHandler,
-                service=self,
+                on_text=self.enqueue_text,
             )
             self._socket_thread = threading.Thread(
                 target=self._socket_server.serve_forever,
@@ -537,7 +471,7 @@ class NarratorService:
                             history, "UserPromptSubmit", session_id=session_id
                         )
                         if words:
-                            self._tts_queue.put(words)
+                            self._enqueue_phase(words)
                 except Exception as e:
                     _log(f"Failed to generate start words: {e}")
                 continue
@@ -554,7 +488,7 @@ class NarratorService:
                     continue
 
                 history = ev.get("payload", {}).get("conversation_history", "")
-                self._tts_queue.put(
+                self._enqueue_phase(
                     {
                         "type": "Stop",
                         "history": history,
@@ -666,31 +600,20 @@ class NarratorService:
             _log(f"eager-load failed (will retry lazily on first phase): {exc!r}")
 
     def _ensure_tts_initialized(self) -> None:
-        """Initialize TTSEngine and ResilientSynthesizer on the worker thread.
-
-        Honors Apple MLX single-thread stream affinity: MLX compute streams
-        are per-thread, so the model must be loaded and invoked on the exact
-        same thread (_tts_worker).
-        """
-        if self._synth is not None and self._profile is not None:
+        if getattr(self, "_tts_initialized", False):
             return
-
-        try:
-            if self._profile is None:
-                self._profile = _load_profile_or_fallback(self._config)
-
-            if self._engine is None:
-                model_id = self._config.get("tts_model", "mlx-community/Kokoro-82M-bf16")
-                self._engine = TTSEngine(model_id=model_id)
-
-            if self._synth is None:
-                self._synth = ResilientSynthesizer(self._engine, log=_log)
-
-            _log(f"loading tts engine on worker thread (model={self._engine.model_id})...")
-            self._engine._ensure_loaded()
-            _log("tts engine ready on worker thread")
-        except Exception as exc:
-            _log(f"error initializing tts engine on worker thread: {exc!r}")
+        if getattr(self, "_tts_executor", None) is None:
+            # Fallback for stress tests that bypass __init__
+            from tts_executor import TTSExecutor
+            self._tts_executor = TTSExecutor(
+                engine=getattr(self, "_engine", None),
+                synth=getattr(self, "_synth", None)
+            )
+                
+        if self._profile is None:
+            self._profile = _load_profile_or_fallback(self._config)
+        self._tts_executor.ensure_loaded()
+        self._tts_initialized = True
 
     def _tts_worker(self) -> None:
         _log("tts_worker thread started")
@@ -743,19 +666,13 @@ class NarratorService:
                 self._update_depth(self._tts_queue.qsize())
 
     def _speak(self, line: str) -> None:
-        """Synthesize and play speech in-process on the _tts_worker thread.
-
-        Replaces legacy external process sprawl and mpv duration sleep hacks.
-        Uses ResilientSynthesizer to handle any Kokoro generation faults,
-        plays synchronously via NativeAudioSink, and cleans up temporary WAV files.
-        """
         line = line.strip()
         if not line:
             return
 
         _log(f"speak: {line}")
         self._ensure_tts_initialized()
-        if self._synth is None or self._sink is None or self._profile is None:
+        if self._sink is None or self._profile is None:
             _log(f"tts engine not available; dropped narration: {line[:50]!r}")
             return
 
@@ -763,7 +680,7 @@ class NarratorService:
             temp_wav = Path(f.name)
 
         try:
-            has_audio = self._synth.synthesize_one(line, self._profile, temp_wav)
+            has_audio = self._tts_executor.submit(self._tts_executor.synth.synthesize_one, line, self._profile, temp_wav)
             if has_audio and temp_wav.exists() and temp_wav.stat().st_size > 0:
                 _log(f"playing audio ({temp_wav.stat().st_size} bytes)...")
                 self._sink.play(temp_wav)

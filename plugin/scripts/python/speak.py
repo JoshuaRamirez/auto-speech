@@ -10,6 +10,7 @@ import argparse
 import os
 import socket
 import sys
+import time
 from pathlib import Path
 
 DEFAULT_SOCKET_PATH = Path("/tmp/auto-speech-daemon.sock")
@@ -37,27 +38,38 @@ def send_speech_request(
     if socket_path is None:
         socket_path = get_socket_path()
 
-    sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
-    try:
-        sock.settimeout(timeout)
-        sock.connect(str(socket_path))
-        sock.sendall(text.encode("utf-8"))
-        try:
-            sock.shutdown(socket.SHUT_WR)
-        except OSError:
-            pass
-    except (FileNotFoundError, ConnectionRefusedError):
-        print(f"Error: cannot connect to auto-speech daemon at {socket_path}", file=sys.stderr)
-        return 1
-    except (socket.timeout, OSError) as exc:
-        print(
-            f"Error: cannot connect to auto-speech daemon at {socket_path}: {exc}", file=sys.stderr
-        )
-        return 1
-    finally:
-        sock.close()
+    max_attempts = 3
+    retry_delay = 0.02
 
-    return 0
+    for attempt in range(max_attempts):
+        sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+        try:
+            sock.settimeout(timeout)
+            sock.connect(str(socket_path))
+            sock.sendall(text.encode("utf-8"))
+            try:
+                sock.shutdown(socket.SHUT_WR)
+            except OSError:
+                pass
+            return 0
+        except FileNotFoundError:
+            print(f"Error: cannot connect to auto-speech daemon at {socket_path}", file=sys.stderr)
+            return 1
+        except ConnectionRefusedError:
+            if attempt < max_attempts - 1:
+                time.sleep(retry_delay * (attempt + 1))
+                continue
+            print(f"Error: cannot connect to auto-speech daemon at {socket_path}", file=sys.stderr)
+            return 1
+        except (socket.timeout, OSError) as exc:
+            print(
+                f"Error: cannot connect to auto-speech daemon at {socket_path}: {exc}", file=sys.stderr
+            )
+            return 1
+        finally:
+            sock.close()
+
+    return 1
 
 
 def main(argv: list[str] | None = None) -> int:

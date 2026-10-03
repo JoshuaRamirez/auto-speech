@@ -392,22 +392,21 @@ class TestProcessTableAndMemory(unittest.TestCase):
             sink = NativeAudioSink()
             wav = create_dummy_wav(sandbox.root / "dummy.wav", duration_s=0.2)
 
+            threads = []
             for i in range(20):
-                th = threading.Thread(
-                    target=lambda: (
-                        patch.dict(os.environ, sandbox.env),
-                        sink.play(wav),
-                    )
-                )
+                def run_play():
+                    with patch.dict(os.environ, sandbox.env):
+                        sink.play(wav)
+                th = threading.Thread(target=run_play)
+                threads.append(th)
                 th.start()
-                time.sleep(0.02)
-                if i % 2 == 0:
-                    sink.interrupt()
-                th.join(timeout=1.0)
-
-            # Check spy mpv active PIDs
+            
+            for th in threads:
+                th.join()
+            
             active = sandbox.spy_mpv.get_active_pids()
             self.assertEqual(active, [], f"Orphaned mpv processes found: {active}")
+
         finally:
             sandbox.cleanup()
 

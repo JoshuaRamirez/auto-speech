@@ -153,6 +153,17 @@ def _first_sentence(text: str, max_words: int = 5) -> str:
     line = next((ln.strip() for ln in text.splitlines() if ln.strip()), "")
 
     import re
+    # Markdown syntax
+    line = re.sub(r"^\d+[\.\)]\s+", "", line)
+    line = re.sub(r"[*_`]", "", line)
+    for prefix in ('"', "'", "* ", "- "):
+        if line.startswith(prefix):
+            line = line[len(prefix) :].lstrip()
+    if line.endswith('"') or line.endswith("'"):
+        line = line[:-1].rstrip()
+    line = line.rstrip(".")
+
+    import re
 
     # Path extraction (safely preserve dates and non-path slashes by doing this BEFORE string mutation)
     def replacer(match):
@@ -274,15 +285,6 @@ def _first_sentence(text: str, max_words: int = 5) -> str:
     line = re.sub(r"([a-zA-Z])(\d)", r"\1 \2", line)
     line = re.sub(r"(\d)([a-zA-Z])", r"\1 \2", line)
 
-    # Markdown syntax
-    line = re.sub(r"^\d+[\.\)]\s+", "", line)
-    line = re.sub(r"[*_`]", "", line)
-    for prefix in ('"', "'", "* ", "- "):
-        if line.startswith(prefix):
-            line = line[len(prefix) :].lstrip()
-    if line.endswith('"') or line.endswith("'"):
-        line = line[:-1].rstrip()
-    line = line.rstrip(".")
 
     # Extensions and Domains
     # Drop file extensions entirely

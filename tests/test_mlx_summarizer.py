@@ -28,8 +28,8 @@ _GENERATE_CALLS: list[dict] = []
 
 class _FakeTokenizer:
     def apply_chat_template(self, messages, tokenize=False, add_generation_prompt=True):
-        # Return the user prompt with a wrapper so we can detect the path.
-        return f"<<CHAT>>{messages[0]['content']}<<END>>"
+        user_msg = next((m["content"] for m in messages if m.get("role") == "user"), messages[-1]["content"])
+        return f"<<CHAT>>{user_msg}<<END>>"
 
 
 def _fake_load(model_id: str):
@@ -124,7 +124,7 @@ def test_summarize_substitutes_all_template_fields() -> None:
     assert "- Edit: foo.py" in rendered
     assert "- Edit: bar.py" in rendered
     # _first_sentence trims to one line.
-    assert out == "Stubbed summary line one."
+    assert out == "Stubbed summary line one"
 
 
 def test_summarize_strips_leading_quote_or_bullet() -> None:
@@ -133,7 +133,7 @@ def test_summarize_strips_leading_quote_or_bullet() -> None:
         del sys.modules["narrator_mlx_summarizer"]
     from narrator_mlx_summarizer import _first_sentence
 
-    assert _first_sentence('"quoted line"\nrest') == 'quoted line"'
+    assert _first_sentence('"quoted line"\nrest') == 'quoted line'
     assert _first_sentence("- bulleted line\nrest") == "bulleted line"
     assert _first_sentence("1. numbered line\nrest") == "numbered line"
     assert _first_sentence("plain\n  next") == "plain"
@@ -155,7 +155,7 @@ def test_summarize_handles_tokenizer_without_chat_template() -> None:
     def _bare_generate(model, tokenizer, prompt=None, max_tokens=60, verbose=False):
         # Verify NO chat-template wrapping happened.
         assert "<<CHAT>>" not in (prompt or "")
-        return "ok"
+        return "test pass"
 
     fake.load = _bare_load  # type: ignore[attr-defined]
     fake.generate = _bare_generate  # type: ignore[attr-defined]
@@ -167,7 +167,7 @@ def test_summarize_handles_tokenizer_without_chat_template() -> None:
     try:
         summ = MlxSummarizer(model="m", prompt_template_path=prompt_path, max_tokens=5)
         out = summ.summarize(_phase(["Edit: x"], "edit"))
-        assert out == "ok"
+        assert out == "test pass"
     finally:
         prompt_path.unlink()
 

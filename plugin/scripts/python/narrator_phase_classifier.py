@@ -77,7 +77,7 @@ class Phase:
 
 
 class PhaseClassifier:
-    def __init__(self, silence_seconds: float = 2.0, max_events_per_phase: int = 1):
+    def __init__(self, silence_seconds: float = 2.0, max_events_per_phase: int = 100):
         self._silence_seconds = silence_seconds
         self._max_events_per_phase = max_events_per_phase
         self._current: dict[str, Phase] = {}

@@ -252,16 +252,19 @@ class TestTier2R2Boundaries(unittest.TestCase):
 
         try:
             sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+            # Close connection immediately with reset (SO_LINGER 0)
+            try:
+                sock.setsockopt(
+                    socket.SOL_SOCKET,
+                    socket.SO_LINGER,
+                    b"\x01\x00\x00\x00\x00\x00\x00\x00"
+                    if sys.platform == "darwin"
+                    else b"\x01\x00\x00\x00",
+                )
+            except OSError:
+                pass
             sock.connect(str(self.sandbox.socket_path))
             sock.send(b"abrupt")
-            # Close connection immediately with reset (SO_LINGER 0)
-            sock.setsockopt(
-                socket.SOL_SOCKET,
-                socket.SO_LINGER,
-                b"\x01\x00\x00\x00\x00\x00\x00\x00"
-                if sys.platform == "darwin"
-                else b"\x01\x00\x00\x00",
-            )
             sock.close()
 
             handled_event.wait(timeout=1.0)

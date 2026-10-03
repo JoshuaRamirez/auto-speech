@@ -22,6 +22,9 @@ from unittest import mock
 
 SRC = Path(__file__).resolve().parents[1] / "plugin" / "scripts" / "python"
 sys.path.insert(0, str(SRC))
+import web_server
+import tts_engine
+
 
 # A syntactically-valid Chrome extension origin (32 chars of a-p).
 EXT_ORIGIN = "chrome-extension://" + "a" * 32
@@ -39,6 +42,7 @@ def _write_tiny_wav(path: Path) -> None:
 def _make_server(tmp_path: Path):
     """Build a WebServer with MLX fully stubbed and cache under tmp_path."""
     import web_server
+    import tts_engine
 
     synth_calls = {"n": 0}
 
@@ -54,7 +58,7 @@ def _make_server(tmp_path: Path):
         mock.patch("tts_engine.TTSEngine._ensure_loaded", lambda self: None),
     ):
         server = web_server.WebServer()
-    server._tts.synthesize = fake_synthesize  # noqa: SLF001
+    server._tts_executor.engine.synthesize = fake_synthesize  # noqa: SLF001
     return server, synth_calls
 
 
@@ -100,7 +104,6 @@ def test_synthesize_returns_wav_and_caches() -> None:
 
 
 def test_no_speakable_content_returns_422() -> None:
-    import tts_engine
 
     with tempfile.TemporaryDirectory() as td:
         server, _ = _make_server(Path(td))
@@ -108,7 +111,7 @@ def test_no_speakable_content_returns_422() -> None:
         def raise_unspeakable(text, profile, out_path):  # noqa: ANN001
             raise tts_engine.TTSNoSpeakableContentError("no phonemes")
 
-        server._tts.synthesize = raise_unspeakable  # noqa: SLF001
+        server._tts_executor.engine.synthesize = raise_unspeakable  # noqa: SLF001
         client = server._app.test_client()  # noqa: SLF001
         resp = client.post("/api/synthesize", json={"text": "★ • #"})
         assert resp.status_code == 422
@@ -142,6 +145,7 @@ def test_split_span_granularity() -> None:
 def test_resilient_split_recovers_from_generate_fault() -> None:
     """A span that trips the generate bug is split finer until it succeeds."""
     import web_server
+    import tts_engine
 
     with tempfile.TemporaryDirectory() as td:
         tmp_path = Path(td)
@@ -151,12 +155,12 @@ def test_resilient_split_recovers_from_generate_fault() -> None:
         # succeed (emit a tiny WAV) on shorter ones.
         def flaky(text, profile, out_path):  # noqa: ANN001
             if len(text.split()) > 3:
-                raise web_server.TTSGenerationError("simulated broadcast bug")
+                raise tts_engine.TTSGenerationError("simulated broadcast bug")
             _write_tiny_wav(Path(out_path))
 
-        server._tts.synthesize = flaky  # noqa: SLF001
+        server._tts_executor.engine.synthesize = flaky  # noqa: SLF001
         out = tmp_path / "chunk.wav"
-        wavs = server._synth.synthesize_parts(  # noqa: SLF001
+        wavs = server._tts_executor.synth.synthesize_parts(  # noqa: SLF001
             "alpha beta gamma delta epsilon zeta eta", server._profile, out
         )
         assert len(wavs) >= 2
@@ -167,6 +171,7 @@ def test_resilient_split_recovers_from_generate_fault() -> None:
 def test_resilient_split_skips_unspeakable_leaf() -> None:
     """An unspeakable fragment is dropped, not fatal, when others speak."""
     import web_server
+    import tts_engine
 
     with tempfile.TemporaryDirectory() as td:
         tmp_path = Path(td)
@@ -175,15 +180,15 @@ def test_resilient_split_skips_unspeakable_leaf() -> None:
         def synth(text, profile, out_path):  # noqa: ANN001
             t = text.strip()
             if t == "★":
-                raise web_server.TTSNoSpeakableContentError("no phonemes")
+                raise tts_engine.TTSNoSpeakableContentError("no phonemes")
             if len(t.split()) > 1:
-                raise web_server.TTSGenerationError("simulated broadcast bug")
+                raise tts_engine.TTSGenerationError("simulated broadcast bug")
             _write_tiny_wav(Path(out_path))
 
-        server._tts.synthesize = synth  # noqa: SLF001
+        server._tts_executor.engine.synthesize = synth  # noqa: SLF001
         out = tmp_path / "chunk.wav"
         # Splits to words; "hello" and "world" speak, lone "★" is skipped.
-        wavs = server._synth.synthesize_parts(  # noqa: SLF001
+        wavs = server._tts_executor.synth.synthesize_parts(  # noqa: SLF001
             "hello ★ world", server._profile, out
         )
         assert len(wavs) == 2
@@ -239,6 +244,7 @@ def test_synthesize_not_blocked_by_inflight_rewrite() -> None:
     import threading
 
     import web_server
+    import tts_engine
 
     with tempfile.TemporaryDirectory() as td:
         server, _ = _make_server(Path(td))
@@ -252,11 +258,10 @@ def test_synthesize_not_blocked_by_inflight_rewrite() -> None:
             release.wait(timeout=30)
             return text
 
-        server._rewriter.rewrite = slow_rewrite  # noqa: SLF001
-        server._rewriter.is_available = lambda: True  # noqa: SLF001
+        server._routes._rewriter.rewrite = slow_rewrite  # noqa: SLF001
+        server._routes._rewriter.is_available = lambda: True  # noqa: SLF001
 
-        with mock.patch.object(web_server, "JobTracker") as po_cls:
-            po_cls.return_value.run.return_value = web_server.EXIT_OK
+        with mock.patch.object(server._routes._audio_sink, "play") as mock_play:
             try:
                 r = client.post("/api/speak", json={"text": "long paste", "rewrite": True})
                 assert r.status_code == 202
@@ -270,9 +275,9 @@ def test_synthesize_not_blocked_by_inflight_rewrite() -> None:
                 release.set()
                 # Drain the speak job INSIDE the patch so it finishes against
                 # the stub pipeline, never the real cache/mpv.
-                server._job_executor.shutdown(wait=True)  # noqa: SLF001
+                server._routes._job_executor.shutdown(wait=True)  # noqa: SLF001
             # The stubbed pipeline must have been what ran.
-            po_cls.return_value.run.assert_called_once()
+            mock_play.assert_called_once()
 
 
 def test_cors_denied_for_web_and_absent_origins() -> None:
