@@ -342,6 +342,61 @@ def test_cache_miss_raw_mode_bypasses_llm_and_speaks_as_is() -> None:
     assert dedup.written == full_hash
 
 
+def test_post_coalesce_staleness_does_not_drop_message() -> None:
+    """A newer Stop event arriving after coalesce must not cause the worker to bail."""
+    long_msg = "A valuable assistant message that must not be dropped"
+    full_hash = "f" * 64
+    tmp = Path(tempfile.mkdtemp(prefix="auto-speech-worker-test-"))
+    _with_cache(tmp, full_hash[:16])
+
+    spoke = {"called": False}
+
+    def script(argv, stdin):
+        prog = (
+            argv[1]
+            if (
+                argv[0] in ("bash", sys.executable, "python", "python3")
+                or Path(argv[0]).name.startswith("python")
+            )
+            else argv[0]
+        )
+        if str(prog).endswith("run_extract.sh"):
+            return 0, long_msg
+        if str(prog).endswith("compute_hash.sh"):
+            return 0, full_hash + "\n"
+        if str(prog).endswith("speak.py"):
+            spoke["called"] = True
+            return 0, None
+        raise AssertionError(f"unexpected argv {argv}")
+
+    # Beacon is FRESH during coalesce, then STALE for every subsequent check.
+    # Worker must NOT bail; it must proceed to speak/enqueue!
+    stale_after_coalesce = _StubBeacon([False, True, True, True, True])
+    fifo = _StubFifo(turn=True)
+    dedup = _StubDedup(False)
+    orig_root = awmod._PROJECT_ROOT
+    awmod._PROJECT_ROOT = tmp
+    try:
+        w = _worker(
+            runner=_Recorder(script),
+            beacon=stale_after_coalesce,
+            fifo=fifo,
+            dedup=dedup,
+        )
+        assert w.run() == 0
+    finally:
+        awmod._PROJECT_ROOT = orig_root
+
+    assert w.machine.state == DONE, f"Expected DONE but got {w.machine.state}"
+    assert spoke["called"] is True
+
+
+def test_in_process_fifo_returns_true_immediately() -> None:
+    """InProcessFifo should yield turn immediately to central daemon queue."""
+    fifo = awmod.InProcessFifo()
+    assert fifo.wait_for_queue_turn(timeout=10, mpv_running=lambda: True, narrator_depth=lambda: 5, is_stale=lambda: True) is True
+
+
 def main() -> int:
     tests = [
         test_global_disable_bails,
@@ -352,6 +407,8 @@ def main() -> int:
         test_claim_lost_bails_after_wait,
         test_resolve_config_logs_and_falls_back_on_config_error,
         test_cache_miss_raw_mode_bypasses_llm_and_speaks_as_is,
+        test_post_coalesce_staleness_does_not_drop_message,
+        test_in_process_fifo_returns_true_immediately,
     ]
     for t in tests:
         t()

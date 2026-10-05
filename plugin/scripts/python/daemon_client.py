@@ -75,6 +75,36 @@ class DaemonClient:
         except Exception:
             return False
 
+    def ensure_daemon_running(self) -> bool:
+        """Starts the narrator daemon if it is not already running.
+
+        Returns True if the daemon is alive or successfully started.
+        """
+        if self.is_alive():
+            return True
+        start_script = Path(__file__).resolve().parents[1] / "shell" / "narrator_service_start.sh"
+        if start_script.is_file():
+            try:
+                import subprocess
+
+                subprocess.run(
+                    ["bash", str(start_script)],
+                    stdout=subprocess.DEVNULL,
+                    stderr=subprocess.DEVNULL,
+                    check=False,
+                )
+                for _ in range(25):
+                    if self._socket_path.is_socket():
+                        try:
+                            if self.is_alive():
+                                return True
+                        except Exception:
+                            pass
+                    time.sleep(0.04)
+            except Exception:
+                pass
+        return self.is_alive()
+
     def speak(
         self,
         text: str,
@@ -130,6 +160,9 @@ class DaemonClient:
         last_err: Optional[Exception] = None
 
         for attempt in range(self._max_retries + 1):
+            if attempt == 0 and not self._socket_path.is_socket():
+                self.ensure_daemon_running()
+
             sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
             sock.settimeout(self._timeout)
             try:
@@ -159,6 +192,8 @@ class DaemonClient:
                 )
             except Exception as e:
                 last_err = e
+                if attempt == 0 and isinstance(e, (FileNotFoundError, ConnectionRefusedError)):
+                    self.ensure_daemon_running()
                 if attempt < self._max_retries:
                     time.sleep(0.02 * (attempt + 1))
             finally:

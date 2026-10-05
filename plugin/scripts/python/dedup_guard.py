@@ -59,6 +59,7 @@ class DedupGuard:
         self._mpv_pid_path = Path(mpv_pid_path)
         self._lock = Path(lock_path)
         self._now = now
+        self._history_dir = self._marker.parent / f"{self._marker.name}-history"
 
     def _mpv_alive(self) -> bool:
         try:
@@ -91,26 +92,26 @@ class DedupGuard:
         return self._mpv_alive()
 
     def _fresh_same_hash(self, source_hash: str) -> bool:
-        """True iff the marker holds `source_hash` younger than the age cap.
-
-        This is `already_playing` WITHOUT the mpv-alive requirement. In the
-        FIFO, a sibling worker for the same turn becomes head only after the
-        prior mpv has gone idle, so by the time it claims, the first play's
-        mpv has already exited — an mpv-alive test would wrongly let the
-        duplicate through. Freshness within the 120s window is the correct
-        signal that this audio was just (or is being) played by a sibling.
-        """
+        """True iff the marker or history holds `source_hash` younger than the age cap."""
         try:
             current = self._marker.read_text(encoding="utf-8").strip()
+            if current == source_hash:
+                marker_mtime = self._marker.stat().st_mtime
+                if (self._now() - marker_mtime) < AGE_CAP_SECONDS:
+                    return True
         except OSError:
-            return False
-        if current != source_hash:
-            return False
+            pass
+
         try:
-            marker_mtime = self._marker.stat().st_mtime
+            hist_file = self._history_dir / source_hash
+            if hist_file.is_file():
+                hist_mtime = hist_file.stat().st_mtime
+                if (self._now() - hist_mtime) < AGE_CAP_SECONDS:
+                    return True
         except OSError:
-            return False
-        return (self._now() - marker_mtime) < AGE_CAP_SECONDS
+            pass
+
+        return False
 
     def try_claim(self, source_hash: str) -> bool:
         """Atomically claim the now-playing slot for `source_hash`.
@@ -142,8 +143,23 @@ class DedupGuard:
             return True
 
     def write_now_playing(self, source_hash: str) -> None:
-        """Stamp the now-playing marker with our source hash (best effort)."""
+        """Stamp the now-playing marker and history with our source hash (best effort)."""
         try:
             self._marker.write_text(source_hash, encoding="utf-8")
         except OSError:
             pass  # best effort, like the bash `|| true`
+
+        try:
+            self._history_dir.mkdir(parents=True, exist_ok=True)
+            hist_file = self._history_dir / source_hash
+            hist_file.write_text(str(self._now()), encoding="utf-8")
+            # Prune files older than AGE_CAP_SECONDS
+            for p in self._history_dir.iterdir():
+                if p.is_file():
+                    try:
+                        if (self._now() - p.stat().st_mtime) >= AGE_CAP_SECONDS:
+                            p.unlink(missing_ok=True)
+                    except OSError:
+                        pass
+        except OSError:
+            pass

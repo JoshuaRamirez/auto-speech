@@ -122,19 +122,15 @@ class InProcessFifo:
 
     def wait_for_queue_turn(
         self,
-        timeout: float,
-        mpv_running: Any,
-        narrator_depth: Any,
-        is_stale: Any,
+        timeout: float = 0,
+        mpv_running: Any = None,
+        narrator_depth: Any = None,
+        is_stale: Any = None,
         sleep: Any = time.sleep,
     ) -> bool:
-        start = time.time()
-        while time.time() - start < timeout:
-            if is_stale():
-                return False
-            if not mpv_running() and narrator_depth() == 0:
-                return True
-            sleep(0.05)
+        # The daemon owns the centralized FIFO audio queue.
+        # Workers immediately hand off their items to the daemon queue
+        # rather than waiting outside or dropping items due to staleness.
         return True
 
     def mark_playing(self) -> None:
@@ -425,11 +421,6 @@ class AutoplayWorker:
         hash_prefix = source_hash[:16]
         self._log(f"source chars={src_len} hash={hash_prefix}")
 
-        if self._beacon.is_stale():
-            self._log("stale before cache check; bailing")
-            self._machine.transition(BAILED)
-            return 0
-
         cache_wav = _PROJECT_ROOT / "config" / "cache" / hash_prefix / "full.wav"
         if cache_wav.is_file():
             return self._play_cache_hit(source_hash)
@@ -437,10 +428,6 @@ class AutoplayWorker:
 
     def _play_cache_hit(self, source_hash: str) -> int:
         self._log("cache hit; playing")
-        if self._beacon.is_stale():
-            self._log("stale just before play; bailing")
-            self._machine.transition(BAILED)
-            return 0
         if self._dedup.already_playing(source_hash):
             self._log("same hash already playing; skipping duplicate (cache-hit path)")
             self._machine.transition(BAILED)
@@ -535,6 +522,7 @@ class AutoplayWorker:
                         priority=Priority.AUTOPLAY,
                     )
                 if resp.status in ("ok", "queued"):
+                    self._log(f"enqueued to daemon queue (status={resp.status}, depth={resp.queue_depth})")
                     self._machine.transition(DONE)
                     return
             except (ConnectionError, OSError) as exc:

@@ -591,44 +591,7 @@ class NarratorService:
         _log(f"P1 User Barge-in completed: purged {purged} lower items")
 
     def _handle_p2_preemption(self, q_item: QueueItem) -> None:
-        """Handles Priority 2 Explicit MCP Preemption: interrupts active P3/P4 without purging."""
-        state_lock = getattr(self, "_state_lock", None)
-        preempted = False
-        active_item = None
-
-        if state_lock:
-            with state_lock:
-                if self._engine_state in ("PLAYING", "SYNTHESIZING") and self._active_priority in (
-                    Priority.AUTOPLAY,
-                    Priority.TOOL_NARRATION,
-                ):
-                    preempted = True
-                    active_item = self._active_item
-                    self._active_item = None
-                    self._active_priority = None
-                    self._preempted = True
-                    self._engine_state = "PREEMPTING"
-        else:
-            if getattr(self, "_engine_state", "IDLE") in ("PLAYING", "SYNTHESIZING") and getattr(
-                self, "_active_priority", None
-            ) in (Priority.AUTOPLAY, Priority.TOOL_NARRATION):
-                preempted = True
-                active_item = getattr(self, "_active_item", None)
-                self._active_item = None
-                self._active_priority = None
-                self._preempted = True
-                self._engine_state = "PREEMPTING"
-
-        if preempted:
-            if hasattr(self, "_sink") and self._sink is not None:
-                try:
-                    self._sink.interrupt()
-                except Exception as exc:
-                    _log(f"sink interrupt during preemption error: {exc}")
-
-            if active_item is not None and hasattr(self, "_priority_arbiter"):
-                self._priority_arbiter.requeue_at_head(active_item)
-
+        """Handles Priority 2 Explicit MCP requests: enqueues sequentially without interrupting active speech."""
         # Route through self._tts_queue.put so QueueProxyFacade increments _unfinished_tasks
         if hasattr(self, "_priority_arbiter"):
             self._tts_queue.put(q_item)

@@ -20,7 +20,7 @@ import tempfile
 import threading
 import time
 from pathlib import Path
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 
 SRC = Path(__file__).resolve().parents[1] / "plugin" / "scripts" / "python"
 sys.path.insert(0, str(SRC))
@@ -689,6 +689,32 @@ def test_enqueue_text_drops_oldest_under_backpressure() -> None:
     assert survivors == ["msg2", "msg3"]
 
 
+def test_p2_mcp_speak_queues_without_interrupting_active_playback() -> None:
+    svc = narrator_service.NarratorService.__new__(narrator_service.NarratorService)
+    svc._tts_queue = queue.Queue(maxsize=10)
+    svc._engine_state = "PLAYING"
+    svc._active_priority = narrator_service.Priority.AUTOPLAY
+    svc._state_lock = threading.Lock()
+    svc._last_event_ts = 0.0
+    svc._update_depth = lambda _d: None
+    sink = MagicMock()
+    svc._sink = sink
+
+    payload = {
+        "action": "speak",
+        "text": "new message to queue",
+        "priority": int(narrator_service.Priority.EXPLICIT_MCP),
+    }
+    resp = svc.dispatch_json(payload)
+
+    assert resp["status"] in ("ok", "queued")
+    sink.interrupt.assert_not_called()
+    assert svc._tts_queue.qsize() == 1
+    enqueued = svc._tts_queue.get_nowait()
+    payload_val = getattr(enqueued, "payload", enqueued)
+    assert payload_val == "new message to queue"
+
+
 def main() -> int:
     tests = [
         test_existing_pid_returns_none_when_pid_file_absent,
@@ -717,6 +743,7 @@ def main() -> int:
         test_socket_server_ignores_empty_or_whitespace_payload,
         test_socket_server_abrupt_disconnect_does_not_crash,
         test_enqueue_text_drops_oldest_under_backpressure,
+        test_p2_mcp_speak_queues_without_interrupting_active_playback,
     ]
     for t in tests:
         t()
