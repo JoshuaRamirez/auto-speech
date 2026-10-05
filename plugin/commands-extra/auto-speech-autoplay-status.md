@@ -1,5 +1,5 @@
 ---
-description: Show autoplay status — per-session opt-out marker, opt-out dir, global disable, currently-playing mpv, log tail.
+description: Show autoplay status — per-session enrollment marker, enrollment dir, global disable, currently-playing mpv, log tail. Autoplay is OFF by default (opt-IN).
 allowed-tools: Bash
 ---
 

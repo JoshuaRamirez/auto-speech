@@ -9,7 +9,10 @@ daemon OK path, scope reporting, exit codes, and JSON shape.
 
 from __future__ import annotations
 
+import contextlib
+import io
 import json
+import os
 import sys
 import tempfile
 from pathlib import Path
@@ -18,8 +21,8 @@ from types import SimpleNamespace
 SRC = Path(__file__).resolve().parents[1] / "plugin" / "scripts" / "python"
 sys.path.insert(0, str(SRC))
 
-import doctor as doc  # noqa: E402
-from health_report import Status  # noqa: E402
+import doctor as doc
+from health_report import Status
 
 GIB = 1024 * 1024 * 1024
 
@@ -31,17 +34,16 @@ def _which_all(name):  # both binaries present
 def _disk_free(n):
     return lambda _p: SimpleNamespace(free=n)
 
-
 def _doctor(home, tmp, **over):
-    kw = dict(
-        home=home,
-        tmp=tmp,
-        venv_python=Path(sys.executable),  # a real executable → venv OK
-        mcp_server_script=Path(sys.executable),  # ditto for the MCP launcher
-        which=_which_all,
-        disk_usage=_disk_free(5 * GIB),
-        daemon_alive=lambda _pid: False,
-    )
+    kw = {
+        "home": home,
+        "tmp": tmp,
+        "venv_python": Path(sys.executable),  # a real executable → venv OK
+        "mcp_server_script": Path(sys.executable),  # ditto for the MCP launcher
+        "which": _which_all,
+        "disk_usage": _disk_free(5 * GIB),
+        "daemon_alive": lambda _pid: False,
+    }
     kw.update(over)
     return doc.Doctor(**kw)
 
@@ -56,10 +58,13 @@ def test_healthy_baseline() -> None:
         assert report.healthy is True
         assert report.exit_code == 0
         assert _check(report, "mpv").status is Status.OK
+        assert _check(report, "jq").status is Status.OK
         assert _check(report, "venv").status is Status.OK
         assert _check(report, "disk").status is Status.OK
         assert _check(report, "narrator").status is Status.OK  # not running = OK
         assert _check(report, "scope").status is Status.OK
+        assert "enrolled" in _check(report, "scope").detail
+        assert "opt-IN" in _check(report, "autoplay").detail
 
 
 def _register_mcp(home: Path) -> None:
@@ -115,6 +120,27 @@ def test_missing_uv_is_only_warn() -> None:
         ).run()
         assert _check(report, "uv").status is Status.WARN
         assert report.healthy is True  # uv missing degrades, not breaks
+
+
+def test_missing_jq_is_only_warn() -> None:
+    with tempfile.TemporaryDirectory() as h, tempfile.TemporaryDirectory() as t:
+        report = _doctor(Path(h), Path(t), which=lambda n: None if n == "jq" else "/usr/bin/x").run()
+        jq = _check(report, "jq")
+        assert jq.status is Status.WARN
+        assert "session id" in jq.detail
+        assert report.healthy is True  # jq missing degrades autoplay, not all audio
+
+
+def test_autoplay_reports_opt_in_not_enabled_default() -> None:
+    with tempfile.TemporaryDirectory() as h, tempfile.TemporaryDirectory() as t:
+        report = _doctor(Path(h), Path(t)).run()
+        autoplay = _check(report, "autoplay")
+        assert autoplay.status is Status.OK
+        assert "opt-IN" in autoplay.detail
+        assert "enabled (default)" not in autoplay.detail
+        scope = _check(report, "scope")
+        assert "every enrolled session reads" in scope.detail
+        assert "every session reads" not in scope.detail.replace("every enrolled session reads", "")
 
 
 def test_missing_venv_is_fail() -> None:
@@ -232,6 +258,50 @@ def test_updates_out_of_sync_warns() -> None:
         assert report.healthy is True  # out-of-sync degrades, doesn't break
 
 
+def test_main_survives_non_table_narrator_section() -> None:
+    """A valid-TOML non-table `narrator` must not traceback out of main().
+
+    load_config() does section.get(...) on whatever raw["narrator"] is; a
+    string/int/true raises AttributeError. Doctor.main() has to keep going
+    so _check_config can report "[narrator] is not a table".
+    """
+    with tempfile.TemporaryDirectory() as h:
+        home = Path(h)
+        cfg_dir = home / ".config" / "auto-speech"
+        cfg_dir.mkdir(parents=True)
+        (cfg_dir / "narrator.toml").write_text('narrator = "bad"\n', encoding="utf-8")
+        saved_home = os.environ.get("HOME")
+        saved_override = os.environ.pop("AUTO_SPEECH_NARRATOR_CONFIG", None)
+        os.environ["HOME"] = str(home)
+        try:
+            import narrator_config
+
+            try:
+                narrator_config.load_config()
+            except AttributeError:
+                pass
+            else:
+                raise AssertionError(
+                    "non-table narrator must raise AttributeError from load_config"
+                )
+
+            buf = io.StringIO()
+            with contextlib.redirect_stdout(buf):
+                rc = doc.main(["doctor", "--json"])
+            obj = json.loads(buf.getvalue())
+            assert isinstance(rc, int)
+            assert "checks" in obj
+            cfg = next(c for c in obj["checks"] if c["name"] == "config")
+            assert "is not a table" in cfg["detail"]
+        finally:
+            if saved_home is None:
+                os.environ.pop("HOME", None)
+            else:
+                os.environ["HOME"] = saved_home
+            if saved_override is not None:
+                os.environ["AUTO_SPEECH_NARRATOR_CONFIG"] = saved_override
+
+
 def test_json_shape_and_exit() -> None:
     with tempfile.TemporaryDirectory() as h, tempfile.TemporaryDirectory() as t:
         report = _doctor(Path(h), Path(t)).run()
@@ -239,12 +309,16 @@ def test_json_shape_and_exit() -> None:
         assert obj["healthy"] is True
         assert {c["name"] for c in obj["checks"]} >= {
             "mpv",
+            "uv",
+            "jq",
             "venv",
             "disk",
             "logs",
             "narrator",
             "queue",
             "scope",
+            "autoplay",
+            "mcp",
         }
 
 
@@ -256,6 +330,8 @@ def main() -> int:
         test_missing_mcp_server_script_is_fail,
         test_missing_mpv_is_fail,
         test_missing_uv_is_only_warn,
+        test_missing_jq_is_only_warn,
+        test_autoplay_reports_opt_in_not_enabled_default,
         test_missing_venv_is_fail,
         test_low_disk_is_fail,
         test_oversize_log_warns_but_healthy,
@@ -267,6 +343,7 @@ def main() -> int:
         test_clean_config_ok,
         test_updates_in_sync_ok,
         test_updates_out_of_sync_warns,
+        test_main_survives_non_table_narrator_section,
         test_json_shape_and_exit,
     ]
     for t in tests:

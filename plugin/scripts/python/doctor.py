@@ -123,6 +123,15 @@ class Doctor:
             r.add("uv", Status.OK, "found")
         else:
             r.add("uv", Status.WARN, "missing — install/update unavailable (brew install uv)")
+        if self._which("jq"):
+            r.add("jq", Status.OK, "found (session id parsing)")
+        else:
+            r.add(
+                "jq",
+                Status.WARN,
+                "missing — Stop hook cannot parse session id from the payload; "
+                "autoplay stays silent (brew install jq)",
+            )
 
     def _check_venv(self, r: HealthReport) -> None:
         if os.access(self._venv_python, os.X_OK):
@@ -205,11 +214,11 @@ class Doctor:
                 "autoplay", Status.WARN, "globally muted (~/.claude/auto-speech.disabled present)"
             )
         else:
-            r.add("autoplay", Status.OK, "enabled (default)")
+            r.add("autoplay", Status.OK, "opt-IN (off until a session enrolls)")
         scope = SoloScope(home=self._home)
         held = scope.current()
         if held is None:
-            r.add("scope", Status.OK, "ALL — every session reads")
+            r.add("scope", Status.OK, "ALL — every enrolled session reads")
         else:
             r.add("scope", Status.OK, f"SOLO — only session {held} reads")
 
@@ -270,7 +279,7 @@ def main(argv: list[str]) -> int:
         from narrator_config import load_config
 
         max_q = int(load_config().get("max_queue_depth", 32))
-    except Exception:
+    except Exception:  # noqa: BLE001 — any load_config failure must not kill doctor
         max_q = 32
     report = Doctor(max_queue_depth=max_q).run()
     print(report.to_json() if as_json else report.to_text())

@@ -14,7 +14,6 @@ from pathlib import Path
 
 from voice_profile import VoiceProfile
 
-
 KOKORO_SAMPLE_RATE = 24000
 
 # Kokoro language codes keyed by the voice-id prefix letter.

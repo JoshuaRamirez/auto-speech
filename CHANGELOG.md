@@ -17,6 +17,12 @@ The Chrome extension under `chrome-extension/` is versioned independently
   honors the global mute, and never cuts off another playback. Register
   it with `bash setup/install-mcp.sh`.
 
+### Fixed
+
+- Leftover 0.1.0 opt-OUT copy on current surfaces now matches 0.2.0
+  opt-IN: `/auto-speech-autoplay-status`, `/auto-speech-doctor`,
+  `/auto-speech-scope`, and `docs/OPERATIONS.md`. Doctor reports `jq`.
+
 ## [0.2.0] - 2026-08-12
 
 Autoplay actually works now — and it no longer speaks unless asked.

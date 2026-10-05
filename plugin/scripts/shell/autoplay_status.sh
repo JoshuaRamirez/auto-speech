@@ -1,33 +1,41 @@
 #!/usr/bin/env bash
-# auto-speech — report autoplay status: per-session opt-out marker,
-# opt-out dir contents, global disable marker, currently-playing mpv.
-# Autoplay is ON by default; markers silence individual sessions.
+# auto-speech — report autoplay status: per-session enrollment marker,
+# enrollment dir contents, global disable marker, currently-playing mpv.
+# Autoplay is OFF by default; markers enroll individual sessions.
+# Enrollment is ONLY ~/.claude/auto-speech-autoplay-enabled/<session_id>.
 
 set -uo pipefail
 
 SESSION_ID="${CLAUDE_CODE_SESSION_ID:-}"
-OPTOUT_DIR="$HOME/.claude/auto-speech-autoplay-sessions"
-SESSION_MARKER="$OPTOUT_DIR/${SESSION_ID:-NO_SESSION_ID}"
+ENROLL_DIR="$HOME/.claude/auto-speech-autoplay-enabled"
+SESSION_MARKER="$ENROLL_DIR/${SESSION_ID:-NO_SESSION_ID}"
 DISABLE_MARKER="$HOME/.claude/auto-speech.disabled"
 
-echo "autoplay status (default ON; markers are per-session opt-OUTs)"
+echo "autoplay status (default OFF; markers are per-session opt-INs)"
 echo "  session:        ${SESSION_ID:-<unset>}"
 if [[ -n "$SESSION_ID" ]]; then
     if [[ -e "$SESSION_MARKER" ]]; then
-        echo "  this session:   OFF  (opt-out marker $SESSION_MARKER)"
+        echo "  this session:   ON   (enrollment marker $SESSION_MARKER)"
     else
-        echo "  this session:   ON   (no opt-out marker; default)"
+        echo "  this session:   OFF  (not enrolled; default)"
     fi
 else
-    echo "  this session:   ON by default — CLAUDE_CODE_SESSION_ID not set, cannot be opted out"
+    echo "  this session:   OFF by default — CLAUDE_CODE_SESSION_ID not set, cannot enroll"
 fi
 
-if [[ -d "$OPTOUT_DIR" ]] && [[ -n "$(ls -A "$OPTOUT_DIR" 2>/dev/null)" ]]; then
-    COUNT=$(ls "$OPTOUT_DIR" 2>/dev/null | wc -l | tr -d ' ')
-    OTHER=$((COUNT - $([[ -e "$SESSION_MARKER" ]] && echo 1 || echo 0)))
-    echo "  opt-out dir:    $COUNT session(s) opted out ($OTHER other than this one)"
+if [[ -d "$ENROLL_DIR" ]] && [[ -n "$(ls -A "$ENROLL_DIR" 2>/dev/null)" ]]; then
+    COUNT=$(ls "$ENROLL_DIR" 2>/dev/null | wc -l | tr -d ' ')
+    # "other than this one" is only meaningful when we have a real session
+    # id and can tell whether its marker is among the enrolled count.
+    # Unset CLAUDE_CODE_SESSION_ID leaves SESSION_MARKER at NO_SESSION_ID.
+    if [[ -n "$SESSION_ID" ]]; then
+        OTHER=$((COUNT - $([[ -e "$SESSION_MARKER" ]] && echo 1 || echo 0)))
+        echo "  enroll dir:     $COUNT session(s) enrolled ($OTHER other than this one)"
+    else
+        echo "  enroll dir:     $COUNT session(s) enrolled"
+    fi
 else
-    echo "  opt-out dir:    absent or empty → no session has opted out"
+    echo "  enroll dir:     absent or empty → no session has enrolled"
 fi
 
 if [[ -e "$DISABLE_MARKER" ]]; then
@@ -36,7 +44,7 @@ else
     echo "  global disable: absent"
 fi
 
-# Session SOLO scope (spotlight). Absent marker => ALL sessions read.
+# Session SOLO scope (spotlight). Absent marker => every ENROLLED session reads.
 SOLO_MARKER="$HOME/.claude/auto-speech-autoplay-solo"
 if [[ -e "$SOLO_MARKER" ]]; then
     SOLO_ID="$(tr -d '[:space:]' < "$SOLO_MARKER" 2>/dev/null || true)"
@@ -46,7 +54,7 @@ if [[ -e "$SOLO_MARKER" ]]; then
         echo "  scope:          SOLO — only session ${SOLO_ID:-<empty>} reads; this session muted"
     fi
 else
-    echo "  scope:          ALL — every session reads (default)"
+    echo "  scope:          ALL — every enrolled session reads (default)"
 fi
 
 # Currently-playing mpv (from the singleton session dir)

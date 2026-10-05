@@ -21,8 +21,6 @@ import os
 import sys
 import tomllib
 from pathlib import Path
-
-
 VALID_MODES = ("verbatim", "summary", "raw", "bypass", "as_is", "direct")
 VALID_SIZES = ("small", "medium", "large")
 
@@ -73,7 +71,7 @@ def load_config() -> dict:
                 raw = tomllib.loads(p.read_text(encoding="utf-8"))
                 config_path = p
                 break
-            except Exception as exc:
+            except (OSError, UnicodeDecodeError, tomllib.TOMLDecodeError, TypeError) as exc:
                 print(f"[autoplay] could not parse {p}: {exc}", file=sys.stderr)
 
     section = (raw.get("autoplay") if isinstance(raw, dict) else {}) or {}

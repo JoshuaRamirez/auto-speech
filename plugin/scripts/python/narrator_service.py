@@ -100,6 +100,7 @@ def _pid_cmdline(pid: int) -> str:
             capture_output=True,
             text=True,
             timeout=2,
+            check=False,
         )
     except (OSError, subprocess.SubprocessError):
         return ""
@@ -317,7 +318,7 @@ class NarratorService:
             _log("shutdown")
         return 0
 
-    def _on_signal(self, signum, frame):  # noqa: ARG002
+    def _on_signal(self, signum, frame):
         _log(f"signal {signum} → shutting down")
         if self._fsm.can(SIGNAL_SHUTDOWN):
             self._fsm.transition(SIGNAL_SHUTDOWN)  # RUNNING → SIGNAL_SHUTDOWN
@@ -916,7 +917,7 @@ class NarratorService:
         later instead."""
         try:
             self._get_summarizer()
-        except Exception as exc:
+        except Exception as exc:  # noqa: BLE001 — boot must not die on load
             _log(f"eager-load failed (will retry lazily on first phase): {exc!r}")
 
     def _ensure_tts_initialized(self) -> None:
@@ -988,7 +989,7 @@ class NarratorService:
                             self._engine_state = "PLAYING"
                         try:
                             self._sink.play(phase)
-                        except Exception as exc:
+                        except Exception as exc:  # noqa: BLE001
                             _log(f"play_cache error: {exc!r}")
                 elif isinstance(phase, str):
                     s_hash = getattr(item_obj, "source_hash", None)
@@ -1029,7 +1030,7 @@ class NarratorService:
                     _log(f"Summarizer generated: {line}")
                     if line:
                         self._speak(line)
-            except Exception as exc:
+            except Exception as exc:  # noqa: BLE001 — keep the worker loop alive
                 _log(f"tts_worker error: {exc!r}")
             finally:
                 is_preempted = getattr(self, "_preempted", False)

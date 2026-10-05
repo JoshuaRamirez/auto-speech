@@ -43,7 +43,7 @@ def _make_server(tmp_path: Path):
     """Build a WebServer with MLX fully stubbed and cache under tmp_path."""
     synth_calls = {"n": 0}
 
-    def fake_synthesize(text, profile, out_path):  # noqa: ANN001 — instance attr, no self
+    def fake_synthesize(text, profile, out_path):
         synth_calls["n"] += 1
         _write_tiny_wav(Path(out_path))
 
@@ -62,7 +62,7 @@ def _make_server(tmp_path: Path):
 def test_empty_text_rejected() -> None:
     with tempfile.TemporaryDirectory() as td:
         server, _ = _make_server(Path(td))
-        client = server._app.test_client()  # noqa: SLF001
+        client = server._app.test_client()
         resp = client.post("/api/synthesize", json={"text": "   "})
         assert resp.status_code == 400
 
@@ -70,7 +70,7 @@ def test_empty_text_rejected() -> None:
 def test_oversize_text_rejected() -> None:
     with tempfile.TemporaryDirectory() as td:
         server, _ = _make_server(Path(td))
-        client = server._app.test_client()  # noqa: SLF001
+        client = server._app.test_client()
         resp = client.post("/api/synthesize", json={"text": "x" * 20001})
         assert resp.status_code == 413
 
@@ -78,7 +78,7 @@ def test_oversize_text_rejected() -> None:
 def test_synthesize_returns_wav_and_caches() -> None:
     with tempfile.TemporaryDirectory() as td:
         server, synth_calls = _make_server(Path(td))
-        client = server._app.test_client()  # noqa: SLF001
+        client = server._app.test_client()
 
         r1 = client.post(
             "/api/synthesize",
@@ -105,7 +105,7 @@ def test_no_speakable_content_returns_422() -> None:
     with tempfile.TemporaryDirectory() as td:
         server, _ = _make_server(Path(td))
 
-        def raise_unspeakable(text, profile, out_path):  # noqa: ANN001
+        def raise_unspeakable(text, profile, out_path):
             raise tts_engine.TTSNoSpeakableContentError("no phonemes")
 
         server._tts_executor.engine.synthesize = raise_unspeakable  # noqa: SLF001
@@ -147,7 +147,7 @@ def test_resilient_split_recovers_from_generate_fault() -> None:
 
         # Simulate the mlx-audio bug: fail on any span longer than 3 words,
         # succeed (emit a tiny WAV) on shorter ones.
-        def flaky(text, profile, out_path):  # noqa: ANN001
+        def flaky(text, profile, out_path):
             if len(text.split()) > 3:
                 raise tts_engine.TTSGenerationError("simulated broadcast bug")
             _write_tiny_wav(Path(out_path))
@@ -168,7 +168,7 @@ def test_resilient_split_skips_unspeakable_leaf() -> None:
         tmp_path = Path(td)
         server, _ = _make_server(tmp_path)
 
-        def synth(text, profile, out_path):  # noqa: ANN001
+        def synth(text, profile, out_path):
             t = text.strip()
             if t == "★":
                 raise tts_engine.TTSNoSpeakableContentError("no phonemes")
@@ -194,7 +194,7 @@ def test_non_string_fields_are_client_errors_not_crashes() -> None:
     """
     with tempfile.TemporaryDirectory() as td:
         server, _ = _make_server(Path(td))
-        client = server._app.test_client()  # noqa: SLF001
+        client = server._app.test_client()
 
         cases = [
             ("/api/synthesize", {"text": 123}),
@@ -236,12 +236,12 @@ def test_synthesize_not_blocked_by_inflight_rewrite() -> None:
 
     with tempfile.TemporaryDirectory() as td:
         server, _ = _make_server(Path(td))
-        client = server._app.test_client()  # noqa: SLF001
+        client = server._app.test_client()
 
         release = threading.Event()
         started = threading.Event()
 
-        def slow_rewrite(text, timeout_seconds=600.0):  # noqa: ANN001, ARG001
+        def slow_rewrite(text, timeout_seconds=600.0):
             started.set()
             release.wait(timeout=30)
             return text
@@ -272,7 +272,7 @@ def test_cors_denied_for_web_and_absent_origins() -> None:
     """Non-extension origins get NO ACAO header — pages can't read responses."""
     with tempfile.TemporaryDirectory() as td:
         server, _ = _make_server(Path(td))
-        client = server._app.test_client()  # noqa: SLF001
+        client = server._app.test_client()
 
         # A regular web origin: response carries no CORS grant.
         r_web = client.post(

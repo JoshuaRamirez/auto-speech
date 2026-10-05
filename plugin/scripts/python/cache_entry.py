@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass, asdict
+from dataclasses import asdict, dataclass
 
 
 @dataclass(frozen=True)
@@ -21,7 +21,7 @@ class CacheEntry:
         return asdict(self)
 
     @classmethod
-    def from_dict(cls, data: dict) -> "CacheEntry":
+    def from_dict(cls, data: dict) -> CacheEntry:
         cps = data.get("chars_per_second_at_creation")
         if cps is None:
             char_count = int(data.get("char_count", 0))

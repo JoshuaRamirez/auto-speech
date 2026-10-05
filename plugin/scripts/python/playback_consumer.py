@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import threading
 from pathlib import Path
+
 from native_audio_sink import NativeAudioSink
 from playback_queue import PlaybackQueue, SENTINEL
 

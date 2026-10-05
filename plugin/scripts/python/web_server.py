@@ -6,13 +6,13 @@ Run with:
 """
 
 from __future__ import annotations
+
 import argparse
 import sys
 import threading
 from concurrent.futures import ThreadPoolExecutor
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
-
 from typing import Any, Callable
 
 from flask import Flask
@@ -20,6 +20,7 @@ from flask import Flask
 from cache_store import CacheStore
 from claude_cli_rewriter import ClaudeCliRewriter, load_default_template
 from config_constants import DEFAULT_SPEED, DEFAULT_VOICE_ID, FALLBACK_CHARS_PER_SEC
+from http_routing import HttpRoutes, _supported_lang_prefixes
 from job_tracker import JobTracker
 from native_audio_sink import NativeAudioSink
 from resilient_synthesizer import ResilientSynthesizer
@@ -27,7 +28,6 @@ from tts_engine import TTSEngine
 from tts_executor import get_default_tts_engine
 from voice_profile import VoiceProfile
 from voice_profile_store import VoiceProfileStore
-from http_routing import HttpRoutes, _supported_lang_prefixes
 
 
 class TTSExecutor:
@@ -61,6 +61,7 @@ class TTSExecutor:
 _DEFAULT_HOST = "127.0.0.1"
 _DEFAULT_PORT = 7860
 
+
 def _discover_voices(model_id: str) -> list[str]:
     if model_id.startswith("apple-say"):
         from apple_say_engine import get_available_say_voices
@@ -70,8 +71,9 @@ def _discover_voices(model_id: str) -> list[str]:
 
     try:
         from huggingface_hub import snapshot_download
+
         snap = snapshot_download(model_id, allow_patterns=["voices/*"], local_files_only=True)
-    except Exception as exc:
+    except Exception as exc:  # noqa: BLE001
         print(f"[web] voice discovery failed: {exc}", file=sys.stderr)
         return []
     voices_dir = Path(snap) / "voices"
@@ -85,17 +87,22 @@ def _discover_voices(model_id: str) -> list[str]:
         print(f"[web] {dropped} voices hidden (language G2P not installed)", file=sys.stderr)
     return usable
 
+
 def _project_root() -> Path:
     return Path(__file__).resolve().parents[3]
+
 
 def _config_voice_path() -> Path:
     return _project_root() / "config" / "voice_calibration.json"
 
+
 def _cache_root() -> Path:
     return _project_root() / "config" / "cache"
 
+
 def _templates_dir() -> Path:
     return _project_root() / "plugin" / "web" / "templates"
+
 
 def _fallback_profile() -> VoiceProfile:
     return VoiceProfile(
@@ -106,12 +113,13 @@ def _fallback_profile() -> VoiceProfile:
         calibration_source_chars=0,
     )
 
+
 class WebServer:
     """Composition Root: Flask app + held services for the auto-speech web UI."""
 
     def __init__(self) -> None:
         self._app = Flask(__name__, template_folder=str(_templates_dir()), static_folder=None)
-        
+
         # Horizon 0: Dependency Injection
         self._audio_sink = NativeAudioSink()
         self._tts_executor = TTSExecutor()
@@ -151,14 +159,14 @@ class WebServer:
             rewriter=self._rewriter,
             tts_executor=self._tts_executor,
             job_executor=self._job_executor,
-            lock=self._lock
+            lock=self._lock,
         )
         self._routes.register()
-        
+
         # Prewarm TTS worker
         try:
             self._tts_executor.ensure_loaded()
-        except Exception as exc:
+        except Exception as exc:  # noqa: BLE001
             print(f"[web] WARNING: TTS pre-warm failed: {exc}", file=sys.stderr)
 
     def run(self, host: str = _DEFAULT_HOST, port: int = _DEFAULT_PORT) -> None:
@@ -173,18 +181,20 @@ class WebServer:
             return loaded
         return _fallback_profile()
 
+
 def main(argv: list[str] | None = None) -> int:
     p = argparse.ArgumentParser(description="auto-speech localhost web server")
     p.add_argument("--port", type=int, default=_DEFAULT_PORT)
     args = p.parse_args(argv)
 
     server = WebServer()
-    print(f"[web] start={datetime.now(timezone.utc).isoformat(timespec='seconds')}", file=sys.stderr)
+    print(f"[web] start={datetime.now(UTC).isoformat(timespec='seconds')}", file=sys.stderr)
     try:
         server.run(host=_DEFAULT_HOST, port=args.port)
     except KeyboardInterrupt:
         print("[web] shutting down", file=sys.stderr)
     return 0
+
 
 if __name__ == "__main__":
     sys.exit(main())
