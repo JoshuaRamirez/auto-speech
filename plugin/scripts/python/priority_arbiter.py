@@ -19,6 +19,8 @@ from dataclasses import dataclass, field
 from enum import IntEnum
 from typing import Any, Callable, Optional
 
+from config_constants import DEFAULT_SPEED, DEFAULT_VOICE_ID
+
 
 class Priority(IntEnum):
     USER_INTERRUPT = 1
@@ -33,8 +35,8 @@ class QueueItem:
     payload: Any = None
     source_hash: Optional[str] = None
     session_id: Optional[str] = None
-    voice_id: str = "af_nova"
-    speed: float = 1.18
+    voice_id: str = DEFAULT_VOICE_ID
+    speed: float = DEFAULT_SPEED
     timestamp: float = field(default_factory=time.time)
     enqueued_at: float = field(default_factory=time.time)
     request_id: str = ""

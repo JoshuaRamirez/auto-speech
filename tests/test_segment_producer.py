@@ -14,7 +14,7 @@ from audio_transcript import AudioTranscript
 from chunk_planner import ChunkPlanner
 from playback_queue import SENTINEL, PlaybackQueue
 from segment_producer import SegmentProducer
-from tts_engine import TTSEngine
+from tts_executor import get_default_tts_engine
 from voice_profile_store import VoiceProfileStore
 
 
@@ -39,7 +39,7 @@ def main() -> int:
     tmpdir = Path(tempfile.mkdtemp(prefix="auto-speech-test-prod-"))
     queue = PlaybackQueue(capacity=3)
     stop = threading.Event()
-    producer = SegmentProducer(TTSEngine(), profile, tmpdir, queue, stop)
+    producer = SegmentProducer(get_default_tts_engine(), profile, tmpdir, queue, stop)
 
     t = threading.Thread(target=producer.run, args=(plan,))
     t.start()

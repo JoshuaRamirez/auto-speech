@@ -422,8 +422,8 @@ class NarratorService:
             if source_hash:
                 source_hash = str(source_hash).strip().lower()
             session_id = payload.get("session_id")
-            voice_id = str(payload.get("voice_id", "af_nova"))
-            speed = float(payload.get("speed", 1.18))
+            voice_id = str(payload.get("voice_id", DEFAULT_VOICE_ID))
+            speed = float(payload.get("speed", DEFAULT_SPEED))
 
             cached_wav: Optional[Path] = None
             if source_hash and len(source_hash) == 64 and all(c in "0123456789abcdef" for c in source_hash):
