@@ -111,10 +111,12 @@ class ResilientSynthesizer:
                 parts[0].replace(out_path)
             return True
         try:
-            WavConcatenator.concat(parts, out_path)
-        except WavConcatError as exc:
-            raise TTSGenerationError(f"could not join recovered fragments: {exc}") from exc
-        for p in parts:
-            if p != out_path:
-                p.unlink(missing_ok=True)
+            try:
+                WavConcatenator.concat(parts, out_path)
+            except WavConcatError as exc:
+                raise TTSGenerationError(f"could not join recovered fragments: {exc}") from exc
+        finally:
+            for p in parts:
+                if p != out_path:
+                    p.unlink(missing_ok=True)
         return True

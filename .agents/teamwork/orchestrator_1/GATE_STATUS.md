@@ -45,15 +45,54 @@ Gate Result: **FAIL** (auditor_m2_r2_1 reported INTEGRITY VIOLATION: _DaemonSock
 ## Gate — Milestone M2 (Iteration 3: Forensic Audit Remediation)
 | Agent | Role | Verdict | Source |
 |-------|------|---------|--------|
-| explorer_m2_r3_1 | teamwork_preview_explorer | PENDING | - |
-| explorer_m2_r3_2 | teamwork_preview_explorer | PENDING | - |
-| spec_miner_m2_r3_3 | teamwork_preview_spec_miner | PENDING | - |
-| worker_m2_r3 | teamwork_preview_worker | PENDING | - |
-| reviewer_m2_r3_1 | teamwork_preview_reviewer | PENDING | - |
-| reviewer_m2_r3_2 | teamwork_preview_reviewer | PENDING | - |
-| challenger_m2_r3_1 | teamwork_preview_challenger | PENDING | - |
-| challenger_m2_r3_2 | teamwork_preview_challenger | PENDING | - |
-| auditor_m2_r3_1 | teamwork_preview_auditor | PENDING | - |
+| worker_m2_r3 | teamwork_preview_worker | DONE (156/156 tests pass, ruff 0 errors) | handoff.md |
+| reviewer_m2_r3_1 | teamwork_preview_reviewer | APPROVE | handoff.md |
+| reviewer_m2_r3_2 | teamwork_preview_reviewer | APPROVE | handoff.md |
+| challenger_m2_r3_1 | teamwork_preview_challenger | APPROVE | handoff.md |
+| challenger_m2_r3_2 | teamwork_preview_challenger | APPROVE | handoff.md |
+| auditor_m2_r3_1 | teamwork_preview_auditor | CLEAN | handoff.md |
 
-Gate Result: **IN_PROGRESS**
+Gate Result: **PASS**
+
+---
+
+## Gate — Milestone M3 (Iteration 1)
+| Agent | Role | Verdict | Source |
+|-------|------|---------|--------|
+| worker_m3 | teamwork_preview_worker | DONE (41/41 E2E, 37/37 hermetic, 41/41 unit/shell) | handoff.md |
+| reviewer_m3_1 | teamwork_preview_reviewer | APPROVE | handoff.md |
+| reviewer_m3_2 | teamwork_preview_reviewer | APPROVE | handoff.md |
+| challenger_m3_1 | teamwork_preview_challenger | APPROVE | handoff.md |
+| challenger_m3_2 | teamwork_preview_challenger | APPROVE | handoff.md |
+| auditor_m3_1 | teamwork_preview_auditor | CLEAN | handoff.md |
+
+Gate Result: **PASS**
+
+---
+
+## Gate — Milestone M4 (Final Milestone)
+### Iteration 1
+| Agent | Role | Verdict | Source |
+|-------|------|---------|--------|
+| worker_m4_p1 | teamwork_preview_worker | DONE (41/41 E2E tests pass, 38/38 hermetic pass) | handoff.md |
+| challenger_m4_1 | teamwork_preview_challenger | APPROVE (17 Tier 5 adversarial tests pass) | handoff.md |
+| challenger_m4_2 | teamwork_preview_challenger | APPROVE (16 Tier 5 adversarial tests pass) | handoff.md |
+| auditor_m4_1 | teamwork_preview_auditor | INTEGRITY VIOLATION (11 F401 unused imports) | handoff.md |
+
+Gate Result: **FAIL** (auditor_m4_1 reported INTEGRITY VIOLATION: 11 unused imports in tests/e2e/test_tier5_adversarial_lifecycle.py and tests/e2e/test_tier5_adversarial_sink_ipc.py, failing ruff check .)
+
+### Iteration 2 (Audit Remediation & Tier 5 Runner Integration)
+| Agent | Role | Verdict | Source |
+|-------|------|---------|--------|
+| worker_m4_r2 | teamwork_preview_worker | DONE (186/186 tests pass across 5 suites, ruff 0 violations) | handoff.md |
+| reviewer_m4_r2_1 | teamwork_preview_reviewer | APPROVE | handoff.md |
+| reviewer_m4_r2_2 | teamwork_preview_reviewer | APPROVE | handoff.md |
+| challenger_m4_1 | teamwork_preview_challenger | APPROVE (17 Tier 5 tests) | handoff.md |
+| challenger_m4_2 | teamwork_preview_challenger | APPROVE (16 Tier 5 tests) | handoff.md |
+| auditor_m4_r2_1 | teamwork_preview_auditor | CLEAN | handoff.md |
+
+Gate Result: **PASS**
+
+
+
 

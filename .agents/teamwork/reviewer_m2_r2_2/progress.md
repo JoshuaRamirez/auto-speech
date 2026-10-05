@@ -1,11 +1,19 @@
 # Progress — reviewer_m2_r2_2
 
-- Last visited: 2026-10-03T19:38:50Z
-- Status: Completed independent review, adversarial analysis, and test verification. Preparing handoff.md with REQUEST_CHANGES verdict.
+- Last visited: 2026-10-04T11:41:20Z
+- Status: Completed independent empirical review, adversarial stress-testing, and integrity verification. Preparing handoff report with APPROVE verdict.
 - Completed Steps:
-  1. Read ORIGINAL_REQUEST.md, PROJECT.md, and worker_m2_r2/handoff.md.
-  2. Inspected all code changes in narrator_service.py, speak.py, unix_ipc_server.py, and test suites.
-  3. Verified thread safety (_queue_lock), socket lifecycle, wire protocol, and backpressure.
-  4. Executed all test suites: unit tests (19 in test_speak_client.py, 26 in test_narrator_service.py), stress suites (11 in test_socket_ipc_stress.py, 7 in test_socket_server_stress.py), and E2E suites (Tiers 1-4). Identified failure in test_tier1_r2_daemon_socket_enqueues_to_tts_queue.
-  5. Performed adversarial stress test analysis and integrity check.
-  6. Writing handoff.md and sending notification to parent.
+  1. Read DISPATCH.md, ORIGINAL_REQUEST.md, context.md, worker_m2_r2/handoff.md, and RFC.
+  2. Inspected code changes in `plugin/scripts/python/narrator_service.py` (`play_cache` payload validation) and `plugin/scripts/python/replay.py` (`_is_mocked` parity).
+  3. Verified mock target preservation in `tests/test_replay_control.py` and `tests/test_synthesize_endpoint.py`.
+  4. Executed independent test suites:
+     - `bash tests/run_all.sh --web` (12/12 passed)
+     - `.venv/bin/python tests/e2e/run_e2e.py` (74/74 passed across Tiers 1-5)
+     - `bash tests/run_all.sh --hermetic` (43/43 suites passed)
+     - `.venv/bin/python tests/test_challenger_m2_cache_stress.py` (17/17 passed)
+     - `.venv/bin/python tests/test_challenger_m2_stress.py` (19/19 passed)
+     - `.venv/bin/python tests/test_replay_control.py` (10/10 passed)
+     - `.venv/bin/python tests/test_synthesize_endpoint.py` (12/12 passed)
+     - `.venv/bin/ruff check .` (0 errors)
+  5. Performed adversarial review, checked for integrity violations (0 found), and validated judgements via `systemone round`.
+  6. Finalizing handoff.md and sending completion message.

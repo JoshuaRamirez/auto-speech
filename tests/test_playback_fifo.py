@@ -1,159 +1,129 @@
-"""Unit tests for PlaybackFifo (the cross-session FIFO playback queue).
+"""Unit tests for PriorityArbiter (in-memory 4-tier FIFO playback arbiter).
 
-Reproduces the coverage of the retired test_autoplay_queue.sh anchor
-test, exercising the helpers directly:
-  - empty queue → head
-  - sole ticket → head
-  - older LIVE ticket blocks us
-  - older DEAD-owner ticket is garbage-collected, then we are head
-  - newer ticket does not block us
-  - tickets sort in arrival order
-  - wait_for_queue_turn: proceeds when idle+drained+head, bails on stale,
-    proceeds on cap expiry
-  - release removes the ticket
+Modernized replacement for the legacy file-based playback_fifo test.
+Validates:
+  - strict FIFO arrival-order within the same priority tier
+  - multi-band priority ordering (P1 > P2 > P3 > P4)
+  - preemption and re-queueing at head
+  - P1 user barge-in purging lower tiers
+  - drop-oldest bounded queue backpressure
+  - thread-safe condition variable unblocking
 """
 
 from __future__ import annotations
 
-import os
 import sys
-import tempfile
+import threading
+import time
+import unittest
 from pathlib import Path
 
 SRC = Path(__file__).resolve().parents[1] / "plugin" / "scripts" / "python"
-sys.path.insert(0, str(SRC))
+if str(SRC) not in sys.path:
+    sys.path.insert(0, str(SRC))
 
-from playback_fifo import PlaybackFifo  # noqa: E402
-from playback_ticket import HEAD, RELEASED  # noqa: E402
-
-
-def _qdir() -> Path:
-    return Path(tempfile.mkdtemp(prefix="auto-speech-fifo-test-"))
+from priority_arbiter import Priority, PriorityArbiter, QueueItem, QueueProxyFacade  # noqa: E402
 
 
-def test_empty_queue_is_head() -> None:
-    f = PlaybackFifo(pid=os.getpid(), queue_dir=_qdir())
-    assert f.ticket_is_head() is True  # no ticket, empty dir → proceed
+class TestPriorityArbiterModernized(unittest.TestCase):
+    """Test suite for in-memory priority and FIFO arbitration."""
 
+    def test_strict_fifo_arrival_order_within_same_band(self) -> None:
+        arbiter = PriorityArbiter(maxsize=10)
+        arbiter.enqueue("first", priority=Priority.AUTOPLAY)
+        arbiter.enqueue("second", priority=Priority.AUTOPLAY)
+        arbiter.enqueue("third", priority=Priority.AUTOPLAY)
 
-def test_sole_ticket_is_head() -> None:
-    f = PlaybackFifo(pid=os.getpid(), queue_dir=_qdir())
-    f.enqueue()
-    assert f.ticket_is_head() is True
+        self.assertEqual(arbiter.dequeue(timeout=0.1), "first")
+        self.assertEqual(arbiter.dequeue(timeout=0.1), "second")
+        self.assertEqual(arbiter.dequeue(timeout=0.1), "third")
 
+    def test_higher_priority_preempts_lower_priority(self) -> None:
+        arbiter = PriorityArbiter(maxsize=10)
+        # Enqueue low priority items first
+        arbiter.enqueue("narration_1", priority=Priority.TOOL_NARRATION)
+        arbiter.enqueue("autoplay_1", priority=Priority.AUTOPLAY)
+        arbiter.enqueue("mcp_1", priority=Priority.EXPLICIT_MCP)
+        arbiter.enqueue("interrupt_1", priority=Priority.USER_INTERRUPT)
 
-def test_older_live_ticket_blocks() -> None:
-    d = _qdir()
-    f = PlaybackFifo(pid=os.getpid(), queue_dir=d)
-    f.enqueue()
-    # Older ticket (smaller stamp), owner = our own live pid.
-    older = d / f"00000000000000000001.{os.getpid()}"
-    older.write_text(f"{os.getpid()}\n", encoding="utf-8")
-    assert f.ticket_is_head() is False
+        # Must be dequeued in order of priority (P1 -> P2 -> P3 -> P4)
+        self.assertEqual(arbiter.dequeue(timeout=0.1), "interrupt_1")
+        self.assertEqual(arbiter.dequeue(timeout=0.1), "mcp_1")
+        self.assertEqual(arbiter.dequeue(timeout=0.1), "autoplay_1")
+        self.assertEqual(arbiter.dequeue(timeout=0.1), "narration_1")
 
+    def test_p1_barge_in_purges_lower_priority_items(self) -> None:
+        arbiter = PriorityArbiter(maxsize=10)
+        arbiter.enqueue("narration_stale", priority=Priority.TOOL_NARRATION)
+        arbiter.enqueue("autoplay_stale", priority=Priority.AUTOPLAY)
 
-def test_older_dead_owner_ticket_collected() -> None:
-    d = _qdir()
-    f = PlaybackFifo(pid=os.getpid(), queue_dir=d)
-    f.enqueue()
-    older = d / "00000000000000000001.999"
-    older.write_text("999999\n", encoding="utf-8")  # PID safely non-existent
-    assert f.ticket_is_head() is True
-    assert not older.exists(), "dead-owner ticket must be garbage-collected"
+        purged = arbiter.purge_lower_queues()
+        self.assertEqual(purged, 2)
+        self.assertEqual(arbiter.total_depth(), 0)
 
+    def test_drop_oldest_backpressure_shedding(self) -> None:
+        arbiter = PriorityArbiter(maxsize=3)
+        arbiter.enqueue("item_1", priority=Priority.TOOL_NARRATION)
+        arbiter.enqueue("item_2", priority=Priority.TOOL_NARRATION)
+        arbiter.enqueue("item_3", priority=Priority.TOOL_NARRATION)
+        self.assertEqual(arbiter.total_depth(), 3)
 
-def test_newer_ticket_does_not_block() -> None:
-    d = _qdir()
-    f = PlaybackFifo(pid=os.getpid(), queue_dir=d)
-    f.enqueue()
-    newer = d / f"99999999999999999999.{os.getpid()}"
-    newer.write_text(f"{os.getpid()}\n", encoding="utf-8")
-    assert f.ticket_is_head() is True
+        # 4th item pushes out the oldest item (item_1)
+        arbiter.enqueue("item_4", priority=Priority.TOOL_NARRATION)
+        self.assertEqual(arbiter.total_depth(), 3)
 
+        self.assertEqual(arbiter.dequeue(timeout=0.1), "item_2")
+        self.assertEqual(arbiter.dequeue(timeout=0.1), "item_3")
+        self.assertEqual(arbiter.dequeue(timeout=0.1), "item_4")
 
-def test_tickets_sort_in_arrival_order() -> None:
-    d = _qdir()
-    a = PlaybackFifo(pid=os.getpid(), queue_dir=d).enqueue()
-    b = PlaybackFifo(pid=os.getpid(), queue_dir=d).enqueue()
-    assert a.name < b.name, f"{a.name} should sort before {b.name}"
+    def test_requeue_preempted_item_goes_to_front_of_band(self) -> None:
+        arbiter = PriorityArbiter(maxsize=10)
+        arbiter.enqueue("auto_2", priority=Priority.AUTOPLAY)
+        item_1 = QueueItem(priority=Priority.AUTOPLAY, payload="auto_1")
+        arbiter.requeue_at_head(item_1)
 
+        # auto_1 must come before auto_2
+        self.assertEqual(arbiter.dequeue(timeout=0.1), "auto_1")
+        self.assertEqual(arbiter.dequeue(timeout=0.1), "auto_2")
 
-def test_wait_proceeds_when_idle_and_drained() -> None:
-    f = PlaybackFifo(pid=os.getpid(), queue_dir=_qdir())
-    f.enqueue()
-    ok = f.wait_for_queue_turn(
-        cap_seconds=5,
-        mpv_running=lambda: False,
-        narrator_depth=lambda: 0,
-        is_stale=lambda: False,
-        sleep=lambda s: None,
-    )
-    assert ok is True
-    assert f.machine.state == HEAD
+    def test_thread_safe_blocking_and_notification(self) -> None:
+        arbiter = PriorityArbiter(maxsize=10)
+        received = []
 
+        def consumer() -> None:
+            item = arbiter.dequeue(timeout=2.0)
+            if item:
+                received.append(item)
 
-def test_wait_bails_on_stale() -> None:
-    f = PlaybackFifo(pid=os.getpid(), queue_dir=_qdir())
-    f.enqueue()
-    # mpv busy so we never reach head; stale fires after the first poll.
-    ok = f.wait_for_queue_turn(
-        cap_seconds=5,
-        mpv_running=lambda: True,
-        narrator_depth=lambda: 0,
-        is_stale=lambda: True,
-        sleep=lambda s: None,
-    )
-    assert ok is False
+        t = threading.Thread(target=consumer)
+        t.start()
 
+        time.sleep(0.05)
+        arbiter.enqueue("notified_payload", priority=Priority.EXPLICIT_MCP)
+        t.join(timeout=2.0)
 
-def test_wait_proceeds_on_cap_expiry() -> None:
-    f = PlaybackFifo(pid=os.getpid(), queue_dir=_qdir())
-    f.enqueue()
-    # mpv never idle, never stale → cap expiry → proceed anyway (no kill).
-    calls = {"n": 0}
+        self.assertEqual(received, ["notified_payload"])
 
-    def mpv():
-        calls["n"] += 1
-        return True
+    def test_queue_proxy_facade_compatibility(self) -> None:
+        arbiter = PriorityArbiter(maxsize=5)
+        proxy = QueueProxyFacade(arbiter, maxsize=5)
 
-    ok = f.wait_for_queue_turn(
-        cap_seconds=2,  # cap*2 = 4 iterations
-        mpv_running=mpv,
-        narrator_depth=lambda: 0,
-        is_stale=lambda: False,
-        sleep=lambda s: None,
-    )
-    assert ok is True
-    assert calls["n"] == 4, f"expected cap*2=4 polls, got {calls['n']}"
-
-
-def test_release_removes_ticket() -> None:
-    f = PlaybackFifo(pid=os.getpid(), queue_dir=_qdir())
-    t = f.enqueue()
-    assert t.exists()
-    f.release()
-    assert not t.exists()
-    assert f.machine.state == RELEASED
+        self.assertTrue(proxy.empty())
+        proxy.put("string_payload")
+        self.assertFalse(proxy.empty())
+        self.assertEqual(proxy.qsize(), 1)
+        self.assertEqual(proxy.get(timeout=0.1), "string_payload")
+        self.assertTrue(proxy.empty())
 
 
 def main() -> int:
-    tests = [
-        test_empty_queue_is_head,
-        test_sole_ticket_is_head,
-        test_older_live_ticket_blocks,
-        test_older_dead_owner_ticket_collected,
-        test_newer_ticket_does_not_block,
-        test_tickets_sort_in_arrival_order,
-        test_wait_proceeds_when_idle_and_drained,
-        test_wait_bails_on_stale,
-        test_wait_proceeds_on_cap_expiry,
-        test_release_removes_ticket,
-    ]
-    for t in tests:
-        t()
-        print(f"  ok  {t.__name__}")
-    print(f"playback_fifo: {len(tests)} tests passed")
-    return 0
+    suite = unittest.defaultTestLoader.loadTestsFromTestCase(TestPriorityArbiterModernized)
+    runner = unittest.TextTestRunner(stream=sys.stdout, verbosity=1)
+    res = runner.run(suite)
+    if res.wasSuccessful():
+        print(f"playback_fifo: {res.testsRun} tests passed")
+        return 0
+    return 1
 
 
 if __name__ == "__main__":

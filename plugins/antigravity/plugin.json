@@ -1,0 +1,11 @@
+{
+  "name": "auto-speech",
+  "displayName": "Auto Speech",
+  "version": "0.2.0",
+  "description": "Speak agent responses aloud with zero-cold-boot macOS neural voice synthesis, closed-loop audio caching, and prioritized playback.",
+  "suggestedPrompts": [
+    "Speak the last response aloud",
+    "Check auto-speech daemon status",
+    "Replay the last audio playback"
+  ]
+}

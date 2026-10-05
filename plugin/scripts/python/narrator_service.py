@@ -20,15 +20,21 @@ import json
 import os
 import queue
 import signal
-import socket
 import subprocess
 import sys
 import tempfile
 import threading
 import time
+import wave
+from datetime import datetime, timezone
 from pathlib import Path
+from typing import Any, Optional
+
+# Daemon runs a UNIX domain socket server (socket.AF_UNIX) via unix_ipc_server._DaemonSocketServer
 
 from auto_speech_log import get_logger
+from cache_entry import CacheEntry
+from cache_store import CachePromotionError, CacheStore
 from config_constants import DEFAULT_SPEED, DEFAULT_VOICE_ID, FALLBACK_CHARS_PER_SEC
 from native_audio_sink import NativeAudioSink
 from narrator_config import load_config
@@ -42,6 +48,7 @@ from narrator_state import (
     NarratorStateMachine,
 )
 from narrator_summarizer import Summarizer, load_summarizer
+from priority_arbiter import Priority, PriorityArbiter, QueueItem, QueueProxyFacade
 from unix_ipc_server import _DaemonSocketServer
 from tts_executor import TTSExecutor
 from resilient_synthesizer import ResilientSynthesizer
@@ -73,6 +80,16 @@ _LOGGER = get_logger("auto-speech.narrator", LOG_FILE)
 
 def _log(msg: str) -> None:
     _LOGGER.info(msg)
+
+
+def _wav_duration_seconds(path: Path) -> float:
+    try:
+        with wave.open(str(path), "rb") as wf:
+            frames = wf.getnframes()
+            rate = wf.getframerate()
+        return frames / rate if rate else 0.0
+    except Exception:
+        return 0.0
 
 
 def _pid_cmdline(pid: int) -> str:
@@ -156,6 +173,41 @@ def _load_profile_or_fallback(config: dict | None = None) -> VoiceProfile:
 
 
 class NarratorService:
+    @property
+    def _cache(self) -> CacheStore:
+        if "_cache_instance" not in self.__dict__:
+            cache_root = _project_root() / "config" / "cache"
+            self.__dict__["_cache_instance"] = CacheStore(cache_root)
+        return self.__dict__["_cache_instance"]
+
+    @_cache.setter
+    def _cache(self, val: CacheStore) -> None:
+        self.__dict__["_cache_instance"] = val
+
+    @property
+    def _tts_queue(self) -> Any:
+        if "_custom_queue" in self.__dict__:
+            return self.__dict__["_custom_queue"]
+        if "_queue_proxy" in self.__dict__:
+            return self.__dict__["_queue_proxy"]
+        max_q = getattr(self, "_max_queue", 32)
+        arbiter = getattr(self, "_priority_arbiter", None)
+        if arbiter is None:
+            arbiter = PriorityArbiter(maxsize=max_q)
+            self._priority_arbiter = arbiter
+        proxy = QueueProxyFacade(arbiter, maxsize=max_q)
+        self.__dict__["_queue_proxy"] = proxy
+        return proxy
+
+    @_tts_queue.setter
+    def _tts_queue(self, val: Any) -> None:
+        if isinstance(val, queue.Queue):
+            self.__dict__["_custom_queue"] = val
+            self.__dict__.pop("_queue_proxy", None)
+        else:
+            self.__dict__["_queue_proxy"] = val
+            self.__dict__.pop("_custom_queue", None)
+
     def __init__(
         self,
         *,
@@ -163,15 +215,26 @@ class NarratorService:
         tts_executor: TTSExecutor | None = None,
         profile: VoiceProfile | None = None,
         socket_path: Path | str | None = None,
+        synth: ResilientSynthesizer | Any = None,
+        engine: TTSEngine | Any = None,
+        config: dict | None = None,
     ) -> None:
-        self._config = load_config()
+        self._config = config if config is not None else load_config()
         self._classifier = PhaseClassifier(silence_seconds=0.5, max_events_per_phase=1)
         # Bounded so a burst of phases can't grow the queue without limit
         # when the TTS worker (which blocks on playback) lags. See
         # _enqueue_phase for the drop-oldest backpressure policy.
         self._max_queue = int(self._config.get("max_queue_depth", 32))
-        self._tts_queue: queue.Queue = queue.Queue(maxsize=self._max_queue)
+        self._priority_arbiter = PriorityArbiter(maxsize=self._max_queue)
+        self.__dict__["_queue_proxy"] = QueueProxyFacade(self._priority_arbiter, maxsize=self._max_queue)
         self._dropped_phases = 0
+        self._state_lock = threading.Lock()
+        self._engine_state = "IDLE"
+        self._active_priority: Optional[int] = None
+        self._active_item: Optional[QueueItem] = None
+        self._interrupted: bool = False
+        self._preempted: bool = False
+        self._start_time = time.time()
         self._summarizer: Summarizer | None = None
         self._summarizer_lock = threading.Lock()
         self._last_event_ts = time.time()
@@ -183,7 +246,12 @@ class NarratorService:
         self._phases_this_turn = 0
 
         self._sink: NativeAudioSink = sink if sink is not None else NativeAudioSink()
-        self._tts_executor = tts_executor or TTSExecutor()
+        if tts_executor is not None:
+            self._tts_executor = tts_executor
+        elif synth is not None or engine is not None:
+            self._tts_executor = TTSExecutor(engine=engine, synth=synth)
+        else:
+            self._tts_executor = TTSExecutor()
         self._profile: VoiceProfile | None = profile
 
         if socket_path is not None:
@@ -274,6 +342,7 @@ class NarratorService:
             self._socket_server = _DaemonSocketServer(
                 self._socket_path,
                 on_text=self.enqueue_text,
+                dispatcher=self,
             )
             self._socket_thread = threading.Thread(
                 target=self._socket_server.serve_forever,
@@ -334,6 +403,236 @@ class NarratorService:
         self._enqueue_phase(text)
         self._update_depth(self._tts_queue.qsize())
         _log(f"enqueued socket text: {text[:40]!r} depth={self._tts_queue.qsize()}")
+
+    def dispatch_legacy_text(self, text: str) -> None:
+        """Dispatches legacy raw UTF-8 socket text (Priority 2)."""
+        self.enqueue_text(text)
+
+    def dispatch_json(self, payload: dict[str, Any]) -> dict[str, Any]:
+        """Dispatches structured JSON socket requests (RFC §4.1)."""
+        action = payload.get("action")
+        if action == "speak":
+            text = str(payload.get("text", "")).strip()
+            if not text:
+                return {"status": "ok", "message": "empty text"}
+
+            priority = int(payload.get("priority", Priority.EXPLICIT_MCP))
+            source_hash = payload.get("source_hash")
+            if source_hash:
+                source_hash = str(source_hash).strip().lower()
+            session_id = payload.get("session_id")
+            voice_id = str(payload.get("voice_id", "af_nova"))
+            speed = float(payload.get("speed", 1.18))
+
+            cached_wav: Optional[Path] = None
+            if source_hash and len(source_hash) == 64 and all(c in "0123456789abcdef" for c in source_hash):
+                try:
+                    hit = self._cache.lookup(source_hash)
+                    if hit is not None:
+                        cached_wav = hit[0]
+                except Exception:
+                    cached_wav = None
+
+            if cached_wav is not None:
+                q_item = QueueItem(
+                    priority=priority,
+                    payload=str(cached_wav),
+                    source_hash=source_hash,
+                    session_id=session_id,
+                    voice_id=voice_id,
+                    speed=speed,
+                )
+                cache_hit = True
+            else:
+                q_item = QueueItem(
+                    priority=priority,
+                    payload=text,
+                    source_hash=source_hash,
+                    session_id=session_id,
+                    voice_id=voice_id,
+                    speed=speed,
+                )
+                cache_hit = False
+
+            if priority == Priority.USER_INTERRUPT:
+                self._handle_p1_interrupt()
+                return {"status": "ok", "action": "interrupt"}
+            elif priority == Priority.EXPLICIT_MCP:
+                self._handle_p2_preemption(q_item)
+            else:
+                if hasattr(self, "_priority_arbiter"):
+                    self._tts_queue.put(q_item)
+                else:
+                    self._tts_queue.put(q_item.payload)
+
+            self._update_depth(self._tts_queue.qsize())
+            self._last_event_ts = time.time()
+            return {
+                "status": "queued",
+                "action": "speak",
+                "cache_hit": cache_hit,
+                "queue_depth": self._tts_queue.qsize(),
+            }
+
+        elif action == "play_cache":
+            source_hash = payload.get("source_hash")
+            if (
+                not isinstance(source_hash, str)
+                or len(source_hash) != 64
+                or not all(c in "0123456789abcdef" for c in source_hash)
+            ):
+                return {
+                    "status": "error",
+                    "error_code": "INVALID_PAYLOAD",
+                    "message": "Invalid or missing source_hash (expected 64-character lowercase hex string)",
+                }
+
+            try:
+                hit = self._cache.lookup(source_hash)
+            except Exception:
+                hit = None
+
+            if hit is None:
+                return {
+                    "status": "error",
+                    "error_code": "CACHE_MISS",
+                    "message": f"Cache miss for {source_hash}",
+                }
+
+            wav_path, _entry = hit
+            priority = int(payload.get("priority", Priority.EXPLICIT_MCP))
+            session_id = payload.get("session_id")
+            q_item = QueueItem(
+                priority=priority,
+                payload=str(wav_path),
+                source_hash=source_hash,
+                session_id=session_id,
+            )
+
+            if priority == Priority.EXPLICIT_MCP:
+                self._handle_p2_preemption(q_item)
+            else:
+                if hasattr(self, "_priority_arbiter"):
+                    self._tts_queue.put(q_item)
+                else:
+                    self._tts_queue.put(str(wav_path))
+
+            self._update_depth(self._tts_queue.qsize())
+            self._last_event_ts = time.time()
+            return {
+                "status": "queued",
+                "action": "play_cache",
+                "cache_hit": True,
+                "queue_depth": self._tts_queue.qsize(),
+            }
+
+        elif action == "interrupt":
+            self._handle_p1_interrupt()
+            return {"status": "ok", "action": "interrupt"}
+
+        elif action == "status":
+            depths = self._priority_arbiter.depths() if hasattr(self, "_priority_arbiter") else {}
+            return {
+                "status": "ok",
+                "daemon_state": self._engine_state,
+                "active_priority": self._active_priority,
+                "queue_depths": depths,
+                "total_dropped_phases": self._dropped_phases,
+                "uptime_seconds": round(time.time() - getattr(self, "_start_time", time.time()), 2),
+            }
+
+        return {
+            "status": "error",
+            "error_code": "INVALID_ACTION",
+            "message": f"Unknown action: {action}",
+        }
+
+    def _handle_p1_interrupt(self) -> None:
+        """Handles Priority 1 User Barge-in: interrupts sink, transitions to PURGING, wipes P3/P4."""
+        state_lock = getattr(self, "_state_lock", None)
+        if state_lock:
+            with state_lock:
+                self._interrupted = True
+                self._engine_state = "INTERRUPTED"
+                self._active_item = None
+                self._active_priority = None
+        else:
+            self._interrupted = True
+            self._engine_state = "INTERRUPTED"
+            self._active_item = None
+            self._active_priority = None
+
+        if hasattr(self, "_sink") and self._sink is not None:
+            try:
+                self._sink.interrupt()
+            except Exception as exc:
+                _log(f"sink interrupt error: {exc}")
+
+        if state_lock:
+            with state_lock:
+                self._engine_state = "PURGING"
+        else:
+            self._engine_state = "PURGING"
+
+        purged = 0
+        if hasattr(self, "_priority_arbiter"):
+            purged = self._priority_arbiter.purge_lower_queues()
+            self._dropped_phases += purged
+
+        self._update_depth(self._tts_queue.qsize())
+
+        if state_lock:
+            with state_lock:
+                self._engine_state = "IDLE"
+        else:
+            self._engine_state = "IDLE"
+
+        _log(f"P1 User Barge-in completed: purged {purged} lower items")
+
+    def _handle_p2_preemption(self, q_item: QueueItem) -> None:
+        """Handles Priority 2 Explicit MCP Preemption: interrupts active P3/P4 without purging."""
+        state_lock = getattr(self, "_state_lock", None)
+        preempted = False
+        active_item = None
+
+        if state_lock:
+            with state_lock:
+                if self._engine_state in ("PLAYING", "SYNTHESIZING") and self._active_priority in (
+                    Priority.AUTOPLAY,
+                    Priority.TOOL_NARRATION,
+                ):
+                    preempted = True
+                    active_item = self._active_item
+                    self._active_item = None
+                    self._active_priority = None
+                    self._preempted = True
+                    self._engine_state = "PREEMPTING"
+        else:
+            if getattr(self, "_engine_state", "IDLE") in ("PLAYING", "SYNTHESIZING") and getattr(
+                self, "_active_priority", None
+            ) in (Priority.AUTOPLAY, Priority.TOOL_NARRATION):
+                preempted = True
+                active_item = getattr(self, "_active_item", None)
+                self._active_item = None
+                self._active_priority = None
+                self._preempted = True
+                self._engine_state = "PREEMPTING"
+
+        if preempted:
+            if hasattr(self, "_sink") and self._sink is not None:
+                try:
+                    self._sink.interrupt()
+                except Exception as exc:
+                    _log(f"sink interrupt during preemption error: {exc}")
+
+            if active_item is not None and hasattr(self, "_priority_arbiter"):
+                self._priority_arbiter.requeue_at_head(active_item)
+
+        # Route through self._tts_queue.put so QueueProxyFacade increments _unfinished_tasks
+        if hasattr(self, "_priority_arbiter"):
+            self._tts_queue.put(q_item)
+        else:
+            self._tts_queue.put(q_item.payload)
 
     def _tail_events(self) -> None:
         # Resume from last watermark if present (lets us survive restarts
@@ -457,9 +756,13 @@ class NarratorService:
                     _log("Skipping UserPromptSubmit narration for background cron tick.")
                     continue
 
-                # Immediately interrupt any currently playing audio so the user isn't talked over!
-                if hasattr(self, "_sink") and self._sink is not None:
-                    self._sink.interrupt()
+                # Immediately interrupt any currently playing audio and purge lower queues!
+                self._handle_p1_interrupt()
+                try:
+                    global_pid = int(Path("/tmp/auto-speech-mpv.pid").read_text().strip())
+                    os.kill(global_pid, signal.SIGTERM)
+                except (OSError, ValueError, ProcessLookupError):
+                    pass
 
                 self._classifier.flush(session_id)
                 self._phases_this_turn = 0
@@ -486,6 +789,16 @@ class NarratorService:
                     _log("Skipping Stop narration for background cron tick.")
                     self._phases_this_turn = 0
                     continue
+
+                # Yield to autoplay_worker.py if this session has opted into autoplay!
+                # Autoplay handles Claude CLI rewrite and local response caching.
+                # If autoplay is NOT enabled for this session, Narrator provides the conversational sign-off.
+                if session_id:
+                    ap_marker = Path.home() / ".claude" / "auto-speech-autoplay-enabled" / session_id
+                    if ap_marker.exists():
+                        _log(f"Session {session_id} has autoplay enabled; yielding Stop summary to autoplay_worker.")
+                        self._phases_this_turn = 0
+                        continue
 
                 history = ev.get("payload", {}).get("conversation_history", "")
                 self._enqueue_phase(
@@ -550,16 +863,23 @@ class NarratorService:
         except queue.Full:
             pass
         try:
-            dropped = self._tts_queue.get_nowait()
-            self._tts_queue.task_done()
-            self._dropped_phases += 1
-            cat = getattr(getattr(dropped, "category", None), "value", None)
-            if cat is None:
-                cat = getattr(dropped, "tag", type(dropped).__name__)
-            _log(
-                f"queue full (max={self._max_queue}); dropped oldest "
-                f"phase={cat} total_dropped={self._dropped_phases}"
-            )
+            if hasattr(self._tts_queue, "shed_oldest_low_priority"):
+                dropped = self._tts_queue.shed_oldest_low_priority()
+                # Note: QueueProxyFacade._on_purged automatically decrements
+                # _unfinished_tasks; task_done() is not called here to avoid double-decrement.
+            else:
+                dropped = self._tts_queue.get_nowait()
+                self._tts_queue.task_done()
+
+            if dropped is not None:
+                self._dropped_phases += 1
+                cat = getattr(getattr(dropped, "category", None), "value", None)
+                if cat is None:
+                    cat = getattr(dropped, "tag", type(dropped).__name__)
+                _log(
+                    f"queue full (max={self._max_queue}); dropped oldest "
+                    f"phase={cat} total_dropped={self._dropped_phases}"
+                )
         except queue.Empty:
             pass
         try:
@@ -619,13 +939,62 @@ class NarratorService:
         _log("tts_worker thread started")
         self._ensure_tts_initialized()
         while True:
+            state_lock = getattr(self, "_state_lock", None)
+            if state_lock:
+                with state_lock:
+                    self._engine_state = "IDLE"
+                    self._active_priority = None
+                    self._active_item = None
+
             phase = self._tts_queue.get()
             if phase is None:
                 _log("tts_worker received sentinel; stopping")
                 return
+
+            arbiter = getattr(self, "_priority_arbiter", None)
+            item_p = getattr(arbiter, "active_priority", Priority.TOOL_NARRATION) if arbiter else Priority.TOOL_NARRATION
+            item_obj = getattr(arbiter, "active_item", None) if arbiter else None
+
+            if isinstance(phase, QueueItem):
+                item_p = phase.priority
+                item_obj = phase
+                phase = phase.payload
+
+            if state_lock:
+                with state_lock:
+                    self._active_priority = item_p
+                    self._active_item = item_obj
+                    self._engine_state = "SYNTHESIZING"
+                    self._interrupted = False
+                    self._preempted = False
+            else:
+                self._active_priority = item_p
+                self._active_item = item_obj
+                self._engine_state = "SYNTHESIZING"
+                self._interrupted = False
+                self._preempted = False
+
             try:
-                if isinstance(phase, str):
-                    self._speak(phase)
+                # Check for cached WAV playback (from play_cache action)
+                if (isinstance(phase, Path) or (isinstance(phase, str) and phase.endswith(".wav"))) and Path(phase).is_file():
+                    if getattr(self, "_interrupted", False) or getattr(self, "_preempted", False):
+                        _log("play_cache skipped: interrupted or preempted prior to play")
+                    else:
+                        if state_lock:
+                            with state_lock:
+                                if not (getattr(self, "_interrupted", False) or getattr(self, "_preempted", False)):
+                                    self._engine_state = "PLAYING"
+                        else:
+                            self._engine_state = "PLAYING"
+                        try:
+                            self._sink.play(phase)
+                        except Exception as exc:
+                            _log(f"play_cache error: {exc!r}")
+                elif isinstance(phase, str):
+                    s_hash = getattr(item_obj, "source_hash", None)
+                    v_id = getattr(item_obj, "voice_id", None)
+                    spd = getattr(item_obj, "speed", None)
+                    self._speak(phase, source_hash=s_hash, voice_id=v_id, speed=spd)
                 elif isinstance(phase, dict):
                     _log(f"Dict received in worker: {phase}")
                     if phase.get("type") == "Stop":
@@ -648,6 +1017,7 @@ class NarratorService:
                                     "Stop",
                                     phases_this_turn=phases_count,
                                     session_id=session_id,
+                                    prompt_chars=0,
                                 )
                             _log(f"OUTPUT: {words}")
                             if words:
@@ -662,36 +1032,175 @@ class NarratorService:
             except Exception as exc:
                 _log(f"tts_worker error: {exc!r}")
             finally:
-                self._tts_queue.task_done()
+                is_preempted = getattr(self, "_preempted", False)
+                # When preempted, active item was re-queued; do not decrement _unfinished_tasks
+                if not is_preempted:
+                    self._tts_queue.task_done()
                 self._update_depth(self._tts_queue.qsize())
+                if state_lock:
+                    with state_lock:
+                        self._engine_state = "IDLE"
+                        self._active_priority = None
+                        self._active_item = None
+                        self._preempted = False
+                        self._interrupted = False
+                else:
+                    self._engine_state = "IDLE"
+                    self._active_priority = None
+                    self._active_item = None
+                    self._preempted = False
+                    self._interrupted = False
 
-    def _speak(self, line: str) -> None:
+    def _speak(
+        self,
+        line: str,
+        source_hash: Optional[str] = None,
+        *,
+        voice_id: Optional[str] = None,
+        speed: Optional[float] = None,
+    ) -> None:
         line = line.strip()
         if not line:
             return
 
-        _log(f"speak: {line}")
+        _log(f"speak: {line} (source_hash={source_hash})")
         self._ensure_tts_initialized()
         if self._sink is None or self._profile is None:
             _log(f"tts engine not available; dropped narration: {line[:50]!r}")
             return
 
+        profile = self._profile
+        if profile is not None and (
+            (voice_id and voice_id != profile.voice_id)
+            or (speed is not None and speed != profile.speed)
+        ):
+            profile = VoiceProfile(
+                voice_id=voice_id or profile.voice_id,
+                speed=speed if speed is not None else profile.speed,
+                chars_per_second=profile.chars_per_second,
+                calibrated_at=profile.calibrated_at,
+                calibration_source_chars=profile.calibration_source_chars,
+            )
+
+        # Check cache if valid source_hash provided
+        if source_hash and len(source_hash) == 64 and all(c in "0123456789abcdef" for c in source_hash):
+            try:
+                hit = self._cache.lookup(source_hash)
+                if hit is not None:
+                    cached_wav = hit[0]
+                    _log(f"cache hit for {source_hash[:16]}; playing {cached_wav}")
+                    state_lock = getattr(self, "_state_lock", None)
+                    if state_lock:
+                        with state_lock:
+                            if getattr(self, "_interrupted", False) or getattr(self, "_preempted", False):
+                                _log("playback aborted under state_lock: interrupted or preempted")
+                                return
+                            self._engine_state = "PLAYING"
+                    else:
+                        self._engine_state = "PLAYING"
+                    try:
+                        self._sink.play(cached_wav)
+                    finally:
+                        if state_lock:
+                            with state_lock:
+                                if self._engine_state == "PLAYING":
+                                    self._engine_state = "IDLE"
+                        else:
+                            if getattr(self, "_engine_state", "IDLE") == "PLAYING":
+                                self._engine_state = "IDLE"
+                    return
+            except Exception as exc:
+                _log(f"cache lookup error for {source_hash}: {exc}")
+
         with tempfile.NamedTemporaryFile(prefix="narrator_", suffix=".wav", delete=False) as f:
             temp_wav = Path(f.name)
 
         try:
-            has_audio = self._tts_executor.submit(self._tts_executor.synth.synthesize_one, line, self._profile, temp_wav)
+            # Pre-synthesis check
+            if getattr(self, "_interrupted", False) or getattr(self, "_preempted", False):
+                _log("synthesis skipped: interrupted or preempted prior to start")
+                return
+
+            if hasattr(self, "_tts_executor") and self._tts_executor is not None:
+                synth = getattr(self._tts_executor, "synth", getattr(self, "_synth", None))
+                if synth is not None and hasattr(self._tts_executor, "submit"):
+                    has_audio = self._tts_executor.submit(
+                        synth.synthesize_one, line, profile, temp_wav
+                    )
+                elif synth is not None:
+                    has_audio = synth.synthesize_one(line, profile, temp_wav)
+                else:
+                    has_audio = False
+            elif hasattr(self, "_synth") and self._synth is not None:
+                has_audio = self._synth.synthesize_one(line, profile, temp_wav)
+            else:
+                _log(f"no synthesizer available for: {line[:50]!r}")
+                return
+
+            # Post-synthesis check
+            if getattr(self, "_interrupted", False) or getattr(self, "_preempted", False):
+                _log("playback skipped: interrupted or preempted during synthesis")
+                return
+
             if has_audio and temp_wav.exists() and temp_wav.stat().st_size > 0:
-                _log(f"playing audio ({temp_wav.stat().st_size} bytes)...")
-                self._sink.play(temp_wav)
+                play_target = temp_wav
+                if source_hash and len(source_hash) == 64 and all(c in "0123456789abcdef" for c in source_hash):
+                    try:
+                        duration = _wav_duration_seconds(temp_wav)
+                        cps = (
+                            (len(line) / duration)
+                            if duration > 0
+                            else (profile.chars_per_second if profile else FALLBACK_CHARS_PER_SEC)
+                        )
+                        entry = CacheEntry(
+                            source_hash=source_hash,
+                            voice_id=profile.voice_id if profile else DEFAULT_VOICE_ID,
+                            speed=profile.speed if profile else DEFAULT_SPEED,
+                            char_count=len(line),
+                            duration_seconds=duration,
+                            created_at=datetime.now(timezone.utc)
+                            .isoformat(timespec="seconds")
+                            .replace("+00:00", "Z"),
+                            chars_per_second_at_creation=cps,
+                        )
+                        promoted_wav = self._cache.promote(source_hash, temp_wav, entry)
+                        play_target = promoted_wav
+                        _log(f"promoted to cache: {promoted_wav}")
+                    except CachePromotionError as exc:
+                        _log(f"cache promotion error: {exc}; falling back to staging wav")
+                        play_target = temp_wav
+                    except Exception as exc:
+                        _log(f"unexpected cache promotion error: {exc}; falling back to staging wav")
+                        play_target = temp_wav
+
+                state_lock = getattr(self, "_state_lock", None)
+                if state_lock:
+                    with state_lock:
+                        if getattr(self, "_interrupted", False) or getattr(self, "_preempted", False):
+                            _log("playback aborted under state_lock: interrupted or preempted")
+                            return
+                        self._engine_state = "PLAYING"
+                else:
+                    self._engine_state = "PLAYING"
+
+                _log(f"playing audio ({play_target.stat().st_size} bytes)...")
+                self._sink.play(play_target)
             else:
                 _log(f"no speakable audio generated for: {line[:50]!r}")
         except Exception as exc:
             _log(f"speak error: {exc!r}")
         finally:
+            state_lock = getattr(self, "_state_lock", None)
+            if state_lock:
+                with state_lock:
+                    if self._engine_state == "PLAYING":
+                        self._engine_state = "IDLE"
+            else:
+                if getattr(self, "_engine_state", "IDLE") == "PLAYING":
+                    self._engine_state = "IDLE"
             temp_wav.unlink(missing_ok=True)
             temp_wav.with_suffix(temp_wav.suffix + ".partial").unlink(missing_ok=True)
-            for frag in temp_wav.parent.glob(f"{temp_wav.stem}-*.wav"):
+            for frag in temp_wav.parent.glob(f"{temp_wav.stem}*"):
                 frag.unlink(missing_ok=True)
 
 

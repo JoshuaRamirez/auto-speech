@@ -39,10 +39,9 @@ PLUGIN_PYTHON = PROJECT_ROOT / "plugin" / "scripts" / "python"
 sys.path.insert(0, str(PROJECT_ROOT))
 sys.path.insert(0, str(PLUGIN_PYTHON))
 
-import tts_executor
-import narrator_service
-from speak import send_speech_request
-from voice_profile import VoiceProfile
+import narrator_service  # noqa: E402
+from speak import send_speech_request  # noqa: E402
+from voice_profile import VoiceProfile  # noqa: E402
 
 
 class FakeAudioSink:
@@ -111,7 +110,6 @@ import sys, time, threading
 from pathlib import Path
 from typing import Any
 sys.path.insert(0, "{PLUGIN_PYTHON}")
-import tts_executor
 import narrator_service
 from unittest.mock import MagicMock
 
@@ -119,7 +117,7 @@ narrator_service.PID_FILE = Path("{self.pid_path}")
 svc = narrator_service.NarratorService(
     socket_path=Path("{self.sock_path}"),
     sink=MagicMock(),
-    tts_executor=MagicMock(),
+    synth=MagicMock(),
 )
 svc._start_socket_server()
 print("READY", flush=True)
@@ -203,7 +201,6 @@ import sys, time
 from pathlib import Path
 from typing import Any
 sys.path.insert(0, "{PLUGIN_PYTHON}")
-import tts_executor
 import narrator_service
 from unittest.mock import MagicMock
 
@@ -211,7 +208,7 @@ narrator_service.PID_FILE = Path("{self.pid_path}")
 svc = narrator_service.NarratorService(
     socket_path=Path("{self.sock_path}"),
     sink=MagicMock(),
-    tts_executor=MagicMock(),
+    synth=MagicMock(),
 )
 svc._start_socket_server()
 print("READY", flush=True)
@@ -562,12 +559,6 @@ class TestSimultaneousSocketAndJsonlEvents(unittest.TestCase):
         svc._phases_this_turn = 0
         svc._sink = FastSink()
         svc._synth = FastSynth()
-        class MockExecutor3:
-            def submit(self, fn, *args, **kwargs): return fn(*args, **kwargs)
-            def ensure_loaded(self): pass
-            @property
-            def synth(self): return svc._synth
-        svc._tts_executor = MockExecutor3()
         svc._profile = MagicMock()
         svc._engine = MagicMock()
         svc._socket_path = self.sock_path

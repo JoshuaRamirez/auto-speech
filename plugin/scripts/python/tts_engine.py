@@ -1,11 +1,9 @@
 """TTSEngine: Kokoro-via-mlx-audio adapter.
 
-Final interface locked in here during Phase 1 so Phase 5 only has to add
-the SegmentProducer around it. Lazy-loads the model on first synthesis
-and reuses it for the life of the process.
+Lazy-loads the model on first synthesis and reuses it for the life of the process.
 
 Atomicity: writes to <out_path>.partial and renames on success, so
-PlaybackQueue consumers never see a half-written WAV.
+consumers never see a half-written WAV.
 """
 
 from __future__ import annotations
@@ -13,8 +11,6 @@ from __future__ import annotations
 import os
 import wave
 from pathlib import Path
-
-import numpy as np
 
 from voice_profile import VoiceProfile
 
@@ -77,6 +73,8 @@ class TTSEngine:
         if not text or not text.strip():
             raise TTSGenerationError("empty text passed to synthesize")
 
+        import numpy as np
+
         self._ensure_loaded()
         out_path.parent.mkdir(parents=True, exist_ok=True)
         tmp = out_path.with_suffix(out_path.suffix + ".partial")
@@ -85,17 +83,20 @@ class TTSEngine:
         # b=British English, e/f/h/i/j/p/z = other languages). Passing the
         # wrong code loads the voice into a mismatched G2P pipeline, which
         # emits garbage or trips a broadcast-shape crash. Default to "a".
-        lang_code = _lang_code_for_voice(voice_profile.voice_id)
+        kokoro_voice = voice_profile.voice_id
+        if not kokoro_voice or kokoro_voice in ("system", "default", "auto") or not kokoro_voice.startswith(("af_", "am_", "bf_", "bm_")):
+            kokoro_voice = "af_nova"
+        lang_code = _lang_code_for_voice(kokoro_voice)
 
         print(
-            f"[tts_engine] synthesizing chars={len(text)} voice={voice_profile.voice_id} "
+            f"[tts_engine] synthesizing chars={len(text)} voice={kokoro_voice} "
             f"speed={voice_profile.speed} lang={lang_code}"
         )
         try:
             chunks = []
             for result in self._model.generate(  # type: ignore[attr-defined]
                 text=text,
-                voice=voice_profile.voice_id,
+                voice=kokoro_voice,
                 speed=voice_profile.speed,
                 lang_code=lang_code,
             ):
@@ -120,3 +121,22 @@ class TTSEngine:
 
         os.replace(tmp, out_path)
         print(f"[tts_engine] wrote {out_path}")
+
+
+# Re-export AppleSayEngine for seamless native macOS speech
+try:
+    from apple_say_engine import (
+        AppleSayEngine,
+        get_available_say_voices,
+        get_default_say_voice,
+    )
+
+    __all__ = [
+        "TTSEngine",
+        "AppleSayEngine",
+        "get_available_say_voices",
+        "get_default_say_voice",
+        "KOKORO_SAMPLE_RATE",
+    ]
+except ImportError:
+    __all__ = ["TTSEngine", "KOKORO_SAMPLE_RATE"]

@@ -16,14 +16,13 @@ stdout carries protocol messages only; diagnostics go to stderr.
 from __future__ import annotations
 
 import json
-import os
 import subprocess
 import sys
-import tempfile
 from pathlib import Path
 
 from auto_speech_log import rotate_if_oversize
 from autoplay_gate import AutoplayGate
+from daemon_client import DaemonClient, Priority
 
 SERVER_NAME = "auto-speech"
 SERVER_VERSION = "0.2.0"
@@ -31,7 +30,7 @@ SUPPORTED_PROTOCOLS = ("2025-06-18", "2025-03-26", "2024-11-05")
 MAX_CHARS = 20000  # matches web_server's /api/synthesize cap
 
 _PYTHON_DIR = Path(__file__).resolve().parent
-SAY_WORKER = _PYTHON_DIR / "say_worker.py"
+SPEAK = _PYTHON_DIR / "speak.py"
 SAY_LOG = Path("/tmp/auto-speech-say.log")
 
 PARSE_ERROR = -32700
@@ -45,7 +44,7 @@ SPEAK_TOOL = {
     "description": (
         "Speak text aloud: say, read out loud, voice, narrate, or vocalize "
         "the given words as audio on this Mac's speakers. Local text-to-"
-        "speech (TTS) with the Kokoro voice — no cloud service, no API key. "
+        "speech (TTS) with Apple neural voice — no cloud service, no API key. "
         "The text is spoken verbatim, so write it the way it should sound "
         "(no markdown, code, or tables). Returns immediately; speech is "
         "queued behind anything already playing."
@@ -65,27 +64,29 @@ SPEAK_TOOL = {
 
 
 def spawn_say_worker(text: str) -> None:
-    """Write `text` to a private temp file and start a detached SayWorker."""
-    fd, path = tempfile.mkstemp(prefix="auto-speech-say-", suffix=".txt")  # mode 0600
-    with os.fdopen(fd, "w", encoding="utf-8") as fh:
-        fh.write(text)
+    """Offline speech fallback: spawns speak.py directly with text on stdin."""
     rotate_if_oversize(SAY_LOG)
     try:
         log = open(SAY_LOG, "ab")
     except OSError:
         log = subprocess.DEVNULL
     try:
-        subprocess.Popen(
-            [sys.executable, str(SAY_WORKER), path],
-            stdin=subprocess.DEVNULL,
+        proc = subprocess.Popen(
+            [sys.executable, str(SPEAK)],
+            stdin=subprocess.PIPE,
             stdout=log,
             stderr=subprocess.STDOUT,
             start_new_session=True,
             close_fds=True,
         )
-    except OSError:
-        os.unlink(path)
-        raise
+        if proc.stdin is not None:
+            try:
+                proc.stdin.write(text.encode("utf-8", errors="replace"))
+                proc.stdin.close()
+            except OSError:
+                pass
+    except Exception as exc:
+        print(f"[{SERVER_NAME}] spawn_say_worker failed: {exc}", file=sys.stderr)
     finally:
         if log is not subprocess.DEVNULL:
             log.close()
@@ -98,8 +99,15 @@ def _tool_result(message: str, *, is_error: bool = False) -> dict:
 class McpServer:
     """Handles one JSON-RPC message at a time. Collaborators injectable."""
 
-    def __init__(self, *, spawner=spawn_say_worker, gate: AutoplayGate | None = None) -> None:
+    def __init__(
+        self,
+        *,
+        spawner=None,
+        gate: AutoplayGate | None = None,
+        client: DaemonClient | None = None,
+    ) -> None:
         self._spawn = spawner
+        self._client = client
         self._gate = gate or AutoplayGate()
 
     # ---- dispatch --------------------------------------------------------
@@ -184,8 +192,17 @@ class McpServer:
                 ),
             )
         try:
-            self._spawn(text)
+            if self._spawn is not None:
+                self._spawn(text)
+            else:
+                client = self._client or DaemonClient()
+                try:
+                    client.speak(text, priority=Priority.EXPLICIT_MCP)
+                except ConnectionError:
+                    spawn_say_worker(text)
         except OSError as exc:
+            return _ok(req_id, _tool_result(f"could not start speech: {exc}", is_error=True))
+        except Exception as exc:
             return _ok(req_id, _tool_result(f"could not start speech: {exc}", is_error=True))
         return _ok(req_id, _tool_result(f"Queued {len(text)} characters to speak."))
 

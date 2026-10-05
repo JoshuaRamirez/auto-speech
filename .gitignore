@@ -27,3 +27,8 @@ tests/outputs/**/*.wav
 # Per-developer Claude Code project state (settings.local.json, narrator
 # enable marker, etc.) — never project-wide.
 .claude/
+
+# Reports and local plugin remember state
+reports/
+plugins/**/.remember/
+.remember/

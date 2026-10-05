@@ -47,27 +47,48 @@ class MessageSelector:
         total_turns = 0
         for turn_index, record in enumerate(TranscriptReader.iter_lines(path)):
             total_turns += 1
-            if record.get("type") != "assistant":
+            full_text = ""
+            if record.get("type") == "assistant":
+                msg = record.get("message") or {}
+                if msg.get("role") != "assistant":
+                    continue
+                content = msg.get("content") or []
+                texts = [
+                    block.get("text", "")
+                    for block in content
+                    if isinstance(block, dict)
+                    and block.get("type") == "text"
+                    and (block.get("text") or "").strip()
+                ]
+                if not texts:
+                    continue
+                full_text = "\n".join(texts).strip()
+            elif record.get("type") == "PLANNER_RESPONSE":
+                # Skip intermediate tool call steps; only select final user response
+                if record.get("tool_calls"):
+                    continue
+                content = record.get("content") or ""
+                if isinstance(content, str):
+                    full_text = content.strip()
+                elif isinstance(content, list):
+                    texts = [
+                        b.get("text", "") if isinstance(b, dict) else str(b)
+                        for b in content
+                        if (b.get("text") if isinstance(b, dict) else str(b)).strip()
+                    ]
+                    full_text = "\n".join(texts).strip()
+                if not full_text:
+                    continue
+            else:
                 continue
-            msg = record.get("message") or {}
-            if msg.get("role") != "assistant":
+
+            if not full_text:
                 continue
-            content = msg.get("content") or []
-            texts = [
-                block.get("text", "")
-                for block in content
-                if isinstance(block, dict)
-                and block.get("type") == "text"
-                and (block.get("text") or "").strip()
-            ]
-            if not texts:
-                continue
-            full_text = "\n".join(texts).strip()
             if excl is not None and excl.search(full_text):
                 # Treat as if not a qualifying turn so ordinal counting
                 # skips past it.
                 continue
-            ts = record.get("timestamp") or ""
+            ts = record.get("created_at") or record.get("timestamp") or ""
             buf.append((turn_index, ts, full_text))
 
         if len(buf) < n:

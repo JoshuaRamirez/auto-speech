@@ -1,28 +1,29 @@
 # Progress — worker_m2_r2
 
-Last visited: 2026-10-03T19:20:00Z
+Last visited: 2026-10-04T11:28:00Z
 
 ## Status
-All remediations implemented and verified. All unit tests, challenger stress suites, and E2E test suites passed with 0 failures and 0 ruff violations. Running final repository-wide test discovery.
+Milestone M2 remediation round 2 complete. BUG-M2-01 and BUG-M2-02 fixed and verified across all test gates. 43/43 hermetic suites, 74/74 E2E tests pass, 0 ruff errors.
 
 ## Steps
-- [x] Read DISPATCH.md, ORIGINAL_REQUEST.md, PROJECT.md, and Challenger reports
-- [x] Create BRIEFING.md and progress.md
-- [x] Implement remediations in `plugin/scripts/python/narrator_service.py`
-  - [x] Set `request_queue_size = 128` on `_DaemonSocketServer`
-  - [x] Set read timeout `self.request.settimeout(5.0)` in `_DaemonRequestHandler.handle()`
-  - [x] Track aborted status on socket error and discard partial chunks without enqueuing
-  - [x] Route direct `put()` calls in `_process_chunk()` through `_enqueue_phase()`
-- [x] Implement remediations in `plugin/scripts/python/speak.py`
-  - [x] Add transient retry loop on `ConnectionRefusedError` in `send_speech_request()`
-- [x] Update tests:
-  - [x] `tests/test_speak_client.py`: added retry unit test
-  - [x] `tests/test_socket_ipc_stress.py`: updated default backlog test to verify 50/50 pass with 0 errors, updated abrupt disconnect to verify partial payload discard on mid-stream reset, added client retry test
-- [x] Run all verification test suites:
-  - [x] `tests/test_speak_client.py` (19/19 passed)
-  - [x] `tests/test_narrator_service.py` (26/26 passed)
-  - [x] `tests/test_socket_ipc_stress.py` (11/11 passed with 0 failures)
-  - [x] `tests/test_socket_server_stress.py` (7/7 passed with 0 failures)
-  - [x] E2E suites Tiers 1-4 (19/19 passed with 0 failures)
-  - [x] `ruff check` on all modified files (passed, 0 errors)
-- [ ] Write handoff.md and notify orchestrator
+- [x] Read DISPATCH.md, context.md, ORIGINAL_REQUEST.md, and RFC
+- [x] Implement BUG-M2-01 in `plugin/scripts/python/narrator_service.py`
+  - [x] Added `isinstance(source_hash, str)` and 64-hex format validation
+  - [x] Return `{"status": "error", "error_code": "INVALID_PAYLOAD", ...}` on invalid/missing hash
+  - [x] Verified `CACHE_MISS` is only returned for valid non-existent hashes
+- [x] Implement BUG-M2-02 in `plugin/scripts/python/replay.py`
+  - [x] Enhanced `_is_mocked` to check `getattr(cls, "play", None)` for `mock_calls`
+  - [x] Reached behavioral parity with `http_routing._is_sink_mocked`
+- [x] Update test in `tests/test_challenger_m2_stress.py`
+  - [x] Updated `test_replay_mock_preservation_method_mock_gap_finding` to assert method mock is called (`mock_play.call_count == 1`, `daemon_sink.play.call_count == 0`)
+- [x] Run full verification suite:
+  - [x] `.venv/bin/python tests/test_challenger_m2_cache_stress.py` (17/17 passed)
+  - [x] `.venv/bin/python tests/test_challenger_m2_stress.py` (19/19 passed)
+  - [x] `.venv/bin/python tests/test_replay_control.py` (10/10 passed)
+  - [x] `.venv/bin/python tests/test_synthesize_endpoint.py` (12/12 passed)
+  - [x] `bash tests/run_all.sh --hermetic` (43/43 suites passed)
+  - [x] `bash tests/run_all.sh --web` (1/1 suite, 12/12 tests passed)
+  - [x] `.venv/bin/python tests/e2e/run_e2e.py` (74/74 passed)
+  - [x] `.venv/bin/ruff check .` (0 errors)
+- [x] Update BRIEFING.md
+- [ ] Write handoff.md and send completion message to parent

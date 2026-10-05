@@ -22,6 +22,11 @@ class CacheEntry:
 
     @classmethod
     def from_dict(cls, data: dict) -> "CacheEntry":
+        cps = data.get("chars_per_second_at_creation")
+        if cps is None:
+            char_count = int(data.get("char_count", 0))
+            dur = float(data.get("duration_seconds", 0.0))
+            cps = char_count / dur if dur > 0 else 15.0
         return cls(
             source_hash=str(data["source_hash"]),
             voice_id=str(data["voice_id"]),
@@ -29,5 +34,5 @@ class CacheEntry:
             char_count=int(data["char_count"]),
             duration_seconds=float(data["duration_seconds"]),
             created_at=str(data["created_at"]),
-            chars_per_second_at_creation=float(data["chars_per_second_at_creation"]),
+            chars_per_second_at_creation=float(cps),
         )

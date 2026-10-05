@@ -148,12 +148,20 @@ def test_cache_hit_success_path() -> None:
     spoke = {"called": False, "hash": None, "stdin": None}
 
     def script(argv, stdin):
-        prog = argv[1] if argv[0] == "bash" else argv[0]
+        prog = (
+            argv[1]
+            if (
+                argv[0] in ("bash", sys.executable, "python", "python3")
+                or Path(argv[0]).name.startswith("python")
+            )
+            else argv[0]
+        )
         if str(prog).endswith("run_extract.sh"):
             return 0, long_msg
         if str(prog).endswith("compute_hash.sh"):
             return 0, full_hash + "\n"
         if str(prog).endswith("speak.py"):
+            assert argv[0] == sys.executable
             spoke["called"] = True
             spoke["hash"] = argv[argv.index("--source-hash") + 1]
             spoke["stdin"] = stdin
@@ -187,7 +195,14 @@ def test_dedup_bails_on_cache_hit_path() -> None:
     _with_cache(tmp, full_hash[:16])
 
     def script(argv, stdin):
-        prog = argv[1] if argv[0] == "bash" else argv[0]
+        prog = (
+            argv[1]
+            if (
+                argv[0] in ("bash", sys.executable, "python", "python3")
+                or Path(argv[0]).name.startswith("python")
+            )
+            else argv[0]
+        )
         if str(prog).endswith("run_extract.sh"):
             return 0, long_msg
         if str(prog).endswith("compute_hash.sh"):
@@ -212,7 +227,14 @@ def test_claim_lost_bails_after_wait() -> None:
     _with_cache(tmp, full_hash[:16])
 
     def script(argv, stdin):
-        prog = argv[1] if argv[0] == "bash" else argv[0]
+        prog = (
+            argv[1]
+            if (
+                argv[0] in ("bash", sys.executable, "python", "python3")
+                or Path(argv[0]).name.startswith("python")
+            )
+            else argv[0]
+        )
         if str(prog).endswith("run_extract.sh"):
             return 0, long_msg
         if str(prog).endswith("compute_hash.sh"):
@@ -270,6 +292,56 @@ def test_resolve_config_logs_and_falls_back_on_config_error() -> None:
         os.environ.update(saved_env)
 
 
+def test_cache_miss_raw_mode_bypasses_llm_and_speaks_as_is() -> None:
+    long_msg = "Here is the assistant answer to be spoken as is."
+    full_hash = "d" * 64
+    tmp = Path(tempfile.mkdtemp(prefix="auto-speech-worker-test-"))
+
+    spoke = {"called": False, "hash": None, "stdin": None}
+
+    def script(argv, stdin):
+        prog = (
+            argv[1]
+            if (
+                argv[0] in ("bash", sys.executable, "python", "python3")
+                or Path(argv[0]).name.startswith("python")
+            )
+            else argv[0]
+        )
+        if str(prog).endswith("run_extract.sh"):
+            return 0, long_msg
+        if str(prog).endswith("compute_hash.sh"):
+            return 0, full_hash + "\n"
+        if str(prog).endswith("cli_rewrite.py"):
+            raise AssertionError("cli_rewrite must NOT be invoked when bypass_llm / raw mode is set")
+        if str(prog).endswith("speak.py"):
+            spoke["called"] = True
+            spoke["hash"] = argv[argv.index("--source-hash") + 1]
+            spoke["stdin"] = stdin
+            return 0, None
+        raise AssertionError(f"unexpected argv {argv}")
+
+    fifo = _StubFifo(turn=True)
+    dedup = _StubDedup(False)
+    orig_root = awmod._PROJECT_ROOT
+    awmod._PROJECT_ROOT = tmp
+    try:
+        cfg = dict(_CFG)
+        cfg["mode"] = "raw"
+        cfg["bypass_llm"] = True
+        w = _worker(runner=_Recorder(script), fifo=fifo, dedup=dedup, config=cfg)
+        assert w.run() == 0
+    finally:
+        awmod._PROJECT_ROOT = orig_root
+
+    assert w.machine.state == DONE
+    assert spoke["called"] is True
+    assert spoke["hash"] == full_hash
+    assert spoke["stdin"] == long_msg
+    assert fifo.played is True
+    assert dedup.written == full_hash
+
+
 def main() -> int:
     tests = [
         test_global_disable_bails,
@@ -279,6 +351,7 @@ def main() -> int:
         test_dedup_bails_on_cache_hit_path,
         test_claim_lost_bails_after_wait,
         test_resolve_config_logs_and_falls_back_on_config_error,
+        test_cache_miss_raw_mode_bypasses_llm_and_speaks_as_is,
     ]
     for t in tests:
         t()

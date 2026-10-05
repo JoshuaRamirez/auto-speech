@@ -131,6 +131,22 @@ def test_small_prompt_targets_one_to_three_sentences() -> None:
     assert "ONE TO THREE SENTENCES" in body, "small prompt must instruct 1-3 sentences"
 
 
+def test_raw_mode_enables_bypass() -> None:
+    body = '[autoplay]\nmode = "raw"\n'
+    with _with_override(body) as _:
+        cfg = autoplay_config.load_config()
+    assert cfg["mode"] == "raw"
+    assert cfg["bypass_llm"] is True
+
+
+def test_bypass_llm_flag_enables_raw_bypass() -> None:
+    body = '[autoplay]\nmode = "summary"\nbypass_llm = true\n'
+    with _with_override(body) as _:
+        cfg = autoplay_config.load_config()
+    assert cfg["bypass_llm"] is True
+    assert cfg["mode"] == "raw"
+
+
 def main() -> int:
     tests = [
         test_verbatim_mode_resolves_to_audio_rewrite_prompt,
@@ -141,6 +157,8 @@ def main() -> int:
         test_resolved_prompt_files_actually_exist_on_disk,
         test_shipped_example_toml_defaults_to_small,
         test_small_prompt_targets_one_to_three_sentences,
+        test_raw_mode_enables_bypass,
+        test_bypass_llm_flag_enables_raw_bypass,
     ]
     for t in tests:
         t()

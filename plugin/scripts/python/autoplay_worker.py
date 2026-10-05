@@ -23,17 +23,22 @@ so the full lifecycle can be walked in tests with no real audio/LLM.
 
 from __future__ import annotations
 
+import hashlib
+import json
 import os
 import subprocess
 import sys
 import time
 from datetime import datetime, timezone
 from pathlib import Path
+from typing import Any
 
 from autoplay_gate import AutoplayGate
+from daemon_client import DaemonClient, Priority
 from dedup_guard import DedupGuard
-from playback_fifo import PlaybackFifo, _pid_alive
+from message_selector import MessageSelector
 from staleness_beacon import StalenessBeacon
+from transcript_locator import TranscriptLocator
 from worker_lifecycle import (
     AWAITING_TURN,
     BAILED,
@@ -50,7 +55,7 @@ _PROJECT_ROOT = _PLUGIN_SCRIPTS_DIR.parent.parent
 
 EXTRACT = _PLUGIN_SCRIPTS_DIR / "shell" / "run_extract.sh"
 COMPUTE_HASH = _PLUGIN_SCRIPTS_DIR / "shell" / "compute_hash.sh"
-SPEAK = _PLUGIN_SCRIPTS_DIR / "shell" / "speak.py"
+SPEAK = _PLUGIN_SCRIPTS_DIR / "python" / "speak.py"
 CLI_REWRITE = _PLUGIN_SCRIPTS_DIR / "python" / "cli_rewrite.py"
 VENV = _PROJECT_ROOT / ".venv"
 
@@ -89,6 +94,54 @@ def _num_env(name: str, cast):
             file=sys.stderr,
         )
         return None
+
+
+def _pid_alive(pid: int) -> bool:
+    """True iff the process exists and is signalable."""
+    if pid <= 0:
+        return False
+    try:
+        os.kill(pid, 0)
+        return True
+    except ProcessLookupError:
+        return False
+    except PermissionError:
+        return True
+    except OSError:
+        return False
+
+
+class InProcessFifo:
+    """In-memory arrival-order turn coordinator."""
+
+    def __init__(self, log: Any = None) -> None:
+        self._log = log
+
+    def enqueue(self) -> None:
+        pass
+
+    def wait_for_queue_turn(
+        self,
+        timeout: float,
+        mpv_running: Any,
+        narrator_depth: Any,
+        is_stale: Any,
+        sleep: Any = time.sleep,
+    ) -> bool:
+        start = time.time()
+        while time.time() - start < timeout:
+            if is_stale():
+                return False
+            if not mpv_running() and narrator_depth() == 0:
+                return True
+            sleep(0.05)
+        return True
+
+    def mark_playing(self) -> None:
+        pass
+
+    def release(self) -> None:
+        pass
 
 
 def mpv_running() -> bool:
@@ -132,12 +185,16 @@ def resolve_config() -> dict:
     """
     coalesce_cfg: float | None = None
     narration_cfg: int | None = None
+    mode_cfg: str | None = None
+    bypass_cfg: bool | None = None
     try:
         from autoplay_config import load_config
 
         cfg = load_config()
         coalesce_cfg = cfg.get("coalesce_seconds")
         nw = cfg.get("narration_wait_max_seconds")
+        mode_cfg = cfg.get("mode")
+        bypass_cfg = cfg.get("bypass_llm")
         # bash does int(float(...)) so arithmetic doesn't choke on a decimal.
         narration_cfg = int(float(nw)) if nw is not None else None
     except Exception as exc:
@@ -165,7 +222,25 @@ def resolve_config() -> dict:
     else:
         narration_wait = 90
 
+    mode = mode_cfg or "summary"
+    env_mode = os.environ.get("AUTO_SPEECH_AUTOPLAY_MODE", "").strip().lower()
+    if env_mode:
+        mode = env_mode
+
+    bypass_env = os.environ.get("AUTO_SPEECH_BYPASS_LLM") or os.environ.get("AUTO_SPEECH_BYPASS_REWRITE")
+    if bypass_env is not None:
+        bypass = bypass_env.strip().lower() in ("1", "true", "yes", "on")
+    elif bypass_cfg is not None:
+        bypass = bool(bypass_cfg)
+    else:
+        bypass = mode in ("raw", "bypass", "as_is", "as-is", "direct")
+
+    if mode in ("raw", "bypass", "as_is", "as-is", "direct"):
+        bypass = True
+
     return {
+        "mode": mode,
+        "bypass_llm": bypass,
         "coalesce_seconds": coalesce,
         "narration_wait_max": narration_wait,
         "queue_wait_max": _int_env("AUTO_SPEECH_QUEUE_WAIT_MAX", 600),
@@ -185,7 +260,7 @@ class AutoplayWorker:
         config: dict | None = None,
         gate: AutoplayGate | None = None,
         beacon: StalenessBeacon | None = None,
-        fifo: PlaybackFifo | None = None,
+        fifo: Any | None = None,
         dedup: DedupGuard | None = None,
         log=None,
         sleep=time.sleep,
@@ -197,10 +272,11 @@ class AutoplayWorker:
         self._cfg = config or resolve_config()
         self._gate = gate or AutoplayGate()
         self._beacon = beacon or StalenessBeacon(self._beacon_mtime, self._session_id)
-        self._fifo = fifo or PlaybackFifo(log=self._log)
+        self._fifo = fifo or InProcessFifo(log=self._log)
         self._dedup = dedup or DedupGuard()
         self._machine = WorkerLifecycleMachine()
         self._sleep = sleep
+        self._custom_runner = runner is not None
         self._runner = runner or self._default_runner
         self._user_log = log
 
@@ -252,6 +328,48 @@ class AutoplayWorker:
             sleep=self._sleep,
         )
 
+    def _extract_source(self) -> tuple[int, str | None]:
+        if self._custom_runner:
+            extract_argv = ["bash", str(EXTRACT), "--ordinal", "1"]
+            if self._transcript_path:
+                extract_argv += ["--transcript-path", self._transcript_path]
+            return self._runner(extract_argv)
+        try:
+            if self._transcript_path:
+                t_path = Path(self._transcript_path)
+                if not t_path.is_file():
+                    return 1, None
+            else:
+                t_path = TranscriptLocator().locate(session_id=self._session_id or None)
+            msg = MessageSelector().select(t_path, 1)
+            return 0, msg.text
+        except Exception:
+            extract_argv = ["bash", str(EXTRACT), "--ordinal", "1"]
+            if self._transcript_path:
+                extract_argv += ["--transcript-path", self._transcript_path]
+            return self._runner(extract_argv)
+
+    def _compute_hash(self, src: str) -> tuple[int, str | None]:
+        if self._custom_runner:
+            rc, h = self._runner(["bash", str(COMPUTE_HASH)], stdin_text=src)
+            return rc, h.strip() if h else h
+        try:
+            config_path = _PROJECT_ROOT / "config" / "voice_calibration.json"
+            try:
+                data = json.loads(config_path.read_text(encoding="utf-8"))
+                voice_id = str(data["voice_id"])
+                speed = float(data["speed"])
+            except (FileNotFoundError, KeyError, ValueError, json.JSONDecodeError):
+                voice_id = "af_heart"
+                speed = 1.0
+
+            source_bytes = src.encode("utf-8")
+            key_input = source_bytes + b"\x00" + f"{voice_id}:{speed}".encode("utf-8")
+            return 0, hashlib.sha256(key_input).hexdigest()
+        except Exception:
+            rc, h = self._runner(["bash", str(COMPUTE_HASH)], stdin_text=src)
+            return rc, h.strip() if h else h
+
     # ---- run -------------------------------------------------------------
     def run(self) -> int:
         """Execute the worker flow. Always returns 0."""
@@ -281,10 +399,7 @@ class AutoplayWorker:
         self._machine.transition(RESOLVING)
 
         # Extract last assistant message.
-        extract_argv = ["bash", str(EXTRACT), "--ordinal", "1"]
-        if self._transcript_path:
-            extract_argv += ["--transcript-path", self._transcript_path]
-        rc, src = self._runner(extract_argv)
+        rc, src = self._extract_source()
         if rc != 0 or src is None:
             self._log("extract failed (no qualifying message?); skipping")
             self._machine.transition(BAILED)
@@ -297,7 +412,7 @@ class AutoplayWorker:
             return 0
 
         # Compute cache key.
-        rc, source_hash = self._runner(["bash", str(COMPUTE_HASH)], stdin_text=src)
+        rc, source_hash = self._compute_hash(src)
         source_hash = (source_hash or "").strip()
         if rc != 0 or not source_hash:
             self._log("compute_hash failed; skipping")
@@ -338,34 +453,46 @@ class AutoplayWorker:
         return 0
 
     def _play_cache_miss(self, source_hash: str, src: str) -> int:
-        # Cache miss requires the claude binary for the rewrite step.
-        from shutil import which
-
-        if which("claude") is None:
-            self._log("claude not on PATH; skipping rewrite")
-            self._machine.transition(BAILED)
-            return 0
-
-        self._log("invoking cli_rewrite.py (wraps claude -p with timeout)")
-        if not VENV.is_dir():
-            self._log(f"venv missing at {VENV}; skipping")
-            self._machine.transition(BAILED)
-            return 0
-
-        rc, rewrite = self._runner(
-            [str(VENV / "bin" / "python"), str(CLI_REWRITE), "--timeout", "90"],
-            stdin_text=src,
+        bypass = (
+            self._cfg.get("bypass_llm", False)
+            or self._cfg.get("mode") in ("raw", "bypass", "as_is", "as-is", "direct")
+            or os.environ.get("AUTO_SPEECH_BYPASS_LLM", "").lower() in ("1", "true", "yes", "on")
+            or os.environ.get("AUTO_SPEECH_BYPASS_REWRITE", "").lower() in ("1", "true", "yes", "on")
         )
-        if rc != 0:
-            self._log(f"cli_rewrite exit {rc}; skipping")
-            self._machine.transition(BAILED)
-            return 0
-        rewrite = rewrite or ""
-        if len(rewrite.encode("utf-8")) < 1:
-            self._log("cli_rewrite produced empty output; skipping")
-            self._machine.transition(BAILED)
-            return 0
-        self._log(f"rewrite chars={len(rewrite.encode('utf-8'))}")
+
+        if bypass:
+            self._log("bypassing LLM rewrite (raw mode); speaking text directly as-is")
+            text_to_speak = src
+        else:
+            # Cache miss requires the claude binary for the rewrite step.
+            from shutil import which
+
+            if which("claude") is None:
+                self._log("claude not on PATH; skipping rewrite")
+                self._machine.transition(BAILED)
+                return 0
+
+            self._log("invoking cli_rewrite.py (wraps claude -p with timeout)")
+            if not VENV.is_dir():
+                self._log(f"venv missing at {VENV}; skipping")
+                self._machine.transition(BAILED)
+                return 0
+
+            rc, rewrite = self._runner(
+                [str(VENV / "bin" / "python"), str(CLI_REWRITE), "--timeout", "90"],
+                stdin_text=src,
+            )
+            if rc != 0:
+                self._log(f"cli_rewrite exit {rc}; skipping")
+                self._machine.transition(BAILED)
+                return 0
+            rewrite = rewrite or ""
+            if len(rewrite.encode("utf-8")) < 1:
+                self._log("cli_rewrite produced empty output; skipping")
+                self._machine.transition(BAILED)
+                return 0
+            self._log(f"rewrite chars={len(rewrite.encode('utf-8'))}")
+            text_to_speak = rewrite
 
         if self._dedup.already_playing(source_hash):
             self._log("same hash already playing; skipping duplicate (post-rewrite path)")
@@ -381,7 +508,7 @@ class AutoplayWorker:
             )
             self._machine.transition(BAILED)
             return 0
-        self._speak(source_hash, stdin_text=rewrite, path_label="after rewrite")
+        self._speak(source_hash, stdin_text=text_to_speak, path_label="after rewrite" if not bypass else "direct as-is")
         return 0
 
     def _speak(self, source_hash: str, *, stdin_text: str, path_label: str) -> None:
@@ -389,8 +516,28 @@ class AutoplayWorker:
         # try_claim() before this point (see _play_cache_* paths).
         self._machine.transition(SPEAKING)
         self._fifo.mark_playing()
+
+        # In-process DaemonClient route when default runner is active
+        if not self._custom_runner:
+            try:
+                client = DaemonClient()
+                if not stdin_text.strip():
+                    resp = client.play_cache(source_hash, priority=Priority.AUTOPLAY)
+                else:
+                    resp = client.speak(
+                        stdin_text,
+                        source_hash=source_hash,
+                        session_id=self._session_id or None,
+                        priority=Priority.AUTOPLAY,
+                    )
+                if resp.status in ("ok", "queued"):
+                    self._machine.transition(DONE)
+                    return
+            except (ConnectionError, OSError) as exc:
+                self._log(f"daemon client speak failed, falling back to speak.py: {exc}")
+
         rc, _ = self._runner(
-            ["bash", str(SPEAK), "--source-hash", source_hash],
+            [sys.executable, str(SPEAK), "--source-hash", source_hash],
             stdin_text=stdin_text,
         )
         if rc != 0:

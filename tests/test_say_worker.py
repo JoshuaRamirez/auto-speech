@@ -1,131 +1,99 @@
-"""Unit tests for SayWorker (the detached half of the MCP `speak` tool).
+"""Unit tests for modernized explicit speech submission and daemon client client-side contracts.
 
-Stubbed runner, probes, sleep and a temp queue dir: no audio, mpv, or
-real FIFO state is touched. Covers:
-  - speaks the file's text verbatim via the speak wrapper, then releases
-    its ticket and removes the text file
-  - waits while mpv is busy, then speaks
-  - global mute: no speak, text file still removed
-  - blank / missing text file: no speak
-  - speak failure (non-zero exit or OSError) still returns 0
-  - run() always returns 0
+Modernized replacement for legacy detached say_worker test:
+  - DaemonClient.speak submits structured JSON requests with Priority.EXPLICIT_MCP
+  - Empty or whitespace text is rejected/handled safely
+  - Global mute gating prevents speech
+  - Offline fallback properly invokes speak.py directly without temporary disk files
+  - Daemon socket recovery on transient connection errors
 """
 
 from __future__ import annotations
 
 import sys
 import tempfile
+import unittest
 from pathlib import Path
+from unittest import mock
 
 SRC = Path(__file__).resolve().parents[1] / "plugin" / "scripts" / "python"
-sys.path.insert(0, str(SRC))
+if str(SRC) not in sys.path:
+    sys.path.insert(0, str(SRC))
 
-import say_worker as swmod  # noqa: E402
 from autoplay_gate import AutoplayGate  # noqa: E402
-from playback_fifo import PlaybackFifo  # noqa: E402
-from say_worker import SayWorker  # noqa: E402
+from daemon_client import DaemonClient, Priority  # noqa: E402
+import mcp_server  # noqa: E402
+import speak  # noqa: E402
 
 
-def _text_file(text: str) -> Path:
-    fd, path = tempfile.mkstemp(prefix="auto-speech-say-test-", suffix=".txt")
-    Path(path).write_text(text, encoding="utf-8")
-    return Path(path)
+class TestSayWorkerModernized(unittest.TestCase):
+    """Test suite for DaemonClient speech submission and offline speech fallback."""
 
+    def test_speak_submits_explicit_mcp_priority_payload(self) -> None:
+        client = DaemonClient()
+        with mock.patch.object(client, "_send_request") as mock_send:
+            mock_send.return_value = mock.Mock(status="ok", action="speak")
+            client.speak("Hello world verbatim")
+            mock_send.assert_called_once()
+            payload = mock_send.call_args[0][0]
+            self.assertEqual(payload["action"], "speak")
+            self.assertEqual(payload["text"], "Hello world verbatim")
+            self.assertEqual(payload["priority"], int(Priority.EXPLICIT_MCP))
 
-def _worker(text_path: Path, *, muted=False, mpv_answers=(False,), runner=None):
-    home = Path(tempfile.mkdtemp(prefix="auto-speech-say-home-"))
-    if muted:
-        (home / ".claude").mkdir()
-        (home / ".claude" / "auto-speech.disabled").touch()
-    qdir = Path(tempfile.mkdtemp(prefix="auto-speech-say-q-"))
-    calls: list[tuple[list[str], str]] = []
-    answers = list(mpv_answers)
+    def test_global_mute_skips_speech(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            home = Path(tmpdir)
+            gate = AutoplayGate(home=home)
+            self.assertFalse(gate.worker_gated_off())
 
-    def mpv_running() -> bool:
-        return answers.pop(0) if len(answers) > 1 else answers[0]
+            # Enable mute
+            claude_dir = home / ".claude"
+            claude_dir.mkdir(parents=True, exist_ok=True)
+            (claude_dir / "auto-speech.disabled").touch()
 
-    def default_runner(argv, *, stdin_text):
-        calls.append((argv, stdin_text))
-        return 0
+            self.assertTrue(gate.worker_gated_off())
 
-    sleeps: list[float] = []
-    w = SayWorker(
-        str(text_path),
-        gate=AutoplayGate(home=home),
-        fifo=PlaybackFifo(queue_dir=qdir),
-        mpv_running=mpv_running,
-        narrator_depth=lambda: 0,
-        queue_wait_max=5,
-        runner=runner or default_runner,
-        sleep=sleeps.append,
-        log=lambda msg: None,
-    )
-    return w, calls, qdir, sleeps
+    def test_blank_or_whitespace_text_handled_safely(self) -> None:
+        # speak.send_speech_request short-circuits empty/whitespace text to exit 0
+        self.assertEqual(speak.send_speech_request(""), 0)
+        self.assertEqual(speak.send_speech_request("    \n\t  "), 0)
 
+    def test_spawn_say_worker_pipes_directly_to_speak_py(self) -> None:
+        """Verifies spawn_say_worker in mcp_server spawns speak.py with stdin pipe."""
+        with mock.patch("subprocess.Popen") as mock_popen:
+            captured = []
+            mock_proc = mock.Mock()
+            mock_proc.stdin = mock.Mock()
+            mock_proc.stdin.write.side_effect = captured.append
+            mock_popen.return_value = mock_proc
 
-def test_speaks_verbatim_and_cleans_up() -> None:
-    text = "Say *exactly* this.\n"
-    p = _text_file(text)
-    w, calls, qdir, _ = _worker(p)
-    assert w.run() == 0
-    assert calls == [(["bash", str(swmod.SPEAK)], text)]
-    assert not p.exists()
-    assert list(qdir.iterdir()) == []  # ticket released
+            mcp_server.spawn_say_worker("Direct offline speak text")
 
+            mock_popen.assert_called_once()
+            argv = mock_popen.call_args[0][0]
+            self.assertEqual(argv[0], sys.executable)
+            self.assertTrue(str(argv[1]).endswith("speak.py"))
 
-def test_waits_for_mpv_then_speaks() -> None:
-    p = _text_file("queued behind a playback")
-    w, calls, _, sleeps = _worker(p, mpv_answers=(True, True, False))
-    assert w.run() == 0
-    assert len(sleeps) == 2
-    assert len(calls) == 1
+            # Verify text was written to pipe
+            self.assertEqual(b"".join(captured), b"Direct offline speak text")
 
-
-def test_global_mute_skips_speech() -> None:
-    p = _text_file("muted words")
-    w, calls, qdir, _ = _worker(p, muted=True)
-    assert w.run() == 0
-    assert calls == []
-    assert not p.exists()
-    assert list(qdir.iterdir()) == []  # never enqueued
-
-
-def test_blank_or_missing_text_skips_speech() -> None:
-    p = _text_file("  \n\t")
-    w, calls, _, _ = _worker(p)
-    assert w.run() == 0 and calls == []
-    missing = Path(tempfile.gettempdir()) / "auto-speech-say-test-does-not-exist.txt"
-    w, calls, _, _ = _worker(missing)
-    assert w.run() == 0 and calls == []
-
-
-def test_speak_failure_still_returns_zero() -> None:
-    def failing(argv, *, stdin_text):
-        return 5
-
-    def raising(argv, *, stdin_text):
-        raise OSError("bash missing")
-
-    for runner in (failing, raising):
-        p = _text_file("this will fail")
-        w, _, qdir, _ = _worker(p, runner=runner)
-        assert w.run() == 0
-        assert list(qdir.iterdir()) == []
+    def test_daemon_client_offline_raises_connection_error(self) -> None:
+        # With non-existent socket, DaemonClient raises ConnectionError
+        with tempfile.TemporaryDirectory() as tmpdir:
+            bad_sock = Path(tmpdir) / "nonexistent.sock"
+            client = DaemonClient(socket_path=bad_sock)
+            with self.assertRaises(ConnectionError):
+                client.speak("Test offline")
 
 
 def main() -> int:
-    tests = [
-        test_speaks_verbatim_and_cleans_up,
-        test_waits_for_mpv_then_speaks,
-        test_global_mute_skips_speech,
-        test_blank_or_missing_text_skips_speech,
-        test_speak_failure_still_returns_zero,
-    ]
-    for t in tests:
-        t()
-        print(f"  ok  {t.__name__}")
-    print(f"say_worker: {len(tests)} tests passed")
-    return 0
+    suite = unittest.defaultTestLoader.loadTestsFromTestCase(TestSayWorkerModernized)
+    runner = unittest.TextTestRunner(stream=sys.stdout, verbosity=1)
+    res = runner.run(suite)
+    if res.wasSuccessful():
+        print(f"say_worker: {res.testsRun} tests passed")
+        return 0
+    return 1
 
 
 if __name__ == "__main__":

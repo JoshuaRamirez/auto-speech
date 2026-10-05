@@ -1,7 +1,7 @@
-# BRIEFING — 2026-10-03T19:22:00Z
+# BRIEFING — 2026-10-04T11:27:00Z
 
 ## Mission
-Remediate the concurrency listen backlog bottleneck, client-side retry resilience, abrupt disconnect truncation bug, and slowloris timeout protection identified by Challengers M2.1 and M2.2.
+Remediate BUG-M2-01 (`play_cache` payload validation & error discriminator in `narrator_service.py`) and BUG-M2-02 (`_is_mocked` parity with `http_routing._is_sink_mocked` in `replay.py`), and update `test_challenger_m2_stress.py` to assert method mock preservation.
 
 ## 🔒 My Identity
 - Archetype: worker
@@ -9,6 +9,7 @@ Remediate the concurrency listen backlog bottleneck, client-side retry resilienc
 - Working directory: /Users/joshua/Developer/auto-speech/.agents/teamwork/worker_m2_r2
 - Original parent: c05df6b8-cecd-49ba-9fb8-8fa47f977488
 - Milestone: M2 Iteration 2 (Remediation)
+- Updated parent: c1a38335-0039-4a61-b349-ed364e82603a (2026-10-04)
 
 ## 🔒 Key Constraints
 - DO NOT CHEAT. All implementations must be genuine.
@@ -16,45 +17,52 @@ Remediate the concurrency listen backlog bottleneck, client-side retry resilienc
 - Preserve thread-safety, FIFO ordering, drop-oldest backpressure cap.
 - All unit, stress, and E2E tests must pass.
 - Format handoff report with 5 mandatory components.
+- Exclusive write ownership: plugin/scripts/python/narrator_service.py, plugin/scripts/python/replay.py, tests/test_challenger_m2_stress.py
 
 ## Current Parent
-- Conversation ID: c05df6b8-cecd-49ba-9fb8-8fa47f977488
-- Updated: not yet
+- Conversation ID: c1a38335-0039-4a61-b349-ed364e82603a
+- Updated: 2026-10-04T10:55:05Z
 
 ## Task Summary
-- **What to build**: Remediate listen backlog (`request_queue_size = 128`), slowloris read timeout (`self.request.settimeout(5.0)`), abrupt disconnect truncation discard, queue lock protection for direct `put()` calls in `narrator_service.py`, and transient connection retry loop in `speak.py`.
-- **Success criteria**: 0 test failures across all suites (unit, stress, E2E), ruff clean, robust under 50+ concurrent connections and abrupt client resets.
-- **Interface contracts**: PROJECT.md § Interface Contracts
+- **What to build**:
+  1. `narrator_service.py`: in `dispatch_json` under action `play_cache`, validate `source_hash` type and 64-hex format, returning `{"status": "error", "error_code": "INVALID_PAYLOAD", ...}` when invalid/missing, reserving `CACHE_MISS` solely for valid hashes not in cache.
+  2. `replay.py`: update `_is_mocked` to check `getattr(cls, "play", None)` for `mock_calls`, matching `http_routing._is_sink_mocked`.
+  3. `tests/test_challenger_m2_stress.py`: update `test_replay_mock_preservation_method_mock_gap_finding` assertions to verify method mocks are respected and daemon routing is not invoked (`mock_play.call_count == 1`, `daemon_sink.play.call_count == 0`).
+- **Success criteria**:
+  - `test_challenger_m2_cache_stress.py` passes 17/17
+  - `test_challenger_m2_stress.py` passes 19/19
+  - `test_replay_control.py` passes 10/10
+  - `test_synthesize_endpoint.py` passes 12/12
+  - `tests/run_all.sh --hermetic` passes 43/43 suites
+  - `tests/run_all.sh --web` passes
+  - `tests/e2e/run_e2e.py` passes 74/74
+  - `ruff check .` reports 0 errors
+- **Interface contracts**: reports/AutoSpeech-Sublimation-RFC-2026-10-04-074610.md §4.1.2
 - **Code layout**: PROJECT.md § Code Layout
 
 ## Key Decisions Made
-- Setting `_DaemonSocketServer.request_queue_size = 128` directly on the server class to increase kernel listen queue backlog on Darwin from stdlib default 5.
-- Adding `self.request.settimeout(5.0)` in `_DaemonRequestHandler.handle()` to avoid stalled/slowloris client threads.
-- In `_DaemonRequestHandler.handle()`, using a boolean flag `aborted = False` to track whether an exception occurred during `recv()`. If `(ConnectionResetError, BrokenPipeError, OSError, socket.timeout)` occurs, set `aborted = True`, break, and if `aborted` is True, do not enqueue partial chunks.
-- Routing lines 548 and 565 `self._tts_queue.put(...)` through `self._enqueue_phase(...)` to ensure thread safety under `_queue_lock` and drop-oldest backpressure consistency.
-- In `speak.py:send_speech_request()`, implementing a retry loop for `ConnectionRefusedError` (up to 3 attempts with 0.02s backoff) before failing.
-- Updating `tests/test_socket_ipc_stress.py` to assert that the remediated behaviors pass (no aborted fragments enqueued, default backlog handles 50 concurrent clients with 0 errors).
-- Adding unit test for retry in `tests/test_speak_client.py`.
+- BUG-M2-01: Disallow non-string, malformed, or missing `source_hash` from falling through to `CACHE_MISS`. Check `isinstance(source_hash, str) and len(source_hash) == 64 and all(c in "0123456789abcdef" for c in source_hash)` and return `INVALID_PAYLOAD` with descriptive error message.
+- BUG-M2-02: Ensure `_is_mocked(NativeAudioSink)` inspects `getattr(cls, "play", None)` for `mock_calls` in addition to checking whether `cls` itself is a mock object. This achieves exact behavioral parity with `http_routing._is_sink_mocked`.
+- `test_challenger_m2_stress.py`: Converted the empirical limitation finding test into a regression prevention assertion verifying `mock_play.call_count == 1`, `mock_play.assert_called_once_with(self.promoted_wav)`, and `daemon_sink.play.call_count == 0`.
 
 ## Artifact Index
-- `DISPATCH.md` — Task assignment
-- `BRIEFING.md` — Persistent situational awareness
+- `DISPATCH.md` — Task assignment & dispatch history
+- `BRIEFING.md` — Situational awareness & state tracking
 - `progress.md` — Liveness heartbeat
-- `handoff.md` — Final 5-component handoff report
+- `handoff.md` — 5-component handoff report
 
 ## Change Tracker
 - **Files modified**:
-  - `plugin/scripts/python/narrator_service.py`: added `request_queue_size = 128`, 5.0s read timeout, aborted flag to discard partial chunks, routed direct `put()` calls through `_enqueue_phase()`
-  - `plugin/scripts/python/speak.py`: added 3-attempt retry loop with backoff for `ConnectionRefusedError`
-  - `tests/test_speak_client.py`: added `test_send_speech_request_retries_transient_connection_refused`
-  - `tests/test_socket_ipc_stress.py`: updated default backlog test to verify 50/50 success with 0 errors, updated abrupt disconnect test to verify partial chunks are discarded, added client retry test
-- **Build status**: All unit, stress, and E2E test suites pass with 0 failures; ruff clean (0 violations)
+  - `plugin/scripts/python/narrator_service.py`: Fixed `play_cache` payload validation to return `INVALID_PAYLOAD` on malformed/missing hash.
+  - `plugin/scripts/python/replay.py`: Enhanced `_is_mocked` to detect method-level mocks on `cls.play`.
+  - `tests/test_challenger_m2_stress.py`: Updated `test_replay_mock_preservation_method_mock_gap_finding` to verify method mock interception over daemon routing.
+- **Build status**: All 8 verification suites PASS (43/43 hermetic suites, 74/74 E2E tests, 0 ruff errors).
 - **Pending issues**: None
 
 ## Quality Status
-- **Build/test result**: PASS (all 9 verification commands pass)
-- **Lint status**: PASS (ruff check: 0 errors)
-- **Tests added/modified**: 2 added, 2 updated
+- **Build/test result**: PASS (17/17 cache stress, 19/19 M2 stress, 10/10 replay_control, 12/12 synthesize, 43/43 hermetic, 12/12 web, 74/74 E2E)
+- **Lint status**: PASS (0 ruff violations across entire codebase)
+- **Tests added/modified**: 1 updated test in `tests/test_challenger_m2_stress.py`
 
 ## Loaded Skills
 - None

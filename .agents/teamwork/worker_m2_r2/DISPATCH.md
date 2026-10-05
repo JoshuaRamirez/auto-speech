@@ -62,3 +62,34 @@ Implement the remediations:
 2. speak.py: add transient retry loop on ConnectionRefusedError in send_speech_request().
 3. Run all unit tests, both challenger stress test suites (tests/test_socket_ipc_stress.py and tests/test_socket_server_stress.py), and E2E suites.
 4. Report all verified test outputs in /Users/joshua/Developer/auto-speech/.agents/teamwork/worker_m2_r2/handoff.md and send a message when done.
+
+
+## 2026-10-04T10:55:05Z
+You are worker_m2_r2, an implementation worker agent.
+Your working directory is: /Users/joshua/Developer/auto-speech/.agents/teamwork/worker_m2_r2
+The authoritative user request is in: /Users/joshua/Developer/auto-speech/.agents/teamwork/ORIGINAL_REQUEST.md (MUST read first).
+The task assignment and technical instructions are in: /Users/joshua/Developer/auto-speech/.agents/teamwork/worker_m2_r2/context.md
+The authoritative RFC is in: /Users/joshua/Developer/auto-speech/reports/AutoSpeech-Sublimation-RFC-2026-10-04-074610.md
+
+MANDATORY INTEGRITY WARNING:
+DO NOT CHEAT. All implementations must be genuine. DO NOT hardcode test results, create dummy/facade implementations, or circumvent the intended task. A teamwork_preview_auditor will independently verify your work. Integrity violations WILL be detected and your work WILL be rejected.
+
+Exclusive write ownership:
+- plugin/scripts/python/narrator_service.py
+- plugin/scripts/python/replay.py
+- tests/test_challenger_m2_stress.py
+
+Implement the remediations strictly per context.md.
+Verify with:
+- .venv/bin/python tests/test_challenger_m2_cache_stress.py (17/17)
+- .venv/bin/python tests/test_challenger_m2_stress.py (19/19)
+- .venv/bin/python tests/test_replay_control.py (10/10)
+- .venv/bin/python tests/test_synthesize_endpoint.py (12/12)
+- bash tests/run_all.sh --hermetic (43/43 suites)
+- bash tests/run_all.sh --web
+- .venv/bin/python tests/e2e/run_e2e.py (74/74)
+- .venv/bin/ruff check . (0 errors)
+
+Write your handoff report to:
+/Users/joshua/Developer/auto-speech/.agents/teamwork/worker_m2_r2/handoff.md
+Send completion message back when done.

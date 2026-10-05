@@ -76,6 +76,7 @@ def main(argv: list[str] | None = None) -> int:
         cfg["mode"] = args.mode
     if args.size is not None:
         cfg["summary_size"] = args.size
+
     # If either was overridden, re-resolve the prompt path.
     if args.mode is not None or args.size is not None:
         from autoplay_config import _resolve_prompt  # local re-import for resolver

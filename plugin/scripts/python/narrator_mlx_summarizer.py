@@ -3,14 +3,13 @@ a downloaded model. Use auto-speech-narrate-install to set up."""
 
 from __future__ import annotations
 
-_LAST_SPOKEN_SENTENCE = ""
-_LAST_SPOKEN_COUNT = 0
-
-
 from pathlib import Path
 
 from narrator_phase_classifier import Phase
 from narrator_summarizer import Summarizer
+
+_LAST_SPOKEN_SENTENCE = ""
+_LAST_SPOKEN_COUNT = 0
 
 
 class MlxSummarizer(Summarizer):

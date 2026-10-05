@@ -1,0 +1,10 @@
+{
+  "mcpServers": {
+    "auto-speech": {
+      "command": "bash",
+      "args": [
+        "/Users/joshua/Developer/auto-speech/plugin/scripts/shell/run_mcp.sh"
+      ]
+    }
+  }
+}

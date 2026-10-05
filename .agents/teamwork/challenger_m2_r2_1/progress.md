@@ -1,30 +1,22 @@
 # Progress — challenger_m2_r2_1
 
-Last visited: 2026-10-03T19:36:45Z
+Last visited: 2026-10-04T12:05:00Z
 
 ## Status
-Empirical stress-testing of Milestone M2 Round 2 remediations complete. Final verdict: REJECT.
+Empirical adversarial re-verification of Milestone M2 remediation complete. Final verdict: APPROVE.
 
 ## Completed Steps
-- [x] Received dispatch message and created BRIEFING.md / DISPATCH.md / progress.md.
-- [x] Read ORIGINAL_REQUEST.md, PROJECT.md, worker_m2_r2/handoff.md, and challenger_m2_1/handoff.md.
-- [x] Inspected implementation diffs in narrator_service.py, speak.py, and test suites.
-- [x] Ran `PYTHONPATH=plugin/scripts/python .venv/bin/python tests/test_socket_ipc_stress.py` (11/11 passed in 6.09s).
-- [x] Executed custom adversarial concurrency benchmarks:
-  - 50, 75, 100, 128, 150, 200 concurrent threads (0 errors, 100% enqueued).
-  - 50 and 75 concurrent CLI processes (0 errors, 100% exit code 0).
-- [x] Executed custom adversarial disconnect tests:
-  - Multi-chunk payloads aborted mid-transfer (3 chunks sent, reset on chunk 3 -> discarded, 0 items enqueued).
-  - Exception variants tested: ConnectionResetError, BrokenPipeError, socket.timeout, TimeoutError, OSError(ECONNRESET/ETIMEDOUT/ENETDOWN) -> all 0 items enqueued.
-  - Slowloris read timeout (5.0s) -> discarded, 0 items enqueued.
-  - Interleaved concurrent traffic (25 aborted + 25 valid) -> exactly 25 valid enqueued, 0 aborted.
-- [x] Executed latency benchmarks:
-  - Sequential p99: 1.11ms (< 20ms target).
-  - 50-client concurrent p99: 2.61ms (< 20ms target).
-- [x] Ran full repository test suites and discovered critical regressions:
-  - `test_tier1_r2_daemon_socket_enqueues_to_tts_queue` in `tests/e2e/test_tier1_features.py` FAILS due to extraction of `_DaemonSocketServer` to untracked `unix_ipc_server.py`.
-  - `tests/test_socket_server_stress.py` fails with SyntaxError (`from __future__` import position).
-  - 32 ruff lint errors in repository.
-- [x] Updated BRIEFING.md.
-- [ ] Write handoff.md with REJECT verdict and detailed evidence.
-- [ ] Send completion message to parent.
+- [x] Received dispatch message and updated BRIEFING.md / DISPATCH.md / progress.md.
+- [x] Read ORIGINAL_REQUEST.md, context.md, worker_m2_r2/handoff.md, and RFC 2026-10-04-074610.
+- [x] Re-executed `tests/test_challenger_m2_cache_stress.py` (17/17 passed in 0.745s).
+- [x] Confirmed BUG-M2-01 is completely resolved: all 3 previously failing tests (`test_play_cache_invalid_hex_chars_returns_invalid_payload`, `test_play_cache_invalid_hex_length_returns_invalid_payload`, `test_play_cache_missing_or_non_string_source_hash_returns_invalid_payload`) now pass with `INVALID_PAYLOAD`.
+- [x] Confirmed BUG-M2-02 is resolved in `tests/test_challenger_m2_stress.py` (19/19 passed in 8.391s).
+- [x] Executed custom adversarial harness with 20 additional malformed and valid `play_cache` payloads (100% pass).
+- [x] Verified zero regressions across cache transitions, promotion, and fragment cleanup.
+- [x] Re-executed full hermetic suite: `bash tests/run_all.sh --hermetic` (43/43 suites pass, 0 failed).
+- [x] Re-executed web suite: `bash tests/run_all.sh --web` (12/12 tests pass).
+- [x] Re-executed E2E test suite: `.venv/bin/python tests/e2e/run_e2e.py` (74/74 tests pass across Tiers 1-5).
+- [x] Verified code formatting and linting: `.venv/bin/ruff check .` (0 violations).
+- [x] Evaluated decision model (`systemone round`): verdict APPROVE (0.93 confidence).
+- [x] Prepared comprehensive handoff report at `/Users/joshua/Developer/auto-speech/.agents/teamwork/challenger_m2_r2_1/handoff.md`.
+- [x] Sent completion message to parent agent.

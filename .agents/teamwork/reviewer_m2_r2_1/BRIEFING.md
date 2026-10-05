@@ -1,73 +1,59 @@
-# BRIEFING — 2026-10-03T19:38:30Z
+# BRIEFING — 2026-10-04T11:41:00Z
 
 ## Mission
-Independently review and stress-test Milestone M2 Iteration 2 remediations in speak.py, narrator_service.py, and test suites, verifying concurrency, retry logic, error handling, and thread safety.
+Review and adversarial audit of Milestone M2 remediations (BUG-M2-01, BUG-M2-02, test harness assertions).
 
 ## 🔒 My Identity
-- Archetype: reviewer_critic
+- Archetype: reviewer
 - Roles: reviewer, critic
 - Working directory: /Users/joshua/Developer/auto-speech/.agents/teamwork/reviewer_m2_r2_1
-- Original parent: c05df6b8-cecd-49ba-9fb8-8fa47f977488
-- Milestone: M2.R2
+- Original parent: c1a38335-0039-4a61-b349-ed364e82603a
+- Milestone: M2 Remediation
 - Instance: 1 of 1
 
 ## 🔒 Key Constraints
 - Review-only — do NOT modify implementation code
-- Check for integrity violations (hardcoding, facades, shortcuts, self-certifying)
-- Deliver report to /Users/joshua/Developer/auto-speech/.agents/teamwork/reviewer_m2_r2_1/handoff.md with APPROVE or REQUEST_CHANGES
-- Send completion message back to parent agent c05df6b8-cecd-49ba-9fb8-8fa47f977488 via send_message
+- Evidence-based review and adversarial challenge
+- Active detection of integrity violations (hardcoded outputs, dummy facades, shortcuts)
 
 ## Current Parent
-- Conversation ID: c05df6b8-cecd-49ba-9fb8-8fa47f977488
-- Updated: 2026-10-03T19:38:30Z
+- Conversation ID: c1a38335-0039-4a61-b349-ed364e82603a
+- Updated: 2026-10-04T11:41:00Z
 
 ## Review Scope
 - **Files to review**:
-  - `plugin/scripts/python/speak.py`
-  - `plugin/scripts/python/narrator_service.py`
-  - `tests/test_speak_client.py`
-  - `tests/test_narrator_service.py`
-  - `tests/test_socket_ipc_stress.py`
-  - `tests/test_socket_server_stress.py`
-  - `tests/e2e/test_tier1_features.py`
-  - `tests/e2e/test_tier2_boundaries.py`
-- **Interface contracts**: PROJECT.md (UNIX Socket IPC: `speak.py` ↔ `narrator_service.py`)
-- **Review criteria**: Correctness, concurrency robustness, integrity, edge case handling, test verification
-
-## Key Decisions Made
-- Evaluated unit test suites, stress suites, and full E2E suites.
-- Discovered test failure in E2E suite (`test_tier1_r2_daemon_socket_enqueues_to_tts_queue` in `tests/e2e/test_tier1_features.py`).
-- Discovered constructor signature regression in `NarratorService` breaking subprocess recovery tests.
-- Detected integrity violation: mock facade (`MockExecutor`) injected into test suites.
-- Verdict established: REQUEST_CHANGES.
-
-## Artifact Index
-- `/Users/joshua/Developer/auto-speech/.agents/teamwork/reviewer_m2_r2_1/BRIEFING.md` — Agent briefing & working memory
-- `/Users/joshua/Developer/auto-speech/.agents/teamwork/reviewer_m2_r2_1/DISPATCH.md` — Dispatch record
-- `/Users/joshua/Developer/auto-speech/.agents/teamwork/reviewer_m2_r2_1/progress.md` — Liveness & heartbeat
-- `/Users/joshua/Developer/auto-speech/.agents/teamwork/reviewer_m2_r2_1/handoff.md` — Review verdict & handoff report
+  - `plugin/scripts/python/narrator_service.py` (lines 477–501: `play_cache` schema validation & `INVALID_PAYLOAD` return)
+  - `plugin/scripts/python/replay.py` (lines 32–38: `_is_mocked` inspecting `getattr(cls, "play", None)`)
+  - `tests/test_challenger_m2_stress.py` (lines 286–314: asserting method mock invocation)
+  - `tests/test_challenger_m2_cache_stress.py` (17 test cases for cache stress & payload errors)
+- **Interface contracts**: reports/AutoSpeech-Sublimation-RFC-2026-10-04-074610.md, .agents/teamwork/ORIGINAL_REQUEST.md
+- **Review criteria**: correctness, style, conformance, error handling, security, integrity
 
 ## Review Checklist
 - **Items reviewed**:
-  - `plugin/scripts/python/speak.py`: Verified retry loop, error paths, and unit test pass (19/19).
-  - `plugin/scripts/python/narrator_service.py`: Evaluated queue lock, drop-oldest shedding, and socket handling.
-  - `tests/test_socket_ipc_stress.py`: Evaluated 50/50 concurrency pass, abrupt disconnect drop verification (11/11).
-  - `tests/test_socket_server_stress.py`: Evaluated lifecycle, recovery, and FIFO ordering.
-  - `tests/e2e/test_tier1_features.py`: Found assertion failure in `test_tier1_r2_daemon_socket_enqueues_to_tts_queue`.
-- **Verdict**: REQUEST_CHANGES
-- **Unverified claims**:
-  - Claimed 100% pass across E2E suites invalid due to failing test in Tier 1.
+  - `narrator_service.py` `play_cache` error discriminator: VERIFIED (RFC §4.1.1 & §4.1.2 compliant)
+  - `replay.py` `_is_mocked` inspection: VERIFIED (symmetric with `http_routing._is_sink_mocked`)
+  - `test_challenger_m2_stress.py` mock assertions: VERIFIED (asserts call count 1 on method mock, 0 on daemon sink)
+  - Integrity violation audit: VERIFIED (no hardcoded cheats, dummy facades, or shortcuts)
+- **Verdict**: APPROVE (Milestone M2 remediations are 100% correct, verified, and clean)
+- **Unverified claims**: None.
 
 ## Attack Surface
 - **Hypotheses tested**:
-  - High concurrency listen queue overflow (backlog 128 tested and passed).
-  - Abrupt socket disconnect mid-payload (discard verified).
-  - Stale socket recovery and unlinking (verified).
-  - E2E Tier 1 architectural contract check (FAILED).
-  - Subprocess crash recovery under modified constructor interface (FAILED).
+  - Malformed payload inputs to `play_cache` (missing key, non-str, invalid length, invalid chars): correctly returns `INVALID_PAYLOAD`.
+  - Non-existent 64-hex hash to `play_cache`: correctly returns `CACHE_MISS`.
+  - Method mock `mock.patch.object(NativeAudioSink, "play")`: correctly identified by `_is_mocked`, preventing daemon socket routing.
+  - Concurrent / hermetic test execution impact: isolated finding in Challenger M3 test harness (`test_challenger_m3_caller_realignment.py`) omitting `chars_per_second_at_creation`.
 - **Vulnerabilities found**:
-  - E2E contract failure: `narrator_service.py` architectural violation when socket server moved to external module.
-  - Subprocess crash recovery failure due to constructor interface incompatibility.
-  - Non-deterministic message ordering under high concurrency burst without client ACK synchronization.
-- **Untested angles**:
-  - Multi-gigabyte continuous stream memory exhaustion over 24-hour runtime.
+  - Non-blocking finding in M3 test harness (`test_challenger_m3_caller_realignment.py` line 535): missing `chars_per_second_at_creation` causes orphan fallback to disk audio in subprocess.
+- **Untested angles**: Hardware audio playback on remote platforms without CoreAudio (tested with `--ao=null` and hermetic mocks).
+
+## Key Decisions Made
+- Confirmed full empirical verification of M2 remediation.
+- Verdict is APPROVE.
+
+## Artifact Index
+- DISPATCH.md — incoming dispatch instructions
+- BRIEFING.md — persistent state and identity
+- progress.md — liveness heartbeat
+- handoff.md — final review report and verdict

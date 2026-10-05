@@ -2,7 +2,7 @@
 """E2E Test Runner for auto-speech Unified Daemon Server.
 
 Usage:
-    .venv/bin/python tests/e2e/run_e2e.py [--tier {1,2,3,4,all}] [-v]
+    .venv/bin/python tests/e2e/run_e2e.py [--tier {1,2,3,4,5,all}] [-v]
 """
 
 from __future__ import annotations
@@ -34,6 +34,17 @@ from tests.e2e.test_tier3_combinations import (  # noqa: E402
 from tests.e2e.test_tier4_scenarios import (  # noqa: E402
     TestTier4RealWorldScenarios,
 )
+from tests.e2e.test_tier5_adversarial_sink_ipc import (  # noqa: E402
+    TestTier5AdversarialAudioSink,
+    TestTier5AdversarialSocketIPC,
+    TestTier5AdversarialIntegratedWorkflow,
+)
+from tests.e2e.test_tier5_adversarial_lifecycle import (  # noqa: E402
+    TestTier5AdversarialSocketLifecycle,
+    TestTier5AdversarialQueueBackpressureFlood,
+    TestTier5AdversarialSignalAndInterruption,
+    TestTier5AdversarialWorkerAndHandlerRobustness,
+)
 
 TIER_MAP = {
     1: [
@@ -52,6 +63,15 @@ TIER_MAP = {
     4: [
         TestTier4RealWorldScenarios,
     ],
+    5: [
+        TestTier5AdversarialAudioSink,
+        TestTier5AdversarialSocketIPC,
+        TestTier5AdversarialIntegratedWorkflow,
+        TestTier5AdversarialSocketLifecycle,
+        TestTier5AdversarialQueueBackpressureFlood,
+        TestTier5AdversarialSignalAndInterruption,
+        TestTier5AdversarialWorkerAndHandlerRobustness,
+    ],
 }
 
 
@@ -60,7 +80,7 @@ def build_suite(tier: str | int = "all") -> unittest.TestSuite:
     suite = unittest.TestSuite()
 
     if str(tier).lower() == "all":
-        selected_tiers = [1, 2, 3, 4]
+        selected_tiers = [1, 2, 3, 4, 5]
     else:
         selected_tiers = [int(tier)]
 
@@ -77,8 +97,8 @@ def main(argv: list[str] | None = None) -> int:
         "--tier",
         type=str,
         default="all",
-        choices=["1", "2", "3", "4", "all"],
-        help="Run tests for a specific tier (1, 2, 3, 4, or all)",
+        choices=["1", "2", "3", "4", "5", "all"],
+        help="Run tests for a specific tier (1, 2, 3, 4, 5, or all)",
     )
     parser.add_argument(
         "-v",

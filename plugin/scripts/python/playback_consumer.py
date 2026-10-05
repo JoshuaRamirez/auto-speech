@@ -3,9 +3,27 @@
 from __future__ import annotations
 
 import threading
-
-from afplay_launcher import AfplayLauncher
+from pathlib import Path
+from native_audio_sink import NativeAudioSink
 from playback_queue import PlaybackQueue, SENTINEL
+
+
+class AfplayLauncher:
+    """Cooperative audio playback launcher using NativeAudioSink."""
+
+    @staticmethod
+    def play(wav_path: Path, stop_event: threading.Event) -> int:
+        sink = NativeAudioSink()
+        try:
+            sink.play(wav_path)
+            return 0
+        except Exception as exc:
+            if stop_event.is_set():
+                return 0
+            if "-66681" in str(exc) or "AudioQueueStart" in str(exc):
+                return 0
+            print(f"[playback_consumer] audio playback error: {exc}")
+            return 1
 
 
 class PlaybackError(RuntimeError):

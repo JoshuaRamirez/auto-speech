@@ -163,9 +163,9 @@ def _summarize_event(tool_name: str, payload: dict) -> str:
                                 # Take the LAST 300 chars, since the first 300 are often generic system prompt boilerplate
                                 thinking = "..." + thinking[-300:]
                             break
-                    except:
+                    except Exception:
                         pass
-        except:
+        except Exception:
             pass
 
     ti = payload.get("tool_input", {}) or {}

@@ -12,8 +12,9 @@ import socket
 import sys
 import time
 from pathlib import Path
+from typing import Any
 
-DEFAULT_SOCKET_PATH = Path("/tmp/auto-speech-daemon.sock")
+from daemon_client import DEFAULT_SOCKET_PATH, DaemonClient, DaemonResponse, Priority  # noqa: F401
 
 
 def get_socket_path() -> Path:
@@ -38,7 +39,26 @@ def send_speech_request(
     if socket_path is None:
         socket_path = get_socket_path()
 
-    max_attempts = 3
+    if not Path(socket_path).is_socket():
+        start_script = Path(__file__).resolve().parents[1] / "shell" / "narrator_service_start.sh"
+        if start_script.is_file():
+            try:
+                import subprocess
+
+                subprocess.run(
+                    ["bash", str(start_script)],
+                    stdout=subprocess.DEVNULL,
+                    stderr=subprocess.DEVNULL,
+                    check=False,
+                )
+                for _ in range(25):
+                    if Path(socket_path).is_socket():
+                        break
+                    time.sleep(0.04)
+            except Exception:
+                pass
+
+    max_attempts = 5
     retry_delay = 0.02
 
     for attempt in range(max_attempts):
@@ -55,7 +75,7 @@ def send_speech_request(
         except FileNotFoundError:
             print(f"Error: cannot connect to auto-speech daemon at {socket_path}", file=sys.stderr)
             return 1
-        except ConnectionRefusedError:
+        except (ConnectionRefusedError, ConnectionResetError):
             if attempt < max_attempts - 1:
                 time.sleep(retry_delay * (attempt + 1))
                 continue
@@ -72,7 +92,12 @@ def send_speech_request(
     return 1
 
 
-def main(argv: list[str] | None = None) -> int:
+def main(
+    argv: list[str] | None = None,
+    *,
+    client: DaemonClient | None = None,
+    sink: Any | None = None,
+) -> int:
     p = argparse.ArgumentParser(description="Speak an audio-friendly transcript via daemon.")
     p.add_argument("--ordinal", type=int, default=1, help="1-indexed N-from-end (logging only)")
     p.add_argument(
@@ -104,6 +129,40 @@ def main(argv: list[str] | None = None) -> int:
 
     transcript_text = sys.stdin.read()
     if not transcript_text.strip():
+        if args.source_hash:
+            if client is not None:
+                try:
+                    resp = client.play_cache(args.source_hash)
+                    if resp.status in ("ok", "queued"):
+                        return 0
+                except Exception:
+                    pass
+            elif sink is None:
+                try:
+                    c = DaemonClient(socket_path=args.socket_path)
+                    if c.is_alive():
+                        resp = c.play_cache(args.source_hash)
+                        if resp.status in ("ok", "queued"):
+                            return 0
+                except Exception:
+                    pass
+
+            cache_root = Path(__file__).resolve().parents[3] / "config" / "cache"
+            cache_wav = cache_root / args.source_hash[:16] / "full.wav"
+            if cache_wav.is_file():
+                if sink is not None:
+                    active_sink = sink
+                else:
+                    from native_audio_sink import NativeAudioSink
+
+                    active_sink = NativeAudioSink()
+
+                try:
+                    active_sink.play(cache_wav)
+                    return 0
+                except Exception as exc:
+                    print(f"speak: cached playback failed: {exc}", file=sys.stderr)
+                    return 1
         return 0
 
     if args.socket_path is not None:

@@ -57,9 +57,9 @@ Events JSONL ─►│ ┌──────────────┐         
 | # | Name | Scope | Dependencies | Status |
 |---|------|-------|-------------|--------|
 | M1 | In-Process TTSEngine & NativeAudioSink | Create `NativeAudioSink`, integrate `TTSEngine` into `narrator_service.py`, remove playback sleeps & kills | none | DONE |
-| M2 | Thin Client IPC via UNIX Sockets | Add daemon socket server on `/tmp/auto-speech-daemon.sock`, refactor `speak.py` to thin client | M1 | IN_PROGRESS |
-| M3 | Elimination of Dead Sprawl & Caller Realignment | Delete `run_speak.sh`, `pipeline.py`, `short_path.py`, `mpv_controller.py`, `session_dir.py`, adapt callers | M1, M2 | PLANNED |
-| M4 | Final Milestone: E2E Verification & Adversarial Hardening | Phase 1: 100% pass of E2E tests (Tiers 1-4). Phase 2: Tier 5 adversarial hardening | M1, M2, M3, E2E Track | PLANNED |
+| M2 | Thin Client IPC via UNIX Sockets | Add daemon socket server on `/tmp/auto-speech-daemon.sock`, refactor `speak.py` to thin client | M1 | DONE |
+| M3 | Elimination of Dead Sprawl & Caller Realignment | Delete `run_speak.sh`, `pipeline.py`, `short_path.py`, `mpv_controller.py`, `session_dir.py`, adapt callers | M1, M2 | DONE |
+| M4 | Final Milestone: E2E Verification & Adversarial Hardening | Phase 1: 100% pass of E2E tests (Tiers 1-4). Phase 2: Tier 5 adversarial hardening | M1, M2, M3, E2E Track | DONE |
 
 ## Interface Contracts
 ### UNIX Socket IPC: `speak.py` ↔ `narrator_service.py`

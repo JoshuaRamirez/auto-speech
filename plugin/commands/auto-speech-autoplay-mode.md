@@ -1,6 +1,6 @@
 ---
-description: Show or set the end-of-turn autoplay mode. Args = (verbatim | small | medium | large) or empty to show current.
-argument-hint: "[verbatim|small|medium|large]"
+description: Show or set the end-of-turn autoplay mode. Args = (raw | verbatim | small | medium | large) or empty to show current.
+argument-hint: "[raw|verbatim|small|medium|large]"
 allowed-tools: Bash
 ---
 
@@ -10,11 +10,12 @@ You are executing `/auto-speech-autoplay-mode` for the auto-speech plugin.
 
 Parse `$ARGUMENTS` (case-insensitive, trimmed):
 - empty / whitespace → action is `show`
+- `raw` / `bypass` → mode=raw, summary_size stays at whatever it was (bypasses LLM rewriting, speaks text directly as-is)
 - `verbatim` → mode=verbatim, summary_size stays at whatever it was
 - `small`    → mode=summary, summary_size=small
 - `medium`   → mode=summary, summary_size=medium
 - `large`    → mode=summary, summary_size=large
-- anything else → respond `autoplay-mode: unknown value <value> (expected verbatim | small | medium | large)` and stop.
+- anything else → respond `autoplay-mode: unknown value <value> (expected raw | verbatim | small | medium | large)` and stop.
 
 ## show
 

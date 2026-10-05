@@ -1,7 +1,10 @@
 from __future__ import annotations
 
 import hashlib
+import json
+import os
 import re
+import socket
 import sys
 import tempfile
 import threading
@@ -10,8 +13,9 @@ import traceback
 import wave
 from datetime import datetime, timezone
 from pathlib import Path
+from typing import Any
 
-from flask import Blueprint, Flask, Response, jsonify, render_template, request
+from flask import Flask, Response, jsonify, render_template, request
 
 from audio_transcript import AudioTranscript
 from cache_entry import CacheEntry
@@ -72,6 +76,29 @@ def _job_to_dict(job) -> dict | None:
         "error": job.error,
     }
 
+def _send_daemon_socket_request(payload: dict[str, Any], timeout: float = 2.0) -> dict[str, Any] | None:
+    socket_path = Path(os.environ.get("AUTO_SPEECH_DAEMON_SOCK", "/tmp/auto-speech-daemon.sock"))
+    if not socket_path.is_socket():
+        return None
+    try:
+        sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+        sock.settimeout(timeout)
+        sock.connect(str(socket_path))
+        sock.sendall(json.dumps(payload).encode("utf-8") + b"\n")
+        resp_data = b""
+        while b"\n" not in resp_data:
+            chunk = sock.recv(4096)
+            if not chunk:
+                break
+            resp_data += chunk
+        sock.close()
+        if not resp_data:
+            return None
+        return json.loads(resp_data.partition(b"\n")[0].decode("utf-8"))
+    except Exception:
+        return None
+
+
 class HttpRoutes:
     """Configures Flask routing for the auto-speech web server."""
     
@@ -98,6 +125,13 @@ class HttpRoutes:
         self._tts_executor = tts_executor
         self._job_executor = job_executor
         self._lock = lock
+
+    def _dispatch_playback(self, wav_path: Path, source_hash: str | None = None) -> None:
+        if isinstance(self._audio_sink, NativeAudioSink) and source_hash:
+            resp = _send_daemon_socket_request({"action": "play_cache", "source_hash": source_hash})
+            if resp and resp.get("status") in ("queued", "ok"):
+                return
+        self._audio_sink.play(wav_path)
 
     def register(self):
         self.app.add_url_rule("/", view_func=self._index, methods=["GET"])
@@ -148,7 +182,11 @@ class HttpRoutes:
             if hit is not None:
                 wav_path, entry = hit
                 try:
-                    threading.Thread(target=self._audio_sink.play, args=(wav_path,), daemon=True).start()
+                    threading.Thread(
+                        target=self._dispatch_playback,
+                        args=(wav_path, source_hash),
+                        daemon=True,
+                    ).start()
                 except Exception as exc:
                     return jsonify({"error": str(exc)}), 500
                 return jsonify({
@@ -194,7 +232,7 @@ class HttpRoutes:
 
             self._jobs.transition(PHASE_HANDED_OFF)
             try:
-                self._audio_sink.play(wav_path)
+                self._dispatch_playback(wav_path, source_hash)
             except Exception as exc:
                 print(f"[web] playback failed: {exc}", file=sys.stderr)
         except Exception as exc:
@@ -317,23 +355,33 @@ class HttpRoutes:
             return jsonify({"error": "hash is required"}), 400
 
         with self._lock:
-            wav_path = self._resolve_cached_wav(h)
+            wav_path, source_hash = self._resolve_cached_wav_and_hash(h)
             if wav_path is None:
                 return jsonify({"error": f"no cache entry matching {h!r}"}), 404
             try:
-                threading.Thread(target=self._audio_sink.play, args=(wav_path,), daemon=True).start()
+                threading.Thread(
+                    target=self._dispatch_playback,
+                    args=(wav_path, source_hash),
+                    daemon=True,
+                ).start()
             except Exception as exc:
                 return jsonify({"error": str(exc)}), 500
             return jsonify({"status": "started", "wav": str(wav_path)})
 
-    def _resolve_cached_wav(self, h: str) -> Path | None:
+    def _resolve_cached_wav_and_hash(self, h: str) -> tuple[Path | None, str | None]:
         if len(h) == 64 and all(c in "0123456789abcdef" for c in h):
             hit = self._cache.lookup(h)
-            return hit[0] if hit is not None else None
+            if hit is not None:
+                return hit[0], h
+            return None, None
         for wav_path, entry in self._cache.list_by_recency():
             if entry.source_hash.startswith(h):
-                return wav_path
-        return None
+                return wav_path, entry.source_hash
+        return None, None
+
+    def _resolve_cached_wav(self, h: str) -> Path | None:
+        wav, _ = self._resolve_cached_wav_and_hash(h)
+        return wav
 
     def _handle_cache_list(self):
         items = []
@@ -359,6 +407,8 @@ class HttpRoutes:
         return jsonify({"error": "not supported by native audio sink"}), 501
 
     def _handle_end(self):
+        if isinstance(self._audio_sink, NativeAudioSink):
+            _send_daemon_socket_request({"action": "interrupt"})
         self._audio_sink.interrupt()
         return jsonify({"status": "ended"})
 
@@ -372,8 +422,13 @@ class HttpRoutes:
         return jsonify({"error": "not supported by native audio sink"}), 501
 
     def _handle_status(self):
+        active = self._audio_sink.is_playing
+        if isinstance(self._audio_sink, NativeAudioSink):
+            daemon_status = _send_daemon_socket_request({"action": "status"})
+            if daemon_status and daemon_status.get("status") == "ok":
+                active = active or (daemon_status.get("daemon_state") in ("PLAYING", "SYNTHESIZING"))
         payload = {
-            "active": self._audio_sink.is_playing,
+            "active": active,
             "paused": False,
             "position": 0.0,
             "duration": 0.0,

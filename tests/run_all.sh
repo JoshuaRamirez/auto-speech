@@ -44,6 +44,7 @@ NEEDS_DEPS=(
     test_playback_consumer.py
     test_synthesize_endpoint.py
     test_resilient_synthesizer.py
+    test_native_audio_sink_stress.py
 )
 
 # Cheap unit tests first — failures here usually indicate a wider problem.
@@ -64,6 +65,7 @@ CHEAP=(
     test_autoplay_enrollment.py
     test_autoplay_worker.py
     test_say_worker.py
+    test_replay_control.py
     test_mcp_server.py
     test_job_tracker.py
     test_narrator_phase_classifier.py

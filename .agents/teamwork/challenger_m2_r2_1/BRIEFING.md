@@ -1,7 +1,7 @@
-# BRIEFING — 2026-10-03T19:36:30Z
+# BRIEFING — 2026-10-04T12:05:00Z
 
 ## Mission
-Empirically stress-test socket IPC remediations (backlog, retry resilience, abrupt disconnects, latency) and render an APPROVE or REJECT verdict.
+Adversarially re-verify Milestone M2 remediation (single audio owner, daemon-native caching, BUG-M2-01 & BUG-M2-02 resolution, zero regressions) and render APPROVE or REQUEST_CHANGES verdict.
 
 ## 🔒 My Identity
 - Archetype: EMPIRICAL CHALLENGER
@@ -19,32 +19,36 @@ Empirically stress-test socket IPC remediations (backlog, retry resilience, abru
 - Use send_message to communicate back to parent
 
 ## Current Parent
-- Conversation ID: c05df6b8-cecd-49ba-9fb8-8fa47f977488
-- Updated: not yet
+- Conversation ID: c1a38335-0039-4a61-b349-ed364e82603a
+- Updated: 2026-10-04T11:28:59Z
 
 ## Review Scope
 - **Files reviewed**:
   - `plugin/scripts/python/narrator_service.py`
-  - `plugin/scripts/python/speak.py`
-  - `plugin/scripts/python/unix_ipc_server.py`
-  - `tests/test_socket_ipc_stress.py`
-  - `tests/test_socket_server_stress.py`
-  - `tests/e2e/test_tier1_features.py`
-  - `/Users/joshua/Developer/auto-speech/.agents/teamwork/worker_m2_r2/handoff.md`
-  - `/Users/joshua/Developer/auto-speech/.agents/teamwork/challenger_m2_1/handoff.md`
-- **Interface contracts**: `/Users/joshua/Developer/auto-speech/PROJECT.md`, `/Users/joshua/Developer/auto-speech/.agents/teamwork/ORIGINAL_REQUEST.md`
-- **Review criteria**: Concurrency backlog (50+ clients), zero connection drops, abrupt disconnect handling (chunk discard, no queue corruption), client-side retry/connect resilience, latency under 20ms, contract conformance.
+  - `plugin/scripts/python/replay.py`
+  - `plugin/scripts/python/cache_store.py`
+  - `plugin/scripts/python/resilient_synthesizer.py`
+  - `tests/test_challenger_m2_cache_stress.py`
+  - `tests/test_challenger_m2_stress.py`
+  - `tests/test_replay_control.py`
+  - `tests/test_synthesize_endpoint.py`
+  - `tests/run_all.sh`
+  - `tests/e2e/run_e2e.py`
+- **Interface contracts**: `/Users/joshua/Developer/auto-speech/reports/AutoSpeech-Sublimation-RFC-2026-10-04-074610.md`, `/Users/joshua/Developer/auto-speech/PROJECT.md`
+- **Review criteria**: BUG-M2-01 resolution (RFC §4.1.2 INVALID_PAYLOAD vs CACHE_MISS), BUG-M2-02 resolution (replay mock preservation parity), zero regressions in hermetic unit suites (43/43), E2E test suites (74/74), and zero ruff lint errors.
 
 ## Key Decisions Made
-- Executed `tests/test_socket_ipc_stress.py` (11/11 passed in 6.09s).
-- Empirically confirmed high-concurrency burst handling: 50, 75, 100, 128, 150, 200 concurrent threads, plus 50 and 75 concurrent CLI processes all passed with 0 connection drops.
-- Empirically confirmed abrupt disconnect chunk discard across socket resets, timeouts, pipe breaks, and interleaved traffic.
-- Empirically confirmed latency targets: sequential p99 = 1.11ms, concurrent p99 = 2.61ms (well within <20ms budget).
-- Discovered and empirically verified critical failures:
-  1. `test_tier1_r2_daemon_socket_enqueues_to_tts_queue` in `tests/e2e/test_tier1_features.py` FAILS due to extraction of `_DaemonSocketServer` out of `narrator_service.py` into untracked `unix_ipc_server.py`, violating `PROJECT.md` §Feature 4 and `ORIGINAL_REQUEST.md` §R2.
-  2. `tests/test_socket_server_stress.py` corrupted with SyntaxError (`from __future__` import position) and fails execution under unittest.
-  3. 32 ruff lint errors in repository.
-- Verdict rendered: **`REJECT`**.
+- Re-executed `tests/test_challenger_m2_cache_stress.py`: all 17/17 tests PASS (0.745s).
+- Confirmed BUG-M2-01 is completely resolved: `test_play_cache_invalid_hex_chars_returns_invalid_payload`, `test_play_cache_invalid_hex_length_returns_invalid_payload`, and `test_play_cache_missing_or_non_string_source_hash_returns_invalid_payload` all PASS with status "error" and error_code "INVALID_PAYLOAD".
+- Re-executed `tests/test_challenger_m2_stress.py`: all 19/19 tests PASS (8.391s), verifying BUG-M2-02 method mock detection fix in `replay.py`.
+- Formulated and executed 20 additional adversarial edge case probes for `play_cache` (whitespace, uppercase, invalid types, null bytes, bools, dicts, arrays): 100% properly rejected with `INVALID_PAYLOAD`.
+- Verified closed-loop CacheStore disk caching: 0 temporary file leaks across repeated synthesis turns, generation faults, preemption, and concat splits.
+- Re-executed `bash tests/run_all.sh --hermetic`: 43/43 suites PASS with 0 failures.
+- Re-executed `bash tests/run_all.sh --web`: 12/12 tests PASS.
+- Re-executed `.venv/bin/python tests/e2e/run_e2e.py`: 74/74 tests PASS across Tiers 1-5.
+- Verified linting: `.venv/bin/ruff check .` passes with 0 violations.
+- Evaluated decision model (`systemone round`): verdict APPROVE (0.93 confidence).
+- Final Verdict: **`APPROVE`**.
 
 ## Artifact Index
 - `/Users/joshua/Developer/auto-speech/.agents/teamwork/challenger_m2_r2_1/DISPATCH.md` — Task assignment and dispatch log
@@ -54,17 +58,15 @@ Empirically stress-test socket IPC remediations (backlog, retry resilience, abru
 
 ## Attack Surface
 - **Hypotheses tested**:
-  - High concurrency bursts (50-200 threads, 50-75 processes) under `request_queue_size = 128`: CONFIRMED PASS (0 drops).
-  - Client retry loop on transient `ConnectionRefusedError`: CONFIRMED PASS.
-  - Abrupt client disconnect mid-transfer (`SO_LINGER 0`, RST, ECONNRESET, EPIPE, timeout): CONFIRMED PASS (chunks cleanly discarded, 0 items enqueued).
-  - Slowloris read timeout (5.0s): CONFIRMED PASS (times out, aborted=True, 0 items enqueued).
-  - Wire protocol contract conformance in `narrator_service.py`: FAILED (`test_tier1_r2_daemon_socket_enqueues_to_tts_queue` asserts socketserver in `narrator_service.py`).
-  - Integrity of claimed test suites: FAILED (`test_socket_server_stress.py` has SyntaxError; claims in handoff do not match tree).
-- **Vulnerabilities found**:
-  - Architecture split violation: `_DaemonSocketServer` extracted to untracked `unix_ipc_server.py`, breaking Tier 1 E2E contract.
-  - Test suite regression: `tests/test_socket_server_stress.py` broken with SyntaxError.
-  - Lint quality degradation: 32 ruff errors across modified files.
-- **Untested angles**: Full end-to-end audio synthesis on physical audio devices (tested with deterministic test doubles and mpv spies per project policy).
+  - BUG-M2-01: Malformed source_hash in `play_cache` returns INVALID_PAYLOAD: CONFIRMED PASS.
+  - BUG-M2-01: Non-existent 64-hex source_hash in `play_cache` returns CACHE_MISS: CONFIRMED PASS.
+  - BUG-M2-02: `mock.patch.object(replay.NativeAudioSink, "play")` intercepted without daemon routing: CONFIRMED PASS.
+  - Cache hit bypasses MLX synthesis and plays in <5ms: CONFIRMED PASS.
+  - Zero temporary file leaks across 40+ turns, faults, and interruptions: CONFIRMED PASS.
+  - Concurrency & preemption stability under heavy load: CONFIRMED PASS.
+  - Hermetic & E2E suite regression status: CONFIRMED PASS (43/43 hermetic, 74/74 E2E).
+- **Vulnerabilities found**: None. Remediations are sound, conformant, and verified.
+- **Untested angles**: Physical hardware playback through live system audio speaker output (tested with mpv spies and NativeAudioSink isolated doubles per standard policy).
 
 ## Loaded Skills
 - None specified by orchestrator dispatch.

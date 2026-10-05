@@ -1,0 +1,11 @@
+{
+  "auto-speech-autoplay": {
+    "Stop": [
+      {
+        "type": "command",
+        "command": "~/.local/bin/agent-event-router --event Stop --action autoplay",
+        "timeout": 15
+      }
+    ]
+  }
+}

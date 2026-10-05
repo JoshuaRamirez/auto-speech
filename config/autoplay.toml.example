@@ -7,11 +7,15 @@
 
 [autoplay]
 # Mode for the end-of-turn response read:
+#   "raw"      — bypass LLM rewrite completely; send text as-is directly to speech synthesis.
 #   "verbatim" — lossless audio-friendly rewrite (covers every fact,
 #                expands symbols, removes markdown). Long responses
 #                produce long audio.
 #   "summary"  — LLM produces a spoken summary at the size below.
 mode = "summary"
+
+# Bypass LLM rewriting regardless of mode (alternative to mode = "raw"):
+# bypass_llm = false
 
 # Only used when mode = "summary".
 # small  — 1 to 3 sentences, <=60 words, what happened (default)

@@ -1,29 +1,18 @@
-# Task Assignment: reviewer_m2_r2_1 (Milestone M2 Iteration 2 Review)
+## 2026-10-04T11:28:58Z
+You are reviewer_m2_r2_1, a code review agent for Milestone M2 remediation.
+Your working directory is: /Users/joshua/Developer/auto-speech/.agents/teamwork/reviewer_m2_r2_1
+The authoritative user request is in: /Users/joshua/Developer/auto-speech/.agents/teamwork/ORIGINAL_REQUEST.md (MUST read first).
+The task assignment is in: /Users/joshua/Developer/auto-speech/.agents/teamwork/reviewer_m2_r2_1/context.md
+The worker handoff is in: /Users/joshua/Developer/auto-speech/.agents/teamwork/worker_m2_r2/handoff.md
+The authoritative RFC is in: /Users/joshua/Developer/auto-speech/reports/AutoSpeech-Sublimation-RFC-2026-10-04-074610.md
 
-## Objective
-Independently review the remediations implemented by `worker_m2_r2` in `plugin/scripts/python/speak.py` and `plugin/scripts/python/narrator_service.py`.
-
-## Mandatory Reading
-1. `/Users/joshua/Developer/auto-speech/.agents/teamwork/ORIGINAL_REQUEST.md`
-2. `/Users/joshua/Developer/auto-speech/PROJECT.md`
-3. `/Users/joshua/Developer/auto-speech/.agents/teamwork/worker_m2_r2/handoff.md`
-
-## Review Checklist
-1. Verify `_DaemonSocketServer.request_queue_size = 128` resolves Darwin kernel listen backlog drops.
-2. Verify `speak.py` retry loop handles transient connection drops gracefully without regression.
-3. Verify `_DaemonRequestHandler.handle()` properly sets 5.0s read timeout and cleanly discards partial chunks upon disconnect without enqueuing.
-4. Verify `_process_chunk()` direct puts are routed through `_enqueue_phase()` under `_queue_lock`.
-5. Execute unit tests, challenger stress suites (`test_socket_ipc_stress.py`, `test_socket_server_stress.py`), and E2E suites.
-6. Deliver handoff report to `/Users/joshua/Developer/auto-speech/.agents/teamwork/reviewer_m2_r2_1/handoff.md` with explicit verdict `APPROVE` or `REQUEST_CHANGES`.
-
-## 2026-10-03T19:27:52Z
-You are reviewer_m2_r2_1.
-Your working directory: /Users/joshua/Developer/auto-speech/.agents/teamwork/reviewer_m2_r2_1
-Project root: /Users/joshua/Developer/auto-speech
-Original request: /Users/joshua/Developer/auto-speech/.agents/teamwork/ORIGINAL_REQUEST.md
-Project specification: /Users/joshua/Developer/auto-speech/PROJECT.md
-Worker handoff: /Users/joshua/Developer/auto-speech/.agents/teamwork/worker_m2_r2/handoff.md
-
-Read ORIGINAL_REQUEST.md and PROJECT.md first. Read your task assignment in /Users/joshua/Developer/auto-speech/.agents/teamwork/reviewer_m2_r2_1/DISPATCH.md.
-Review Milestone M2 Iteration 2 remediations in speak.py, narrator_service.py, and test suites.
-Run all tests and deliver your report to /Users/joshua/Developer/auto-speech/.agents/teamwork/reviewer_m2_r2_1/handoff.md with APPROVE or REQUEST_CHANGES. Send a message when done.
+Review Milestone M2 remediations:
+1. Examine `narrator_service.py`, `replay.py`, and `tests/test_challenger_m2_stress.py`.
+2. Verify all fixes: `play_cache` payload validation & error discriminator (BUG-M2-01), `replay._is_mocked` parity (BUG-M2-02), and updated method mock assertions.
+3. Run tests:
+   - .venv/bin/python tests/test_challenger_m2_cache_stress.py
+   - bash tests/run_all.sh --hermetic
+   - .venv/bin/ruff check .
+4. Write your handoff report with verdict APPROVE or REQUEST_CHANGES to:
+/Users/joshua/Developer/auto-speech/.agents/teamwork/reviewer_m2_r2_1/handoff.md
+Send completion message back when done.

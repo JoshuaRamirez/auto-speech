@@ -98,6 +98,10 @@ class NativeAudioSink:
                     stderr=subprocess.PIPE,
                 )
                 self._proc = proc
+                try:
+                    Path("/tmp/auto-speech-mpv.pid").write_text(str(proc.pid))
+                except OSError:
+                    pass
 
             try:
                 stdout, stderr = proc.communicate(timeout=timeout)
@@ -113,6 +117,10 @@ class NativeAudioSink:
                     interrupted = self._interrupted
                     if self._proc is proc:
                         self._proc = None
+                        try:
+                            Path("/tmp/auto-speech-mpv.pid").unlink(missing_ok=True)
+                        except OSError:
+                            pass
 
             # If interrupted, return cleanly without error.
             if interrupted or retcode in (-signal.SIGTERM, -signal.SIGKILL, 143, 137):

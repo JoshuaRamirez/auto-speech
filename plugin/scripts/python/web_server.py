@@ -13,6 +13,8 @@ from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timezone
 from pathlib import Path
 
+from typing import Any, Callable
+
 from flask import Flask
 
 from cache_store import CacheStore
@@ -20,15 +22,52 @@ from claude_cli_rewriter import ClaudeCliRewriter, load_default_template
 from config_constants import DEFAULT_SPEED, DEFAULT_VOICE_ID, FALLBACK_CHARS_PER_SEC
 from job_tracker import JobTracker
 from native_audio_sink import NativeAudioSink
+from resilient_synthesizer import ResilientSynthesizer
+from tts_engine import TTSEngine
+from tts_executor import get_default_tts_engine
 from voice_profile import VoiceProfile
 from voice_profile_store import VoiceProfileStore
-from tts_executor import TTSExecutor
 from http_routing import HttpRoutes, _supported_lang_prefixes
+
+
+class TTSExecutor:
+    """Helper for web server TTSEngine execution on a single worker thread."""
+
+    def __init__(self, engine: Any | None = None, synth: ResilientSynthesizer | None = None):
+        self._engine = engine if engine is not None else get_default_tts_engine()
+        self._synth = synth or ResilientSynthesizer(self._engine)
+        self._executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="tts-worker")
+
+    def ensure_loaded(self) -> None:
+        """Pre-warm the model on the worker thread."""
+        future = self._executor.submit(self._engine._ensure_loaded)
+        future.result()
+
+    def submit(self, fn: Callable[..., Any], *args: Any, **kwargs: Any) -> Any:
+        return self._executor.submit(fn, *args, **kwargs).result()
+
+    def shutdown(self, wait: bool = True) -> None:
+        self._executor.shutdown(wait=wait)
+
+    @property
+    def synth(self) -> ResilientSynthesizer:
+        return self._synth
+
+    @property
+    def engine(self) -> TTSEngine:
+        return self._engine
+
 
 _DEFAULT_HOST = "127.0.0.1"
 _DEFAULT_PORT = 7860
 
 def _discover_voices(model_id: str) -> list[str]:
+    if model_id.startswith("apple-say"):
+        from apple_say_engine import get_available_say_voices
+
+        voices = get_available_say_voices()
+        return sorted(voices.keys())
+
     try:
         from huggingface_hub import snapshot_download
         snap = snapshot_download(model_id, allow_patterns=["voices/*"], local_files_only=True)
@@ -80,9 +119,17 @@ class WebServer:
         self._lock = threading.Lock()
         self._profile_store = VoiceProfileStore(_config_voice_path())
         self._profile = self._load_profile()
-
         self._voices = _discover_voices(self._tts_executor.engine.model_id)
         print(f"[web] {len(self._voices)} voices discovered", file=sys.stderr)
+        if self._voices and self._profile.voice_id not in self._voices:
+            best_v = "Ava (Premium)" if "Ava (Premium)" in self._voices else self._voices[0]
+            self._profile = VoiceProfile(
+                voice_id=best_v,
+                speed=self._profile.speed,
+                chars_per_second=self._profile.chars_per_second,
+                calibrated_at=self._profile.calibrated_at,
+                calibration_source_chars=self._profile.calibration_source_chars,
+            )
 
         self._job_executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="speak-job")
         self._jobs = JobTracker()

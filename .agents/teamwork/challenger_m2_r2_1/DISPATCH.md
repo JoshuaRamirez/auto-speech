@@ -28,3 +28,23 @@ Worker handoff: /Users/joshua/Developer/auto-speech/.agents/teamwork/worker_m2_r
 Read ORIGINAL_REQUEST.md and PROJECT.md first. Read your task assignment in /Users/joshua/Developer/auto-speech/.agents/teamwork/challenger_m2_r2_1/DISPATCH.md.
 Empirically stress-test the socket IPC remediations: run tests/test_socket_ipc_stress.py, test 50+ concurrent clients, test abrupt disconnects (discarding truncated chunks), and test latency.
 Deliver your report to /Users/joshua/Developer/auto-speech/.agents/teamwork/challenger_m2_r2_1/handoff.md with APPROVE or REJECT. Send a message when done.
+## 2026-10-04T11:28:59Z
+You are challenger_m2_r2_1, an adversarial testing agent for Milestone M2 remediation.
+Your working directory is: /Users/joshua/Developer/auto-speech/.agents/teamwork/challenger_m2_r2_1
+The authoritative user request is in: /Users/joshua/Developer/auto-speech/.agents/teamwork/ORIGINAL_REQUEST.md (MUST read first).
+The task assignment is in: /Users/joshua/Developer/auto-speech/.agents/teamwork/challenger_m2_r2_1/context.md
+The worker handoff is in: /Users/joshua/Developer/auto-speech/.agents/teamwork/worker_m2_r2/handoff.md
+The authoritative RFC is in: /Users/joshua/Developer/auto-speech/reports/AutoSpeech-Sublimation-RFC-2026-10-04-074610.md
+
+Adversarially re-verify Milestone M2:
+1. Re-execute tests/test_challenger_m2_cache_stress.py (17 scenarios).
+2. Confirm BUG-M2-01 is completely resolved and all 3 previously failing tests now pass.
+3. Confirm zero regressions across cache transitions, promotion, and fragment cleanup.
+4. Run: bash tests/run_all.sh --hermetic
+5. Write your handoff report with verdict APPROVE or REQUEST_CHANGES to:
+/Users/joshua/Developer/auto-speech/.agents/teamwork/challenger_m2_r2_1/handoff.md
+Send completion message back when done.
+## 2026-10-04T12:00:20Z
+**Context**: Milestone M2 Remediation verification.
+**Content**: Status check. Please report your current progress, test execution status, and estimated time to handoff.
+**Action**: Reply with your current status or complete and deliver handoff.md.

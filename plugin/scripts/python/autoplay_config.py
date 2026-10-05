@@ -23,7 +23,7 @@ import tomllib
 from pathlib import Path
 
 
-VALID_MODES = ("verbatim", "summary")
+VALID_MODES = ("verbatim", "summary", "raw", "bypass", "as_is", "direct")
 VALID_SIZES = ("small", "medium", "large")
 
 _PROMPT_FILES = {
@@ -53,7 +53,7 @@ def _candidate_paths() -> list[Path]:
 
 
 def _resolve_prompt(mode: str, size: str) -> Path:
-    if mode == "verbatim":
+    if mode in ("raw", "bypass", "as_is", "direct", "verbatim"):
         key = "verbatim"
     else:
         key = f"summary-{size}"
@@ -78,13 +78,29 @@ def load_config() -> dict:
 
     section = (raw.get("autoplay") if isinstance(raw, dict) else {}) or {}
 
-    mode = str(section.get("mode", "summary")).lower()
-    if mode not in VALID_MODES:
+    env_mode = os.environ.get("AUTO_SPEECH_AUTOPLAY_MODE", "").strip().lower()
+    raw_mode = env_mode or str(section.get("mode", "summary")).lower()
+    if raw_mode not in VALID_MODES:
         print(
-            f"[autoplay] invalid mode {mode!r}; falling back to 'summary'",
+            f"[autoplay] invalid mode {raw_mode!r}; falling back to 'summary'",
             file=sys.stderr,
         )
         mode = "summary"
+    elif raw_mode in ("raw", "bypass", "as_is", "direct"):
+        mode = "raw"
+    else:
+        mode = raw_mode
+
+    bypass_env = os.environ.get("AUTO_SPEECH_BYPASS_LLM") or os.environ.get("AUTO_SPEECH_BYPASS_REWRITE")
+    if bypass_env is not None:
+        bypass_llm = bypass_env.strip().lower() in ("1", "true", "yes", "on")
+    else:
+        bypass_llm = bool(section.get("bypass_llm", section.get("bypass_rewrite", False)))
+
+    if mode == "raw":
+        bypass_llm = True
+    elif bypass_llm:
+        mode = "raw"
 
     size = str(section.get("summary_size", "small")).lower()
     if size not in VALID_SIZES:
@@ -100,6 +116,7 @@ def load_config() -> dict:
     return {
         "config_path": str(config_path) if config_path else None,
         "mode": mode,
+        "bypass_llm": bypass_llm,
         "summary_size": size,
         "prompt_path": str(_resolve_prompt(mode, size)),
         "coalesce_seconds": coalesce,

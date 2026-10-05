@@ -35,8 +35,8 @@ PAYLOAD="$(cat)"
 TRANSCRIPT_PATH=""
 SESSION_ID=""
 if command -v jq >/dev/null 2>&1; then
-    TRANSCRIPT_PATH="$(printf '%s' "$PAYLOAD" | jq -r '.transcript_path // ""' 2>/dev/null || true)"
-    SESSION_ID="$(printf '%s' "$PAYLOAD" | jq -r '.session_id // ""' 2>/dev/null || true)"
+    TRANSCRIPT_PATH="$(printf '%s' "$PAYLOAD" | jq -r '(.transcript_path // .transcriptPath) // ""' 2>/dev/null || true)"
+    SESSION_ID="$(printf '%s' "$PAYLOAD" | jq -r '(.session_id // .conversationId) // ""' 2>/dev/null || true)"
 fi
 
 # Nested-claude-p guard: the autoplay's own cli_rewrite spawns `claude -p`,
@@ -81,6 +81,22 @@ fi
 SESSION_ENROLL_DIR="$HOME/.claude/auto-speech-autoplay-enabled"
 if [[ -z "$SESSION_ID" ]] || [[ ! -e "$SESSION_ENROLL_DIR/$SESSION_ID" ]]; then
     exit 0
+fi
+
+# Ensure audio daemon is running if it exited due to idle timeout
+PID_FILE="/tmp/auto-speech-narrator-daemon.pid"
+DAEMON_ALIVE=0
+if [[ -f "$PID_FILE" ]]; then
+    DAEMON_PID="$(cat "$PID_FILE" 2>/dev/null || true)"
+    if [[ -n "${DAEMON_PID:-}" ]] && kill -0 "$DAEMON_PID" 2>/dev/null; then
+        DAEMON_ALIVE=1
+    fi
+fi
+if [[ "$DAEMON_ALIVE" -eq 0 ]]; then
+    START_SCRIPT="$PLUGIN_SCRIPTS_DIR/shell/narrator_service_start.sh"
+    if [[ -x "$START_SCRIPT" ]]; then
+        ( "$START_SCRIPT" >/dev/null 2>&1 & ) 2>/dev/null
+    fi
 fi
 
 # Per-session beacon path. Falls back to the legacy global beacon when

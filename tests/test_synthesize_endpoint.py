@@ -22,8 +22,8 @@ from unittest import mock
 
 SRC = Path(__file__).resolve().parents[1] / "plugin" / "scripts" / "python"
 sys.path.insert(0, str(SRC))
-import web_server
-import tts_engine
+import tts_engine  # noqa: E402
+import web_server  # noqa: E402
 
 
 # A syntactically-valid Chrome extension origin (32 chars of a-p).
@@ -41,9 +41,6 @@ def _write_tiny_wav(path: Path) -> None:
 
 def _make_server(tmp_path: Path):
     """Build a WebServer with MLX fully stubbed and cache under tmp_path."""
-    import web_server
-    import tts_engine
-
     synth_calls = {"n": 0}
 
     def fake_synthesize(text, profile, out_path):  # noqa: ANN001 — instance attr, no self
@@ -144,9 +141,6 @@ def test_split_span_granularity() -> None:
 
 def test_resilient_split_recovers_from_generate_fault() -> None:
     """A span that trips the generate bug is split finer until it succeeds."""
-    import web_server
-    import tts_engine
-
     with tempfile.TemporaryDirectory() as td:
         tmp_path = Path(td)
         server, _ = _make_server(tmp_path)
@@ -170,9 +164,6 @@ def test_resilient_split_recovers_from_generate_fault() -> None:
 
 def test_resilient_split_skips_unspeakable_leaf() -> None:
     """An unspeakable fragment is dropped, not fatal, when others speak."""
-    import web_server
-    import tts_engine
-
     with tempfile.TemporaryDirectory() as td:
         tmp_path = Path(td)
         server, _ = _make_server(tmp_path)
@@ -242,9 +233,6 @@ def test_synthesize_not_blocked_by_inflight_rewrite() -> None:
     (config/cache/), spawn a real mpv, and potentially wait minutes on an
     active playback session."""
     import threading
-
-    import web_server
-    import tts_engine
 
     with tempfile.TemporaryDirectory() as td:
         server, _ = _make_server(Path(td))

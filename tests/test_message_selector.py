@@ -267,6 +267,26 @@ def test_transcript_reader_raises_on_malformed_line_with_line_number() -> None:
         path.unlink()
 
 
+def test_select_antigravity_transcript_format() -> None:
+    path = _write_jsonl(
+        [
+            {"source": "USER", "type": "USER_INPUT", "content": "What is the status?"},
+            {
+                "source": "MODEL",
+                "type": "PLANNER_RESPONSE",
+                "content": "All systems operational.",
+                "created_at": "2026-10-04T21:00:00Z",
+            },
+        ]
+    )
+    try:
+        msg = MessageSelector().select(path, 1)
+        assert msg.text == "All systems operational."
+        assert msg.timestamp == "2026-10-04T21:00:00Z"
+    finally:
+        path.unlink()
+
+
 def main() -> int:
     tests = [
         test_select_first_picks_most_recent_assistant,
@@ -281,6 +301,7 @@ def main() -> int:
         test_select_raises_on_zero_or_negative_n,
         test_transcript_reader_skips_blank_lines,
         test_transcript_reader_raises_on_malformed_line_with_line_number,
+        test_select_antigravity_transcript_format,
     ]
     for t in tests:
         t()

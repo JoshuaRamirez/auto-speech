@@ -3,23 +3,37 @@
 from __future__ import annotations
 
 import argparse
+import os
 import sys
 from pathlib import Path
+from typing import Any
 
 from cache_store import CacheStore
-
+from daemon_client import DaemonClient
+from native_audio_sink import AudioSinkError, NativeAudioSink
 
 EXIT_OK = 0
 EXIT_NO_CACHE_ENTRY = 2
 EXIT_PLAYBACK_FAIL = 6
 EXIT_INTERRUPTED = 130
 
+DEFAULT_SOCKET_PATH = Path("/tmp/auto-speech-daemon.sock")
+
 
 def _default_cache_root() -> Path:
     return Path(__file__).resolve().parents[3] / "config" / "cache"
 
 
-def main(argv: list[str] | None = None) -> int:
+def _get_socket_path() -> Path:
+    return Path(os.environ.get("AUTO_SPEECH_DAEMON_SOCK", str(DEFAULT_SOCKET_PATH)))
+
+
+def main(
+    argv: list[str] | None = None,
+    *,
+    sink: Any | None = None,
+    client: Any | None = None,
+) -> int:
     p = argparse.ArgumentParser(
         description="Play the Nth-most-recent cached /speak run (default 1)."
     )
@@ -57,11 +71,49 @@ def main(argv: list[str] | None = None) -> int:
         file=sys.stderr,
     )
 
+    # If sink was explicitly injected, respect caller's choice (e.g. testing)
+    if sink is not None:
+        try:
+            sink.play(wav_path)
+            return EXIT_OK
+        except AudioSinkError as exc:
+            print(f"replay: playback failed: {exc}", file=sys.stderr)
+            return EXIT_PLAYBACK_FAIL
+        except KeyboardInterrupt:
+            sink.interrupt()
+            return EXIT_INTERRUPTED
+
+    # Steady-state SAO: Route through daemon socket when client injected or daemon alive
+    if client is not None:
+        try:
+            resp = client.play_cache(entry.source_hash)
+            if resp.status in ("ok", "queued"):
+                return EXIT_OK
+        except KeyboardInterrupt:
+            return EXIT_INTERRUPTED
+        except Exception:
+            pass
+    elif _get_socket_path().is_socket():
+        try:
+            c = DaemonClient(socket_path=_get_socket_path())
+            resp = c.play_cache(entry.source_hash)
+            if resp.status in ("ok", "queued"):
+                return EXIT_OK
+        except KeyboardInterrupt:
+            return EXIT_INTERRUPTED
+        except Exception:
+            pass
+
+    # Offline Fallback
+    active_sink = NativeAudioSink()
     try:
-        print("Replaying:", wav_path)
-    except Exception as exc:
-        print(f"replay: mpv start failed: {exc}", file=sys.stderr)
+        active_sink.play(wav_path)
+    except AudioSinkError as exc:
+        print(f"replay: playback failed: {exc}", file=sys.stderr)
         return EXIT_PLAYBACK_FAIL
+    except KeyboardInterrupt:
+        active_sink.interrupt()
+        return EXIT_INTERRUPTED
     return EXIT_OK
 
 

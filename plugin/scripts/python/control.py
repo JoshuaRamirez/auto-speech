@@ -5,9 +5,6 @@ from __future__ import annotations
 import argparse
 import sys
 
-from mpv_ipc import MpvIpc, MpvIpcError
-
-
 EXIT_OK = 0
 EXIT_NO_SESSION = 2
 EXIT_IPC_FAIL = 3
@@ -15,52 +12,27 @@ EXIT_BAD_ARG = 4
 
 
 def _ensure_session() -> int:
-    if not False:
-        print("control: no active playback session.", file=sys.stderr)
-        return EXIT_NO_SESSION
-    return EXIT_OK
-
-
-def _send(cmd: list) -> int:
-    try:
-        reply = MpvIpc.send(cmd, "")
-    except MpvIpcError as exc:
-        print(f"control: IPC failed: {exc}", file=sys.stderr)
-        return EXIT_IPC_FAIL
-    err = reply.get("error")
-    if err and err != "success":
-        print(f"control: mpv error: {err}  reply={reply}", file=sys.stderr)
-        return EXIT_IPC_FAIL
-    return EXIT_OK
+    print(
+        "control: no active playback session (unified daemon uses synchronous audio).",
+        file=sys.stderr,
+    )
+    return EXIT_NO_SESSION
 
 
 def _cmd_pause(_args: argparse.Namespace) -> int:
-    rc = _ensure_session()
-    if rc != EXIT_OK:
-        return rc
-    return _send(["set_property", "pause", True])
+    return _ensure_session()
 
 
 def _cmd_resume(_args: argparse.Namespace) -> int:
-    rc = _ensure_session()
-    if rc != EXIT_OK:
-        return rc
-    return _send(["set_property", "pause", False])
+    return _ensure_session()
 
 
 def _cmd_restart(_args: argparse.Namespace) -> int:
-    rc = _ensure_session()
-    if rc != EXIT_OK:
-        return rc
-    return _send(["seek", 0, "absolute"])
+    return _ensure_session()
 
 
 def _cmd_end(_args: argparse.Namespace) -> int:
-    rc = _ensure_session()
-    if rc != EXIT_OK:
-        return rc
-    rc = _send(["quit"])
-    return rc
+    return _ensure_session()
 
 
 def _cmd_seek(args: argparse.Namespace) -> int:
@@ -71,35 +43,7 @@ def _cmd_seek(args: argparse.Namespace) -> int:
     if not target:
         print("control: seek requires a target (+N, -N, N, or 'end')", file=sys.stderr)
         return EXIT_BAD_ARG
-    if target.lower() == "end":
-        try:
-            reply = MpvIpc.send(["get_property", "duration"], "")
-        except MpvIpcError as exc:
-            print(f"control: IPC failed: {exc}", file=sys.stderr)
-            return EXIT_IPC_FAIL
-        duration = reply.get("data")
-        if not isinstance(duration, (int, float)):
-            print(f"control: mpv did not report duration: {reply}", file=sys.stderr)
-            return EXIT_IPC_FAIL
-        # Seek to half-a-second before the end so mpv emits a final moment of audio.
-        target_seconds = max(0.0, float(duration) - 0.5)
-        return _send(["seek", target_seconds, "absolute"])
-    if target.startswith("+") or target.startswith("-"):
-        try:
-            offset = float(target)
-        except ValueError:
-            print(f"control: seek relative must be a number, got {target!r}", file=sys.stderr)
-            return EXIT_BAD_ARG
-        return _send(["seek", offset, "relative"])
-    try:
-        absolute = float(target)
-    except ValueError:
-        print(
-            f"control: seek absolute must be a number or 'end', got {target!r}",
-            file=sys.stderr,
-        )
-        return EXIT_BAD_ARG
-    return _send(["seek", absolute, "absolute"])
+    return EXIT_OK
 
 
 def main(argv: list[str] | None = None) -> int:

@@ -181,6 +181,34 @@ def test_plugin_mcp_manifest_points_at_the_launcher() -> None:
     assert launcher.is_file() and os.access(launcher, os.X_OK), launcher
 
 
+def test_speak_invokes_daemon_client_directly() -> None:
+    from unittest.mock import MagicMock
+    from daemon_client import DaemonResponse, Priority
+
+    mock_client = MagicMock()
+    mock_client.speak.return_value = DaemonResponse(status="ok", action="speak")
+
+    server = McpServer(client=mock_client)
+    res = server.handle_line(_req("tools/call", {"name": "speak", "arguments": {"text": "hello sublimated"}}))
+    assert res["result"]["isError"] is False
+    assert "Queued 16 characters" in res["result"]["content"][0]["text"]
+    mock_client.speak.assert_called_once_with("hello sublimated", priority=Priority.EXPLICIT_MCP)
+
+
+def test_speak_falls_back_to_spawn_say_worker_on_connection_error() -> None:
+    from unittest.mock import MagicMock, patch
+
+    mock_client = MagicMock()
+    mock_client.speak.side_effect = ConnectionError("daemon offline")
+
+    with patch("mcp_server.spawn_say_worker") as mock_spawn:
+        server = McpServer(client=mock_client)
+        res = server.handle_line(_req("tools/call", {"name": "speak", "arguments": {"text": "fallback text"}}))
+        assert res["result"]["isError"] is False
+        assert "Queued 13 characters" in res["result"]["content"][0]["text"]
+        mock_spawn.assert_called_once_with("fallback text")
+
+
 def main() -> int:
     tests = [
         test_initialize_echoes_supported_protocol,
@@ -197,6 +225,8 @@ def main() -> int:
         test_response_messages_are_ignored,
         test_serve_writes_one_line_per_request,
         test_plugin_mcp_manifest_points_at_the_launcher,
+        test_speak_invokes_daemon_client_directly,
+        test_speak_falls_back_to_spawn_say_worker_on_connection_error,
     ]
     for t in tests:
         t()
