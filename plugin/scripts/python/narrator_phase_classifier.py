@@ -36,14 +36,21 @@ TOOL_CATEGORY: dict[str, Category] = {
     "NotebookRead": Category.EXPLORE,
     "WebFetch": Category.EXPLORE,
     "WebSearch": Category.EXPLORE,
+    "view_file": Category.EXPLORE,
+    "search_web": Category.EXPLORE,
+    "read_url_content": Category.EXPLORE,
     "Edit": Category.EDIT,
     "Write": Category.EDIT,
     "NotebookEdit": Category.EDIT,
     "MultiEdit": Category.EDIT,
+    "replace_file_content": Category.EDIT,
+    "write_to_file": Category.EDIT,
     "Bash": Category.RUN,
     "BashOutput": Category.RUN,
+    "run_command": Category.RUN,
     "Agent": Category.DELEGATE,
     "Task": Category.DELEGATE,
+    "invoke_subagent": Category.DELEGATE,
 }
 
 
@@ -201,6 +208,7 @@ def _summarize_event(tool_name: str, payload: dict) -> str:
         "NotebookEdit",
         "view_file",
         "replace_file_content",
+        "write_to_file",
     ):
         fp = ti.get("file_path", "") or ti.get("TargetFile", "") or ti.get("AbsolutePath", "")
         if fp:
@@ -214,8 +222,17 @@ def _summarize_event(tool_name: str, payload: dict) -> str:
         return format_output(f"Glob: {ti.get('pattern', '')[:80]}")
     if tool_name == "LS":
         return format_output(f"LS: {ti.get('path', '')}")
-    if tool_name == "WebFetch":
-        return format_output(f"WebFetch: {ti.get('url', '')[:80]}")
+    if tool_name in ("WebFetch", "read_url_content"):
+        url = ti.get("url", "") or ti.get("Url", "")
+        return format_output(f"{tool_name}: {url[:80]}")
+    if tool_name in ("WebSearch", "search_web"):
+        query = ti.get("query", "")
+        return format_output(f"{tool_name}: {query[:80]}")
+    if tool_name in ("Agent", "Task", "invoke_subagent"):
+        sub = ti.get("subagent_type") or ti.get("prompt") or ti.get("Role")
+        if not sub and isinstance(ti.get("Subagents"), list) and ti["Subagents"]:
+            sub = ti["Subagents"][0].get("Role") or ti["Subagents"][0].get("TypeName")
+        return format_output(f"{tool_name}: {sub or 'subagent'}")
     if tool_name == "ask_question":
         return format_output("Asking User a Question")
 

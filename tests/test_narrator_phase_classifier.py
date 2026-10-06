@@ -135,6 +135,46 @@ def test_event_summary_includes_tool_argument() -> None:
     assert "ls -la" in closed.events[0].summary
 
 
+def test_agent_tools_categorization_and_summaries() -> None:
+    clf = PhaseClassifier()
+    clf.feed(_post_tool(1.0, "view_file", tool_input={"AbsolutePath": "/tmp/test.py"}))
+    clf.feed(_post_tool(2.0, "search_web", tool_input={"query": "python asyncio"}))
+    clf.feed(_post_tool(3.0, "read_url_content", tool_input={"Url": "https://python.org"}))
+    phase1 = clf.flush()
+    assert phase1 is not None
+    assert phase1.category == Category.EXPLORE
+    assert len(phase1.events) == 3
+    assert "test.py" in phase1.events[0].summary
+    assert "python asyncio" in phase1.events[1].summary
+    assert "python.org" in phase1.events[2].summary
+
+    clf.feed(_post_tool(4.0, "write_to_file", tool_input={"TargetFile": "/tmp/out.py"}))
+    clf.feed(_post_tool(5.0, "replace_file_content", tool_input={"TargetFile": "/tmp/out.py"}))
+    phase2 = clf.flush()
+    assert phase2 is not None
+    assert phase2.category == Category.EDIT
+    assert len(phase2.events) == 2
+    assert "out.py" in phase2.events[0].summary
+
+    clf.feed(_post_tool(6.0, "run_command", tool_input={"CommandLine": "pytest tests/"}))
+    phase3 = clf.flush()
+    assert phase3 is not None
+    assert phase3.category == Category.RUN
+    assert "pytest tests/" in phase3.events[0].summary
+
+    clf.feed(
+        _post_tool(
+            7.0,
+            "invoke_subagent",
+            tool_input={"Subagents": [{"Role": "Code Reviewer", "TypeName": "research"}]},
+        )
+    )
+    phase4 = clf.flush()
+    assert phase4 is not None
+    assert phase4.category == Category.DELEGATE
+    assert "Code Reviewer" in phase4.events[0].summary
+
+
 def main() -> int:
     tests = [
         test_category_change_closes_phase,
@@ -146,6 +186,7 @@ def main() -> int:
         test_pre_tool_use_events_are_ignored,
         test_event_with_no_tool_name_is_ignored,
         test_event_summary_includes_tool_argument,
+        test_agent_tools_categorization_and_summaries,
     ]
     for t in tests:
         t()
