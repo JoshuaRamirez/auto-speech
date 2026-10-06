@@ -510,6 +510,32 @@ class TestSpeakClientStructuredWire1(unittest.TestCase):
             self.assertEqual(rc, 0)
             mock_send.assert_called_once_with("cli text", session_id="sess-123", priority=1)
 
+    def test_empty_stdin_with_source_hash_and_priority_calls_play_cache(self) -> None:
+        """When empty stdin and --source-hash with --priority is provided, play_cache is invoked with priority."""
+        valid_hash = "e" * 64
+        with (
+            tempfile.TemporaryDirectory() as tmpdir,
+            mock.patch("sys.stdin", io.StringIO("")),
+        ):
+            mock_client = mock.MagicMock()
+            mock_client.play_cache.return_value = speak.DaemonResponse(status="ok", action="play_cache")
+            with mock.patch("pathlib.Path.resolve") as mock_resolve:
+                mock_resolve.return_value = Path(tmpdir) / "plugin" / "scripts" / "python" / "speak.py"
+                target_wav = Path(tmpdir) / "config" / "cache" / valid_hash[:16] / "full.wav"
+                target_wav.parent.mkdir(parents=True, exist_ok=True)
+                target_wav.touch()
+
+                rc = speak.main(
+                    ["--source-hash", valid_hash, "--priority", "3", "--session-id", "sess-abc"],
+                    client=mock_client,
+                )
+                self.assertEqual(rc, 0)
+                mock_client.play_cache.assert_called_once_with(
+                    valid_hash,
+                    session_id="sess-abc",
+                    priority=3,
+                )
+
 
 if __name__ == "__main__":
     unittest.main()

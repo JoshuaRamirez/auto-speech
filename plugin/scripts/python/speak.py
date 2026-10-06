@@ -176,7 +176,8 @@ def main(
                     cache_kwargs["session_id"] = args.session_id
                 if args.priority != int(Priority.EXPLICIT_MCP):
                     cache_kwargs["priority"] = args.priority
-                elif client is not None:
+
+                if client is not None:
                     try:
                         resp = client.play_cache(args.source_hash, **cache_kwargs)
                         if resp.status in ("ok", "queued"):
