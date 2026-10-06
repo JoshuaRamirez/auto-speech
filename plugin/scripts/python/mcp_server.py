@@ -197,7 +197,9 @@ class McpServer:
             else:
                 client = self._client or DaemonClient()
                 try:
-                    client.speak(text, priority=Priority.EXPLICIT_MCP)
+                    resp = client.speak(text, priority=Priority.EXPLICIT_MCP)
+                    if resp.status == "error":
+                        spawn_say_worker(text)
                 except ConnectionError:
                     spawn_say_worker(text)
         except OSError as exc:

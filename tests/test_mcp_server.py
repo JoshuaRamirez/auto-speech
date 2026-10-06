@@ -209,6 +209,21 @@ def test_speak_falls_back_to_spawn_say_worker_on_connection_error() -> None:
         mock_spawn.assert_called_once_with("fallback text")
 
 
+def test_speak_falls_back_to_spawn_say_worker_on_daemon_error_status() -> None:
+    from unittest.mock import MagicMock, patch
+    from daemon_client import DaemonResponse
+
+    mock_client = MagicMock()
+    mock_client.speak.return_value = DaemonResponse(status="error", action="speak", message="queue full")
+
+    with patch("mcp_server.spawn_say_worker") as mock_spawn:
+        server = McpServer(client=mock_client)
+        res = server.handle_line(_req("tools/call", {"name": "speak", "arguments": {"text": "status error fallback"}}))
+        assert res["result"]["isError"] is False
+        assert "Queued 21 characters" in res["result"]["content"][0]["text"]
+        mock_spawn.assert_called_once_with("status error fallback")
+
+
 def main() -> int:
     tests = [
         test_initialize_echoes_supported_protocol,
@@ -227,6 +242,7 @@ def main() -> int:
         test_plugin_mcp_manifest_points_at_the_launcher,
         test_speak_invokes_daemon_client_directly,
         test_speak_falls_back_to_spawn_say_worker_on_connection_error,
+        test_speak_falls_back_to_spawn_say_worker_on_daemon_error_status,
     ]
     for t in tests:
         t()
