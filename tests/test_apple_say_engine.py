@@ -100,7 +100,7 @@ class TestAppleSayEngine(unittest.TestCase):
                 self.assertEqual(cmd[3:5], ["-r", "212"])
                 self.assertEqual(cmd[5:7], ["--file-format=WAVE", "--data-format=LEI16@24000"])
                 self.assertEqual(cmd[7:9], ["-o", str(out_wav.with_suffix(".wav.partial"))])
-                self.assertEqual(cmd[9], "Hello world")
+                self.assertEqual(cmd[9:11], ["--", "Hello world"])
 
     def test_default_system_voice_omits_flags(self) -> None:
         engine = AppleSayEngine()
@@ -126,7 +126,22 @@ class TestAppleSayEngine(unittest.TestCase):
                 self.assertNotIn("-v", cmd)
                 self.assertNotIn("-r", cmd)
                 self.assertIn("--file-format=WAVE", cmd)
-                self.assertEqual(cmd[-1], "Hello default world")
+                self.assertEqual(cmd[-2:], ["--", "Hello default world"])
+
+    def test_synthesize_text_starting_with_dash_does_not_fail(self) -> None:
+        engine = AppleSayEngine(voice="Ava (Premium)")
+        with tempfile.TemporaryDirectory() as tmpdir:
+            out_wav = Path(tmpdir) / "dash.wav"
+
+            def fake_run(cmd, capture_output=True, text=True, check=False):
+                partial = out_wav.with_suffix(".wav.partial")
+                partial.write_bytes(b"RIFFdummydataWAVE")
+                return mock.Mock(returncode=0, stdout="", stderr="")
+
+            with mock.patch("subprocess.run", side_effect=fake_run) as mock_run:
+                engine.synthesize("-v is a flag", out_path=out_wav)
+                cmd = mock_run.call_args[0][0]
+                self.assertEqual(cmd[-2:], ["--", "-v is a flag"])
 
     def test_speed_override_adds_rate_flag(self) -> None:
         engine = AppleSayEngine()

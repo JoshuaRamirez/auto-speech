@@ -19,6 +19,8 @@ if "unittest" in sys.modules:
 
 logger = logging.getLogger(__name__)
 
+MPV_PID_PATH = Path("/tmp/auto-speech-mpv.pid")
+
 
 class AudioSinkError(RuntimeError):
     """Base exception for all NativeAudioSink errors."""
@@ -99,7 +101,7 @@ class NativeAudioSink:
                 )
                 self._proc = proc
                 try:
-                    Path("/tmp/auto-speech-mpv.pid").write_text(str(proc.pid))
+                    MPV_PID_PATH.write_text(str(proc.pid))
                 except OSError:
                     pass
 
@@ -118,8 +120,9 @@ class NativeAudioSink:
                     if self._proc is proc:
                         self._proc = None
                         try:
-                            Path("/tmp/auto-speech-mpv.pid").unlink(missing_ok=True)
-                        except OSError:
+                            if MPV_PID_PATH.is_file() and MPV_PID_PATH.read_text().strip() == str(proc.pid):
+                                MPV_PID_PATH.unlink(missing_ok=True)
+                        except (OSError, ValueError):
                             pass
 
             # If interrupted, return cleanly without error.

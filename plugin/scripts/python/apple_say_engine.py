@@ -221,7 +221,7 @@ class AppleSayEngine:
                 text_file = Path(tf_path)
                 cmd.extend(["-f", str(text_file)])
             else:
-                cmd.append(text)
+                cmd.extend(["--", text])
 
             res = subprocess.run(cmd, capture_output=True, text=True, check=False)
             if res.returncode != 0:
