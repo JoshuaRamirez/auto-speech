@@ -1,8 +1,9 @@
 import os
 import shutil
 import sys
+from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor
-from typing import Any, Callable, TypeVar
+from typing import Any, TypeVar
 
 from apple_say_engine import AppleSayEngine
 from resilient_synthesizer import ResilientSynthesizer

@@ -14,7 +14,7 @@ import time
 from dataclasses import dataclass
 from enum import IntEnum
 from pathlib import Path
-from typing import Any, Optional
+from typing import Any
 
 from config_constants import DEFAULT_SPEED, DEFAULT_VOICE_ID
 
@@ -38,9 +38,9 @@ class DaemonResponse:
     action: str
     cache_hit: bool = False
     message: str = ""
-    error_code: Optional[str] = None
+    error_code: str | None = None
     queue_depth: int = 0
-    raw: Optional[dict[str, Any]] = None
+    raw: dict[str, Any] | None = None
 
 
 class DaemonClient:
@@ -48,7 +48,7 @@ class DaemonClient:
 
     def __init__(
         self,
-        socket_path: Optional[Path | str] = None,
+        socket_path: Path | str | None = None,
         timeout: float = 5.0,
         max_retries: int = 2,
     ) -> None:
@@ -72,7 +72,7 @@ class DaemonClient:
         try:
             resp = self.status()
             return resp.status == "ok"
-        except Exception:
+        except Exception:  # noqa: BLE001 — any probe failure means the daemon is down
             return False
 
     def speak(
@@ -80,8 +80,8 @@ class DaemonClient:
         text: str,
         *,
         priority: Priority = Priority.EXPLICIT_MCP,
-        source_hash: Optional[str] = None,
-        session_id: Optional[str] = None,
+        source_hash: str | None = None,
+        session_id: str | None = None,
         voice_id: str = DEFAULT_VOICE_ID,
         speed: float = DEFAULT_SPEED,
     ) -> DaemonResponse:
@@ -102,7 +102,7 @@ class DaemonClient:
         source_hash: str,
         *,
         priority: Priority = Priority.EXPLICIT_MCP,
-        session_id: Optional[str] = None,
+        session_id: str | None = None,
     ) -> DaemonResponse:
         """Plays pre-cached audio immediately by source hash."""
         payload: dict[str, Any] = {
@@ -113,7 +113,7 @@ class DaemonClient:
         }
         return self._send_request(payload)
 
-    def interrupt(self, session_id: Optional[str] = None) -> DaemonResponse:
+    def interrupt(self, session_id: str | None = None) -> DaemonResponse:
         """Halts active audio playback immediately and clears preemptible items."""
         payload: dict[str, Any] = {
             "action": "interrupt",
@@ -127,7 +127,7 @@ class DaemonClient:
 
     def _send_request(self, payload: dict[str, Any]) -> DaemonResponse:
         line = json.dumps(payload).encode("utf-8") + b"\n"
-        last_err: Optional[Exception] = None
+        last_err: Exception | None = None
 
         for attempt in range(self._max_retries + 1):
             sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
@@ -157,7 +157,7 @@ class DaemonClient:
                     queue_depth=data.get("queue_depth", 0),
                     raw=data,
                 )
-            except Exception as e:
+            except Exception as e:  # noqa: BLE001 — any IPC failure is retried
                 last_err = e
                 if attempt < self._max_retries:
                     time.sleep(0.02 * (attempt + 1))

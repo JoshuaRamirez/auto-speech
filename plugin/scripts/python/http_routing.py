@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import logging
 import os
 import re
 import socket
@@ -11,27 +12,27 @@ import threading
 import time
 import traceback
 import wave
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
-
-from flask import Flask, Response, jsonify, render_template, request
 
 from audio_transcript import AudioTranscript
 from cache_entry import CacheEntry
 from cache_store import CacheStore
 from chunk_planner import ChunkPlanner
+from claude_cli_rewriter import ClaudeCliRewriteError, ClaudeCliRewriter, ClaudeCliUnavailable
 from config_constants import BASE_DURATION_SECONDS, BOUNDARY_TOLERANCE, FALLBACK_CHARS_PER_SEC
+from flask import Flask, Response, jsonify, render_template, request
 from job_state import PHASE_GENERATING, PHASE_HANDED_OFF, PHASE_REWRITING
 from job_tracker import JobTracker
-from claude_cli_rewriter import ClaudeCliRewriteError, ClaudeCliUnavailable, ClaudeCliRewriter
+from native_audio_sink import NativeAudioSink
 from tts_engine import TTSGenerationError, TTSNoSpeakableContentError
 from voice_profile import VoiceProfile
-from native_audio_sink import NativeAudioSink
-from wav_concatenator import WavConcatError, WavConcatenator
+from wav_concatenator import WavConcatenator, WavConcatError
 
 _EXTENSION_ORIGIN_RE = re.compile(r"chrome-extension://[a-p]{32}")
 _SYNTH_MAX_CHARS = 20000
+logger = logging.getLogger(__name__)
 
 def _add_cors_headers(resp):
     origin = request.headers.get("Origin", "")
@@ -51,7 +52,7 @@ def _text_field(body: dict, name: str, default: str = "") -> str | None:
     return raw.strip()
 
 def _synthesize_hash(text: str, voice_id: str, speed: float) -> str:
-    key_input = text.encode("utf-8") + b"\x00" + f"{voice_id}:{speed}".encode("utf-8") + b"\x00synthesize"
+    key_input = text.encode("utf-8") + b"\x00" + f"{voice_id}:{speed}".encode() + b"\x00synthesize"
     return hashlib.sha256(key_input).hexdigest()
 
 def _wav_duration_seconds(path: Path) -> float:
@@ -95,7 +96,7 @@ def _send_daemon_socket_request(payload: dict[str, Any], timeout: float = 2.0) -
         if not resp_data:
             return None
         return json.loads(resp_data.partition(b"\n")[0].decode("utf-8"))
-    except Exception:
+    except Exception:  # noqa: BLE001 — daemon probe failure yields no payload
         return None
 
 
@@ -157,7 +158,7 @@ class HttpRoutes:
         )
 
     def _compute_hash(self, text: str, mode: str = "rewrite") -> str:
-        key_input = text.encode("utf-8") + b"\x00" + f"{self._profile.voice_id}:{self._profile.speed}".encode("utf-8")
+        key_input = text.encode("utf-8") + b"\x00" + f"{self._profile.voice_id}:{self._profile.speed}".encode()
         if mode != "rewrite":
             key_input += b"\x00" + mode.encode("utf-8")
         return hashlib.sha256(key_input).hexdigest()
@@ -187,7 +188,7 @@ class HttpRoutes:
                         args=(wav_path, source_hash),
                         daemon=True,
                     ).start()
-                except Exception as exc:
+                except Exception as exc:  # noqa: BLE001 — dispatch failure returns HTTP 500
                     return jsonify({"error": str(exc)}), 500
                 return jsonify({
                     "status": "cache_hit",
@@ -226,19 +227,19 @@ class HttpRoutes:
 
             try:
                 wav_path = self._tts_executor.submit(self._synthesize_to_cache, audio_text, self._profile, source_hash)
-            except Exception as exc:
+            except Exception as exc:  # noqa: BLE001 — synthesis failure is recorded on the job
                 self._jobs.fail(f"pipeline crashed: {exc!r}")
                 return
 
             self._jobs.transition(PHASE_HANDED_OFF)
             try:
                 self._dispatch_playback(wav_path, source_hash)
-            except Exception as exc:
+            except Exception as exc:  # noqa: BLE001 — playback failure is logged, not raised
                 print(f"[web] playback failed: {exc}", file=sys.stderr)
-        except Exception as exc:
+        except Exception as exc:  # noqa: BLE001 — pipeline crash is recorded on the job
             try:
                 self._jobs.fail(f"crash: {exc!r}")
-            except Exception as exc2:
+            except Exception as exc2:  # noqa: BLE001 — failure recorder must not raise
                 print(f"[web] could not record job failure: {exc2!r}", file=sys.stderr)
 
     def _handle_voices(self):
@@ -284,7 +285,7 @@ class HttpRoutes:
             return jsonify({"error": "no speakable text", "reason": str(exc)}), 422
         except TTSGenerationError as exc:
             return jsonify({"error": f"synthesis failed: {exc}"}), 500
-        except Exception as exc:
+        except Exception as exc:  # noqa: BLE001 — unexpected synthesis errors return HTTP 500
             traceback.print_exc(file=sys.stderr)
             return jsonify({"error": f"synthesis crashed: {exc!r}"}), 500
 
@@ -309,7 +310,7 @@ class HttpRoutes:
                 speed=profile.speed,
                 char_count=len(text),
                 duration_seconds=duration,
-                created_at=datetime.now(timezone.utc).isoformat(timespec="seconds").replace("+00:00", "Z"),
+                created_at=datetime.now(UTC).isoformat(timespec="seconds").replace("+00:00", "Z"),
                 chars_per_second_at_creation=cps,
             )
             return self._cache.promote(source_hash, tmp_wav, entry)
@@ -364,7 +365,7 @@ class HttpRoutes:
                     args=(wav_path, source_hash),
                     daemon=True,
                 ).start()
-            except Exception as exc:
+            except Exception as exc:  # noqa: BLE001 — cached playback dispatch returns HTTP 500
                 return jsonify({"error": str(exc)}), 500
             return jsonify({"status": "started", "wav": str(wav_path)})
 
@@ -443,6 +444,6 @@ def _supported_lang_prefixes() -> set[str]:
         try:
             __import__(module)
             supported.add(prefix)
-        except Exception:
-            pass
+        except Exception:  # optional G2P extra may fail to import
+            logger.debug("optional language module %s unavailable", module, exc_info=True)
     return supported

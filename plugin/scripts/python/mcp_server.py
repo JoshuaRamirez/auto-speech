@@ -18,6 +18,7 @@ from __future__ import annotations
 import json
 import subprocess
 import sys
+from contextlib import ExitStack
 from pathlib import Path
 
 from auto_speech_log import rotate_if_oversize
@@ -66,30 +67,28 @@ SPEAK_TOOL = {
 def spawn_say_worker(text: str) -> None:
     """Offline speech fallback: spawns speak.py directly with text on stdin."""
     rotate_if_oversize(SAY_LOG)
-    try:
-        log = open(SAY_LOG, "ab")
-    except OSError:
-        log = subprocess.DEVNULL
-    try:
-        proc = subprocess.Popen(
-            [sys.executable, str(SPEAK)],
-            stdin=subprocess.PIPE,
-            stdout=log,
-            stderr=subprocess.STDOUT,
-            start_new_session=True,
-            close_fds=True,
-        )
-        if proc.stdin is not None:
-            try:
-                proc.stdin.write(text.encode("utf-8", errors="replace"))
-                proc.stdin.close()
-            except OSError:
-                pass
-    except Exception as exc:
-        print(f"[{SERVER_NAME}] spawn_say_worker failed: {exc}", file=sys.stderr)
-    finally:
-        if log is not subprocess.DEVNULL:
-            log.close()
+    with ExitStack() as stack:
+        try:
+            log = stack.enter_context(open(SAY_LOG, "ab"))
+        except OSError:
+            log = subprocess.DEVNULL
+        try:
+            proc = subprocess.Popen(
+                [sys.executable, str(SPEAK)],
+                stdin=subprocess.PIPE,
+                stdout=log,
+                stderr=subprocess.STDOUT,
+                start_new_session=True,
+                close_fds=True,
+            )
+            if proc.stdin is not None:
+                try:
+                    proc.stdin.write(text.encode("utf-8", errors="replace"))
+                    proc.stdin.close()
+                except OSError:
+                    pass
+        except Exception as exc:  # noqa: BLE001 — spawn failure must not kill MCP
+            print(f"[{SERVER_NAME}] spawn_say_worker failed: {exc}", file=sys.stderr)
 
 
 def _tool_result(message: str, *, is_error: bool = False) -> dict:
@@ -202,7 +201,7 @@ class McpServer:
                     spawn_say_worker(text)
         except OSError as exc:
             return _ok(req_id, _tool_result(f"could not start speech: {exc}", is_error=True))
-        except Exception as exc:
+        except Exception as exc:  # noqa: BLE001 — tool handler returns an error result
             return _ok(req_id, _tool_result(f"could not start speech: {exc}", is_error=True))
         return _ok(req_id, _tool_result(f"Queued {len(text)} characters to speak."))
 

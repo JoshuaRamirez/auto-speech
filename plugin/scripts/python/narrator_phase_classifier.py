@@ -14,9 +14,12 @@ Designed for in-process use by the narrator service.
 
 from __future__ import annotations
 
+import logging
 from dataclasses import dataclass, field
 from enum import Enum
 from typing import Any
+
+logger = logging.getLogger(__name__)
 
 
 class Category(str, Enum):
@@ -133,7 +136,7 @@ class PhaseClassifier:
             # Just flush the first one if no session id (shutdown)
             if not self._current:
                 return None
-            session_id = list(self._current.keys())[0]
+            session_id = next(iter(self._current))
         current = self._current.get(session_id)
         if current is None or not current.events:
             if session_id in self._current:
@@ -163,10 +166,10 @@ def _summarize_event(tool_name: str, payload: dict) -> str:
                                 # Take the LAST 300 chars, since the first 300 are often generic system prompt boilerplate
                                 thinking = "..." + thinking[-300:]
                             break
-                    except Exception:
-                        pass
-        except Exception:
-            pass
+                    except Exception:  # skip malformed transcript lines
+                        logger.debug("skipping unreadable transcript line", exc_info=True)
+        except Exception:  # transcript read must not break phase summary
+            logger.debug("could not read transcript for phase summary", exc_info=True)
 
     ti = payload.get("tool_input", {}) or {}
     action = ti.get("toolAction")

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import logging
 import os
 import sys
 from pathlib import Path
@@ -18,6 +19,7 @@ EXIT_PLAYBACK_FAIL = 6
 EXIT_INTERRUPTED = 130
 
 DEFAULT_SOCKET_PATH = Path("/tmp/auto-speech-daemon.sock")
+logger = logging.getLogger(__name__)
 
 
 def _default_cache_root() -> Path:
@@ -91,8 +93,8 @@ def main(
                 return EXIT_OK
         except KeyboardInterrupt:
             return EXIT_INTERRUPTED
-        except Exception:
-            pass
+        except Exception:  # daemon miss falls through to local playback
+            logger.debug("injected client play_cache failed", exc_info=True)
     elif _get_socket_path().is_socket():
         try:
             c = DaemonClient(socket_path=_get_socket_path())
@@ -101,8 +103,8 @@ def main(
                 return EXIT_OK
         except KeyboardInterrupt:
             return EXIT_INTERRUPTED
-        except Exception:
-            pass
+        except Exception:  # daemon miss falls through to local playback
+            logger.debug("daemon play_cache failed", exc_info=True)
 
     # Offline Fallback
     active_sink = NativeAudioSink()

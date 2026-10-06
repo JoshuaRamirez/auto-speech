@@ -24,9 +24,9 @@ from pathlib import Path
 SRC = Path(__file__).resolve().parents[1] / "plugin" / "scripts" / "python"
 sys.path.insert(0, str(SRC))
 
-import mcp_server  # noqa: E402
-from autoplay_gate import AutoplayGate  # noqa: E402
-from mcp_server import McpServer, serve  # noqa: E402
+import mcp_server
+from autoplay_gate import AutoplayGate
+from mcp_server import McpServer, serve
 
 
 def _server(muted: bool = False, spawn_error: Exception | None = None):
@@ -183,6 +183,7 @@ def test_plugin_mcp_manifest_points_at_the_launcher() -> None:
 
 def test_speak_invokes_daemon_client_directly() -> None:
     from unittest.mock import MagicMock
+
     from daemon_client import DaemonResponse, Priority
 
     mock_client = MagicMock()

@@ -22,9 +22,8 @@ from unittest import mock
 
 SRC = Path(__file__).resolve().parents[1] / "plugin" / "scripts" / "python"
 sys.path.insert(0, str(SRC))
-import tts_engine  # noqa: E402
-import web_server  # noqa: E402
-
+import tts_engine
+import web_server
 
 # A syntactically-valid Chrome extension origin (32 chars of a-p).
 EXT_ORIGIN = "chrome-extension://" + "a" * 32
@@ -55,7 +54,7 @@ def _make_server(tmp_path: Path):
         mock.patch("tts_engine.TTSEngine._ensure_loaded", lambda self: None),
     ):
         server = web_server.WebServer()
-    server._tts_executor.engine.synthesize = fake_synthesize  # noqa: SLF001
+    server._tts_executor.engine.synthesize = fake_synthesize
     return server, synth_calls
 
 
@@ -108,8 +107,8 @@ def test_no_speakable_content_returns_422() -> None:
         def raise_unspeakable(text, profile, out_path):
             raise tts_engine.TTSNoSpeakableContentError("no phonemes")
 
-        server._tts_executor.engine.synthesize = raise_unspeakable  # noqa: SLF001
-        client = server._app.test_client()  # noqa: SLF001
+        server._tts_executor.engine.synthesize = raise_unspeakable
+        client = server._app.test_client()
         resp = client.post("/api/synthesize", json={"text": "★ • #"})
         assert resp.status_code == 422
         assert resp.get_json()["error"] == "no speakable text"
@@ -152,9 +151,9 @@ def test_resilient_split_recovers_from_generate_fault() -> None:
                 raise tts_engine.TTSGenerationError("simulated broadcast bug")
             _write_tiny_wav(Path(out_path))
 
-        server._tts_executor.engine.synthesize = flaky  # noqa: SLF001
+        server._tts_executor.engine.synthesize = flaky
         out = tmp_path / "chunk.wav"
-        wavs = server._tts_executor.synth.synthesize_parts(  # noqa: SLF001
+        wavs = server._tts_executor.synth.synthesize_parts(
             "alpha beta gamma delta epsilon zeta eta", server._profile, out
         )
         assert len(wavs) >= 2
@@ -176,10 +175,10 @@ def test_resilient_split_skips_unspeakable_leaf() -> None:
                 raise tts_engine.TTSGenerationError("simulated broadcast bug")
             _write_tiny_wav(Path(out_path))
 
-        server._tts_executor.engine.synthesize = synth  # noqa: SLF001
+        server._tts_executor.engine.synthesize = synth
         out = tmp_path / "chunk.wav"
         # Splits to words; "hello" and "world" speak, lone "★" is skipped.
-        wavs = server._tts_executor.synth.synthesize_parts(  # noqa: SLF001
+        wavs = server._tts_executor.synth.synthesize_parts(
             "hello ★ world", server._profile, out
         )
         assert len(wavs) == 2
@@ -214,7 +213,7 @@ def test_non_string_fields_are_client_errors_not_crashes() -> None:
 def test_options_preflight() -> None:
     with tempfile.TemporaryDirectory() as td:
         server, _ = _make_server(Path(td))
-        client = server._app.test_client()  # noqa: SLF001
+        client = server._app.test_client()
         resp = client.open("/api/synthesize", method="OPTIONS", headers={"Origin": EXT_ORIGIN})
         assert resp.status_code == 204
         assert resp.headers.get("Access-Control-Allow-Origin") == EXT_ORIGIN
@@ -246,8 +245,8 @@ def test_synthesize_not_blocked_by_inflight_rewrite() -> None:
             release.wait(timeout=30)
             return text
 
-        server._routes._rewriter.rewrite = slow_rewrite  # noqa: SLF001
-        server._routes._rewriter.is_available = lambda: True  # noqa: SLF001
+        server._routes._rewriter.rewrite = slow_rewrite
+        server._routes._rewriter.is_available = lambda: True
 
         with mock.patch.object(server._routes._audio_sink, "play") as mock_play:
             try:
@@ -263,7 +262,7 @@ def test_synthesize_not_blocked_by_inflight_rewrite() -> None:
                 release.set()
                 # Drain the speak job INSIDE the patch so it finishes against
                 # the stub pipeline, never the real cache/mpv.
-                server._routes._job_executor.shutdown(wait=True)  # noqa: SLF001
+                server._routes._job_executor.shutdown(wait=True)
             # The stubbed pipeline must have been what ran.
             mock_play.assert_called_once()
 

@@ -39,8 +39,8 @@ SRC = Path(__file__).resolve().parents[1] / "plugin" / "scripts" / "python"
 if str(SRC) not in sys.path:
     sys.path.insert(0, str(SRC))
 
-import speak  # noqa: E402
-from narrator_service import (  # noqa: E402
+import speak
+from narrator_service import (
     NarratorService,
     _DaemonSocketServer,
 )
@@ -76,10 +76,10 @@ class TestSocketIPCStress(unittest.TestCase):
             s = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
             try:
                 s.connect(str(self.socket_path))
-                s.sendall(f"concurrent utterance {idx}".encode("utf-8"))
+                s.sendall(f"concurrent utterance {idx}".encode())
                 s.shutdown(socket.SHUT_WR)
                 successes.append(idx)
-            except Exception as exc:
+            except Exception as exc:  # noqa: BLE001 — client records any socket failure
                 errors.append((idx, type(exc).__name__, str(exc)))
             finally:
                 s.close()

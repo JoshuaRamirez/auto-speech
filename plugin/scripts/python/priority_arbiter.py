@@ -12,14 +12,18 @@ Provides:
 from __future__ import annotations
 
 import collections
+import logging
 import queue
 import threading
 import time
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from enum import IntEnum
-from typing import Any, Callable, Optional
+from typing import Any
 
 from config_constants import DEFAULT_SPEED, DEFAULT_VOICE_ID
+
+logger = logging.getLogger(__name__)
 
 
 class Priority(IntEnum):
@@ -33,8 +37,8 @@ class Priority(IntEnum):
 class QueueItem:
     priority: int = Priority.TOOL_NARRATION
     payload: Any = None
-    source_hash: Optional[str] = None
-    session_id: Optional[str] = None
+    source_hash: str | None = None
+    session_id: str | None = None
     voice_id: str = DEFAULT_VOICE_ID
     speed: float = DEFAULT_SPEED
     timestamp: float = field(default_factory=time.time)
@@ -60,8 +64,8 @@ class PriorityArbiter:
         self._p3: collections.deque[QueueItem] = collections.deque()
         self._p4: collections.deque[QueueItem] = collections.deque()
         self._dropped_count = 0
-        self._active_item: Optional[QueueItem] = None
-        self._active_priority: Optional[int] = None
+        self._active_item: QueueItem | None = None
+        self._active_priority: int | None = None
         self._purge_callbacks: list[Callable[[int], None]] = []
 
     def register_purge_callback(self, cb: Callable[[int], None]) -> None:
@@ -73,16 +77,16 @@ class PriorityArbiter:
         for cb in self._purge_callbacks:
             try:
                 cb(count)
-            except Exception:
-                pass
+            except Exception:  # one callback must not break purge
+                logger.debug("purge callback failed", exc_info=True)
 
     @property
-    def active_priority(self) -> Optional[int]:
+    def active_priority(self) -> int | None:
         with self._lock:
             return self._active_priority
 
     @property
-    def active_item(self) -> Optional[QueueItem]:
+    def active_item(self) -> QueueItem | None:
         with self._lock:
             return self._active_item
 
@@ -94,9 +98,9 @@ class PriorityArbiter:
     def enqueue(
         self,
         item: Any,
-        priority: Optional[Priority | int] = None,
-        source_hash: Optional[str] = None,
-        session_id: Optional[str] = None,
+        priority: Priority | int | None = None,
+        source_hash: str | None = None,
+        session_id: str | None = None,
         **kwargs: Any,
     ) -> QueueItem:
         """Enqueues an item into the appropriate priority band."""
@@ -138,7 +142,7 @@ class PriorityArbiter:
 
         return q_item
 
-    def _shed_oldest_low_priority_locked(self) -> Optional[QueueItem]:
+    def _shed_oldest_low_priority_locked(self) -> QueueItem | None:
         """Sheds oldest item from lowest non-empty band (P4 first, then P3, never P1/P2).
 
         Must be called while holding self._lock. Returns None if neither P4 nor P3 has items.
@@ -153,7 +157,7 @@ class PriorityArbiter:
             return item
         return None
 
-    def shed_oldest_low_priority(self) -> Optional[QueueItem]:
+    def shed_oldest_low_priority(self) -> QueueItem | None:
         """Sheds oldest item from lowest non-empty priority band (P4 first, then P3).
 
         Never sheds from P1 (User Interrupt) or P2 (Explicit MCP).
@@ -167,14 +171,14 @@ class PriorityArbiter:
             self._notify_purged(1)
         return item
 
-    def shed_oldest_narration(self) -> Optional[QueueItem]:
+    def shed_oldest_narration(self) -> QueueItem | None:
         """Alias for shed_oldest_low_priority."""
         return self.shed_oldest_low_priority()
 
     def requeue_at_head(
         self,
         item: Any,
-        priority: Optional[Priority | int] = None,
+        priority: Priority | int | None = None,
     ) -> None:
         """Inserts an item at the head of its priority band (used on preemption)."""
         if isinstance(item, QueueItem):
@@ -199,7 +203,7 @@ class PriorityArbiter:
     def dequeue(
         self,
         block: bool = True,
-        timeout: Optional[float] = None,
+        timeout: float | None = None,
         unwrap: bool = True,
     ) -> Any:
         """Dequeues the highest-priority item across bands (P1 > P2 > P3 > P4)."""
@@ -336,7 +340,7 @@ class QueueProxyFacade:
         self._maxsize = int(val)
         self._arbiter.maxsize = int(val)
 
-    def put(self, item: Any, block: bool = True, timeout: Optional[float] = None) -> None:
+    def put(self, item: Any, block: bool = True, timeout: float | None = None) -> None:
         """Enqueues item into PriorityArbiter. Raises queue.Full if full and non-blocking/timed-out."""
         if isinstance(item, QueueItem):
             q_item = item
@@ -379,7 +383,7 @@ class QueueProxyFacade:
     def put_nowait(self, item: Any) -> None:
         self.put(item, block=False)
 
-    def get(self, block: bool = True, timeout: Optional[float] = None) -> Any:
+    def get(self, block: bool = True, timeout: float | None = None) -> Any:
         """Dequeues ready item from highest priority non-empty band."""
         item = self._arbiter.dequeue(block=block, timeout=timeout, unwrap=True)
         with self._cond:

@@ -44,16 +44,17 @@ if str(PLUGIN_PYTHON) not in sys.path:
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
-import narrator_service  # noqa: E402
-from narrator_phase_classifier import Category, Phase  # noqa: E402
-from narrator_service import (  # noqa: E402
+import narrator_service
+from narrator_phase_classifier import Category, Phase
+from narrator_service import (
     NarratorService,
     _existing_pid,
     load_config,
 )
-from speak import send_speech_request  # noqa: E402
-from tests.e2e.harness import VENV_PYTHON  # noqa: E402
-from voice_profile import VoiceProfile  # noqa: E402
+from speak import send_speech_request
+from voice_profile import VoiceProfile
+
+from tests.e2e.harness import VENV_PYTHON
 
 
 class BlockingMockSink:
@@ -277,6 +278,7 @@ sys.exit(narrator_service.main())
                 capture_output=True,
                 text=True,
                 timeout=5.0,
+                check=False,
             )
             # Second daemon must detect running instance and exit with returncode 1
             self.assertEqual(second_proc.returncode, 1, "Second daemon must exit with code 1")
@@ -375,7 +377,7 @@ class TestTier5AdversarialQueueBackpressureFlood(unittest.TestCase):
                 with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as sock:
                     sock.settimeout(5.0)
                     sock.connect(str(self.sock_path))
-                    sock.sendall(f"req_{i:04d}".encode("utf-8"))
+                    sock.sendall(f"req_{i:04d}".encode())
                     sock.shutdown(socket.SHUT_WR)
                     ack = sock.recv(1024)
                     self.assertEqual(ack, b"OK\n", f"Request {i} did not receive OK ACK")
@@ -434,7 +436,7 @@ class TestTier5AdversarialQueueBackpressureFlood(unittest.TestCase):
             svc._stop_socket_server()
             try:
                 svc._tts_queue.put_nowait(None)
-            except Exception:
+            except Exception:  # noqa: BLE001, S110 — cleanup must not mask the test result
                 pass
 
     def test_concurrent_queue_flood_350_requests_multi_threaded(self) -> None:
@@ -773,7 +775,7 @@ class TestTier5AdversarialWorkerAndHandlerRobustness(unittest.TestCase):
                 s = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
                 try:
                     s.connect(str(self.sock_path))
-                    s.sendall(f"partial_chunk_{i}".encode("utf-8"))
+                    s.sendall(f"partial_chunk_{i}".encode())
                     s.setsockopt(socket.SOL_SOCKET, socket.SO_LINGER, linger)
                 except (OSError, ConnectionResetError):
                     pass

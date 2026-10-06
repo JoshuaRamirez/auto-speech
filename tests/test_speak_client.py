@@ -23,7 +23,7 @@ SRC = Path(__file__).resolve().parents[1] / "plugin" / "scripts" / "python"
 if str(SRC) not in sys.path:
     sys.path.insert(0, str(SRC))
 
-import speak  # noqa: E402
+import speak
 
 
 class TestSpeakClientArgParsing(unittest.TestCase):

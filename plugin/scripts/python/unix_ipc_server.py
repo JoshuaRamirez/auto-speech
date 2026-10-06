@@ -10,8 +10,9 @@ from __future__ import annotations
 import json
 import socket
 import socketserver
+from collections.abc import Callable
 from pathlib import Path
-from typing import Any, Callable, Optional
+from typing import Any
 
 
 class DualWireRequestHandler(socketserver.BaseRequestHandler):
@@ -65,7 +66,7 @@ class DualWireRequestHandler(socketserver.BaseRequestHandler):
                             ):
                                 is_wire1 = True
                                 payload = parsed
-                        except Exception:
+                        except Exception:  # noqa: BLE001 — malformed frame is not Wire 1
                             is_wire1 = False
 
                         if is_wire1 and payload is not None:
@@ -73,7 +74,7 @@ class DualWireRequestHandler(socketserver.BaseRequestHandler):
                             if dispatcher and hasattr(dispatcher, "dispatch_json"):
                                 try:
                                     resp = dispatcher.dispatch_json(payload)
-                                except Exception as e:
+                                except Exception as e:  # noqa: BLE001 — dispatch failure is an error response
                                     resp = {
                                         "status": "error",
                                         "error_code": "DISPATCH_FAILED",
@@ -119,7 +120,7 @@ class DualWireRequestHandler(socketserver.BaseRequestHandler):
                     ):
                         is_wire1 = True
                         payload = parsed
-                except Exception:
+                except Exception:  # noqa: BLE001 — malformed frame is not Wire 1
                     is_wire1 = False
 
             if is_wire1 and payload is not None:
@@ -127,7 +128,7 @@ class DualWireRequestHandler(socketserver.BaseRequestHandler):
                 if dispatcher and hasattr(dispatcher, "dispatch_json"):
                     try:
                         resp = dispatcher.dispatch_json(payload)
-                    except Exception as e:
+                    except Exception as e:  # noqa: BLE001 — dispatch failure is an error response
                         resp = {"status": "error", "error_code": "DISPATCH_FAILED", "message": str(e)}
                 else:
                     resp = {"status": "ok", "action": payload.get("action")}
@@ -139,7 +140,7 @@ class DualWireRequestHandler(socketserver.BaseRequestHandler):
                 # Wire 2: Legacy Raw UTF-8 text
                 try:
                     raw_text = buffer.decode("utf-8", errors="replace")
-                except Exception:
+                except Exception:  # noqa: BLE001 — undecodable frame becomes empty text
                     raw_text = ""
 
                 cleaned = raw_text.strip()
@@ -171,8 +172,8 @@ class _DaemonSocketServer(socketserver.ThreadingUnixStreamServer):
     def __init__(
         self,
         server_address: str | Path,
-        on_text: Optional[Callable[[str], None]] = None,
-        dispatcher: Optional[Any] = None,
+        on_text: Callable[[str], None] | None = None,
+        dispatcher: Any | None = None,
     ) -> None:
         self.on_text = on_text
         self.dispatcher = dispatcher
