@@ -123,6 +123,17 @@ def _pid_is_our_daemon(pid: int, cmdline_reader=_pid_cmdline) -> bool:
     return "/narrator_service.py" in cmdline_reader(pid)
 
 
+def _pid_is_mpv(pid: int, cmdline_reader=_pid_cmdline) -> bool:
+    """True iff `pid` is alive AND is an mpv process. Guards against PID reuse."""
+    if pid <= 0:
+        return False
+    try:
+        os.kill(pid, 0)
+    except OSError:
+        return False
+    return "mpv" in cmdline_reader(pid)
+
+
 def _existing_pid() -> int | None:
     """The pid of a LIVE instance of this daemon, or None when the pid file
     is absent, unreadable, points at a dead process, or — under PID reuse —
@@ -723,8 +734,12 @@ class NarratorService:
                 # Immediately interrupt any currently playing audio and purge lower queues!
                 self._handle_p1_interrupt()
                 try:
-                    global_pid = int(Path("/tmp/auto-speech-mpv.pid").read_text().strip())
-                    os.kill(global_pid, signal.SIGTERM)
+                    mpv_pid_file = Path("/tmp/auto-speech-mpv.pid")
+                    if mpv_pid_file.is_file():
+                        global_pid = int(mpv_pid_file.read_text().strip())
+                        if _pid_is_mpv(global_pid):
+                            os.kill(global_pid, signal.SIGTERM)
+                        mpv_pid_file.unlink(missing_ok=True)
                 except (OSError, ValueError, ProcessLookupError):
                     pass
 

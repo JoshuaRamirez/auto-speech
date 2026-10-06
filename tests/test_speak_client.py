@@ -56,7 +56,7 @@ class TestSpeakClientArgParsing(unittest.TestCase):
                 ]
             )
             self.assertEqual(rc, 0)
-            mock_send.assert_called_once_with("test legacy")
+            mock_send.assert_called_once_with("test legacy", source_hash=valid_hash)
 
     def test_source_hash_normalized_to_lowercase(self) -> None:
         """Uppercase 64-hex SHA-256 hash is accepted and normalized."""
@@ -67,7 +67,7 @@ class TestSpeakClientArgParsing(unittest.TestCase):
         ):
             rc = speak.main(["--source-hash", upper_hash])
             self.assertEqual(rc, 0)
-            mock_send.assert_called_once_with("normalized")
+            mock_send.assert_called_once_with("normalized", source_hash=upper_hash.lower())
 
     def test_invalid_source_hash_length_returns_exit_code_2(self) -> None:
         """Source hash with invalid length prints error to stderr and returns exit code 2."""
@@ -105,15 +105,16 @@ class TestSpeakClientArgParsing(unittest.TestCase):
             mock_send.assert_not_called()
 
     def test_empty_stdin_with_source_hash_plays_cached_wav(self) -> None:
-        """When stdin is empty and --source-hash exists in cache, plays cached full.wav."""
+        """When stdin is empty and --source-hash exists in cache, routes to DaemonClient (or injected sink)."""
         valid_hash = "c" * 64
         with (
             tempfile.TemporaryDirectory() as tmpdir,
             mock.patch("sys.stdin", io.StringIO("")),
-            mock.patch("native_audio_sink.NativeAudioSink") as mock_sink_cls,
+            mock.patch("speak.DaemonClient") as mock_client_cls,
         ):
-            mock_sink = mock.MagicMock()
-            mock_sink_cls.return_value = mock_sink
+            mock_client = mock.MagicMock()
+            mock_client.play_cache.return_value = speak.DaemonResponse(status="ok", action="play_cache")
+            mock_client_cls.return_value = mock_client
 
             with mock.patch("pathlib.Path.resolve") as mock_resolve:
                 mock_resolve.return_value = Path(tmpdir) / "plugin" / "scripts" / "python" / "speak.py"
@@ -123,6 +124,24 @@ class TestSpeakClientArgParsing(unittest.TestCase):
 
                 rc = speak.main(["--source-hash", valid_hash])
                 self.assertEqual(rc, 0)
+                mock_client.play_cache.assert_called_once_with(valid_hash)
+
+    def test_empty_stdin_with_injected_sink_plays_cached_wav(self) -> None:
+        """When an explicit sink is injected, plays cached full.wav through it."""
+        valid_hash = "c" * 64
+        with (
+            tempfile.TemporaryDirectory() as tmpdir,
+            mock.patch("sys.stdin", io.StringIO("")),
+        ):
+            mock_sink = mock.MagicMock()
+            with mock.patch("pathlib.Path.resolve") as mock_resolve:
+                mock_resolve.return_value = Path(tmpdir) / "plugin" / "scripts" / "python" / "speak.py"
+                target_wav = Path(tmpdir) / "config" / "cache" / valid_hash[:16] / "full.wav"
+                target_wav.parent.mkdir(parents=True, exist_ok=True)
+                target_wav.touch()
+
+                rc = speak.main(["--source-hash", valid_hash], sink=mock_sink)
+                self.assertEqual(rc, 0)
                 mock_sink.play.assert_called_once_with(target_wav)
 
     def test_empty_stdin_with_source_hash_cache_miss_returns_zero(self) -> None:
@@ -131,14 +150,11 @@ class TestSpeakClientArgParsing(unittest.TestCase):
         with (
             tempfile.TemporaryDirectory() as tmpdir,
             mock.patch("sys.stdin", io.StringIO("")),
-            mock.patch("native_audio_sink.NativeAudioSink") as mock_sink_cls,
         ):
             mock_sink = mock.MagicMock()
-            mock_sink_cls.return_value = mock_sink
-
             with mock.patch("pathlib.Path.resolve") as mock_resolve:
                 mock_resolve.return_value = Path(tmpdir) / "plugin" / "scripts" / "python" / "speak.py"
-                rc = speak.main(["--source-hash", valid_hash])
+                rc = speak.main(["--source-hash", valid_hash], sink=mock_sink)
                 self.assertEqual(rc, 0)
                 mock_sink.play.assert_not_called()
 
@@ -149,11 +165,9 @@ class TestSpeakClientArgParsing(unittest.TestCase):
             tempfile.TemporaryDirectory() as tmpdir,
             mock.patch("sys.stdin", io.StringIO("")),
             mock.patch("sys.stderr", new_callable=io.StringIO) as mock_stderr,
-            mock.patch("native_audio_sink.NativeAudioSink") as mock_sink_cls,
         ):
             mock_sink = mock.MagicMock()
             mock_sink.play.side_effect = RuntimeError("audio device failure")
-            mock_sink_cls.return_value = mock_sink
 
             with mock.patch("pathlib.Path.resolve") as mock_resolve:
                 mock_resolve.return_value = Path(tmpdir) / "plugin" / "scripts" / "python" / "speak.py"
@@ -161,7 +175,7 @@ class TestSpeakClientArgParsing(unittest.TestCase):
                 target_wav.parent.mkdir(parents=True, exist_ok=True)
                 target_wav.touch()
 
-                rc = speak.main(["--source-hash", valid_hash])
+                rc = speak.main(["--source-hash", valid_hash], sink=mock_sink)
                 self.assertEqual(rc, 1)
                 self.assertIn("cached playback failed", mock_stderr.getvalue())
 

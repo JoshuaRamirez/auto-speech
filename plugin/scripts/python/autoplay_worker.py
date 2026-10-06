@@ -382,10 +382,6 @@ class AutoplayWorker:
         # Coalesce window: collapse bursts of Stop events.
         self._machine.transition(COALESCING)
         self._sleep(self._cfg["coalesce_seconds"])
-        if self._beacon.is_stale():
-            self._log("stale during coalesce window; bailing (newer worker will handle)")
-            self._machine.transition(BAILED)
-            return 0
 
         # Take our FIFO slot now — arrival order is Stop-event order.
         self._machine.transition(QUEUED)

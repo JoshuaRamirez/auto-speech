@@ -26,6 +26,8 @@ def send_speech_request(
     text: str,
     socket_path: Path | str | None = None,
     timeout: float = 5.0,
+    source_hash: str | None = None,
+    priority: int = Priority.EXPLICIT_MCP,
 ) -> int:
     """Transmit text payload to the daemon socket.
 
@@ -38,6 +40,16 @@ def send_speech_request(
 
     if socket_path is None:
         socket_path = get_socket_path()
+
+    # If source_hash is specified, attempt structured Wire 1 JSON via DaemonClient
+    if source_hash is not None:
+        try:
+            client = DaemonClient(socket_path=socket_path, timeout=timeout)
+            resp = client.speak(text, source_hash=source_hash, priority=priority)
+            if resp.status in ("ok", "queued"):
+                return 0
+        except Exception:
+            pass
 
     if not Path(socket_path).is_socket():
         start_script = Path(__file__).resolve().parents[1] / "shell" / "narrator_service_start.sh"
@@ -130,43 +142,46 @@ def main(
     transcript_text = sys.stdin.read()
     if not transcript_text.strip():
         if args.source_hash:
-            if client is not None:
-                try:
-                    resp = client.play_cache(args.source_hash)
-                    if resp.status in ("ok", "queued"):
-                        return 0
-                except Exception:
-                    pass
-            elif sink is None:
-                try:
-                    c = DaemonClient(socket_path=args.socket_path)
-                    if c.is_alive():
-                        resp = c.play_cache(args.source_hash)
-                        if resp.status in ("ok", "queued"):
-                            return 0
-                except Exception:
-                    pass
-
             cache_root = Path(__file__).resolve().parents[3] / "config" / "cache"
             cache_wav = cache_root / args.source_hash[:16] / "full.wav"
             if cache_wav.is_file():
                 if sink is not None:
-                    active_sink = sink
+                    try:
+                        sink.play(cache_wav)
+                        return 0
+                    except Exception as exc:
+                        print(f"speak: cached playback failed: {exc}", file=sys.stderr)
+                        return 1
+                elif client is not None:
+                    try:
+                        resp = client.play_cache(args.source_hash)
+                        if resp.status in ("ok", "queued"):
+                            return 0
+                        return 1
+                    except Exception as exc:
+                        print(f"speak: cached playback failed: {exc}", file=sys.stderr)
+                        return 1
                 else:
-                    from native_audio_sink import NativeAudioSink
-
-                    active_sink = NativeAudioSink()
-
-                try:
-                    active_sink.play(cache_wav)
-                    return 0
-                except Exception as exc:
-                    print(f"speak: cached playback failed: {exc}", file=sys.stderr)
-                    return 1
+                    # Do not spawn rogue NativeAudioSink bypassing daemon; route through DaemonClient
+                    try:
+                        c = DaemonClient(socket_path=args.socket_path)
+                        c.ensure_daemon_running()
+                        resp = c.play_cache(args.source_hash)
+                        if resp.status in ("ok", "queued"):
+                            return 0
+                        return 1
+                    except Exception as exc:
+                        print(f"speak: cached playback failed: {exc}", file=sys.stderr)
+                        return 1
         return 0
 
-    if args.socket_path is not None:
-        return send_speech_request(transcript_text, socket_path=args.socket_path)
+    if args.socket_path is not None or args.source_hash is not None:
+        kwargs: dict[str, Any] = {}
+        if args.socket_path is not None:
+            kwargs["socket_path"] = args.socket_path
+        if args.source_hash is not None:
+            kwargs["source_hash"] = args.source_hash
+        return send_speech_request(transcript_text, **kwargs)
     return send_speech_request(transcript_text)
 
 

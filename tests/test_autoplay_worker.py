@@ -117,10 +117,46 @@ def test_global_disable_bails() -> None:
     assert w.machine.state == BAILED
 
 
-def test_stale_during_coalesce_bails() -> None:
-    w = _worker(beacon=_StubBeacon([True]))  # stale right after coalesce
-    assert w.run() == 0
-    assert w.machine.state == BAILED
+def test_stale_during_coalesce_does_not_bail() -> None:
+    """Staleness beacon arriving during coalesce does not drop the message; worker completes."""
+    long_msg = "x" * 40
+    full_hash = "f" * 64
+    tmp = Path(tempfile.mkdtemp(prefix="auto-speech-worker-test-"))
+    _with_cache(tmp, full_hash[:16])
+
+    spoke = {"called": False}
+
+    def script(argv, stdin):
+        prog = (
+            argv[1]
+            if (
+                argv[0] in ("bash", sys.executable, "python", "python3")
+                or Path(argv[0]).name.startswith("python")
+            )
+            else argv[0]
+        )
+        if str(prog).endswith("run_extract.sh"):
+            return 0, long_msg
+        if str(prog).endswith("compute_hash.sh"):
+            return 0, full_hash + "\n"
+        if str(prog).endswith("speak.py"):
+            spoke["called"] = True
+            return 0, None
+        raise AssertionError(f"unexpected argv {argv}")
+
+    orig_root = awmod._PROJECT_ROOT
+    awmod._PROJECT_ROOT = tmp
+    try:
+        w = _worker(
+            runner=_Recorder(script),
+            beacon=_StubBeacon([True, True, True]),  # stale beacon
+        )
+        assert w.run() == 0
+    finally:
+        awmod._PROJECT_ROOT = orig_root
+
+    assert w.machine.state == DONE
+    assert spoke["called"] is True
 
 
 def test_source_too_short_bails() -> None:
@@ -401,7 +437,7 @@ def test_in_process_fifo_returns_true_immediately() -> None:
 def main() -> int:
     tests = [
         test_global_disable_bails,
-        test_stale_during_coalesce_bails,
+        test_stale_during_coalesce_does_not_bail,
         test_source_too_short_bails,
         test_cache_hit_success_path,
         test_dedup_bails_on_cache_hit_path,
