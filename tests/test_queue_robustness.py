@@ -144,6 +144,56 @@ def test_autoplay_worker_queues_consecutive_turns_without_staleness_drop() -> No
     assert "Turn content 2" in spoken_messages[1][1]
 
 
+def test_autoplay_worker_speaks_even_when_coalesce_beacon_is_immediately_stale() -> None:
+    """When a worker experiences staleness during coalesce, it must still extract and speak the turn."""
+    spoken = []
+
+    def mock_runner(argv, stdin_text=None, stdout_path=None):
+        prog = (
+            argv[1]
+            if (
+                argv[0] in ("bash", sys.executable, "python", "python3")
+                or Path(argv[0]).name.startswith("python")
+            )
+            else argv[0]
+        )
+        if str(prog).endswith("run_extract.sh"):
+            return 0, "Turn message arriving during coalesce burst"
+        if str(prog).endswith("compute_hash.sh"):
+            return 0, "c0a1e5ce" + "0" * 56 + "\n"
+        if str(prog).endswith("speak.py"):
+            spoken.append(stdin_text)
+            return 0, None
+        raise AssertionError(f"unexpected argv: {argv}")
+
+    tmp = Path(tempfile.mkdtemp(prefix="auto-speech-coalesce-stale-"))
+    orig_root = awmod._PROJECT_ROOT
+    awmod._PROJECT_ROOT = tmp
+
+    try:
+        # Beacon is ALWAYS stale (e.g. Stop event burst fired right away)
+        stale_beacon = MagicMock()
+        stale_beacon.is_stale.return_value = True
+
+        w = AutoplayWorker(
+            beacon_mtime=50.0,
+            transcript_path="/fake/transcript.jsonl",
+            session_id="session-burst-test",
+            config={"coalesce_seconds": 0.01, "narration_wait_max": 90, "queue_wait_max": 600, "min_len": 10, "mode": "raw", "bypass_llm": True},
+            gate=awmod.AutoplayGate(home=tmp),
+            beacon=stale_beacon,
+            dedup=DedupGuard(marker_path=tmp / "marker", mpv_pid_path=tmp / "mpv.pid", lock_path=tmp / "lock"),
+            runner=mock_runner,
+            sleep=lambda s: None,
+        )
+        assert w.run() == 0
+        assert w.machine.state == DONE
+        assert len(spoken) == 1
+        assert "Turn message arriving during coalesce burst" in spoken[0]
+    finally:
+        awmod._PROJECT_ROOT = orig_root
+
+
 def test_autoplay_worker_uses_real_in_process_fifo() -> None:
     """AutoplayWorker using the real InProcessFifo (not stubbed) completes cleanly."""
     spoken = []

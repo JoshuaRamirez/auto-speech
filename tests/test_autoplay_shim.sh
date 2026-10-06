@@ -36,6 +36,38 @@ grep -q 'SESSION_ENROLL_DIR' "$HOOK" || fail "anchor:hook-optin" "SESSION_ENROLL
 grep -q 'SESSION_OPTOUT_DIR' "$HOOK" && fail "anchor:hook-optout-gone" "opt-out gating still present in hook"
 ok "anchor:hook-opt-in-semantics"
 
+# ---- Hook anchors: daemon PID guard (anti-PID-reuse) ----
+grep -q 'narrator_pid_is_ours' "$HOOK" || fail "anchor:hook-narrator-pid-guard" "hook does not use narrator_pid_is_ours"
+grep -q 'kill -0 "\$DAEMON_PID"' "$HOOK" && fail "anchor:hook-bare-kill" "hook still uses bare kill -0 on DAEMON_PID"
+ok "anchor:hook-uses-narrator-pid-is-ours"
+
+# ---- Shared daemon PID guard functional checks ----
+DAEMON_PID_SH="$PROJECT_ROOT/plugin/scripts/shell/daemon_pid.sh"
+[[ -f "$DAEMON_PID_SH" ]] || fail "daemon-pid-sh-exists" "daemon_pid.sh missing"
+# shellcheck source=../plugin/scripts/shell/daemon_pid.sh
+source "$DAEMON_PID_SH"
+
+# Reject foreign live PID (e.g., our test runner process)
+if narrator_pid_is_ours "$$"; then
+    fail "daemon-pid-guard-rejects-foreign-alive-pid" "narrator_pid_is_ours accepted our test runner shell PID ($$)"
+else
+    ok "daemon-pid-guard-rejects-foreign-alive-pid"
+fi
+
+# Reject dead PID
+if narrator_pid_is_ours "999999"; then
+    fail "daemon-pid-guard-rejects-dead-pid" "narrator_pid_is_ours accepted dead PID 999999"
+else
+    ok "daemon-pid-guard-rejects-dead-pid"
+fi
+
+# Reject empty PID
+if narrator_pid_is_ours ""; then
+    fail "daemon-pid-guard-rejects-empty-pid" "narrator_pid_is_ours accepted empty PID"
+else
+    ok "daemon-pid-guard-rejects-empty-pid"
+fi
+
 if ! command -v jq >/dev/null 2>&1; then
     echo
     echo "autoplay shim: $ran ran, $failures failed (hook tests skipped: no jq)"

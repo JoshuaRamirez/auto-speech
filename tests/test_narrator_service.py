@@ -14,6 +14,7 @@ from __future__ import annotations
 import json
 import os
 import queue
+import signal
 import socket
 import sys
 import tempfile
@@ -114,6 +115,35 @@ def test_pid_is_our_daemon_false_for_dead_pid() -> None:
         )
         is False
     )
+
+
+def test_pid_is_mpv_true_for_matching_cmdline() -> None:
+    assert (
+        narrator_service._pid_is_mpv(
+            os.getpid(),
+            cmdline_reader=lambda _p: "/opt/homebrew/bin/mpv --really-quiet audio.wav",
+        )
+        is True
+    )
+
+
+def test_pid_is_mpv_false_for_recycled_pid() -> None:
+    assert (
+        narrator_service._pid_is_mpv(
+            os.getpid(),
+            cmdline_reader=lambda _p: "/Applications/Slack.app/Contents/MacOS/Slack",
+        )
+        is False
+    )
+
+
+def test_pid_is_mpv_false_for_dead_pid() -> None:
+    assert narrator_service._pid_is_mpv(999999) is False
+
+
+def test_pid_is_mpv_false_for_nonpositive_pid() -> None:
+    assert narrator_service._pid_is_mpv(0) is False
+    assert narrator_service._pid_is_mpv(-1) is False
 
 
 def test_sweep_removes_old_session_markers_but_not_fresh_ones() -> None:
@@ -526,6 +556,92 @@ def test_process_chunk_user_prompt_submit_interrupts_audio_sink() -> None:
     assert svc._phases_this_turn == 0
 
 
+def test_user_prompt_submit_does_not_kill_non_mpv_pid() -> None:
+    """Verifies that an unrelated process whose PID happens to match a stale mpv.pid is NOT killed."""
+    svc = narrator_service.NarratorService.__new__(narrator_service.NarratorService)
+    svc._classifier = MagicMock()
+    svc._sink = _MockSink()
+    svc._is_cron_tick = lambda _p: False
+    svc._phases_this_turn = 5
+    svc._get_summarizer = lambda: None
+
+    session_id = "test-session-pid-safety"
+    with tempfile.TemporaryDirectory() as tmp_dir:
+        home = Path(tmp_dir)
+        sessions_dir = home / ".claude" / "auto-speech-narrate-sessions"
+        sessions_dir.mkdir(parents=True)
+        (sessions_dir / session_id).touch()
+
+        fake_pid = 77777
+        mpv_pid_file = Path("/tmp/auto-speech-mpv.pid")
+        mpv_pid_file.write_text(str(fake_pid))
+
+        chunk = (
+            json.dumps(
+                {
+                    "event": "UserPromptSubmit",
+                    "ts": time.time(),
+                    "payload": {"session_id": session_id, "conversation_history": "User: hi"},
+                }
+            )
+            + "\n"
+        ).encode("utf-8")
+
+        with (
+            patch.object(Path, "home", staticmethod(lambda: home)),
+            patch.object(os, "kill") as mock_kill,
+            patch.object(narrator_service, "_pid_is_mpv", return_value=False),
+        ):
+            svc._process_chunk(chunk)
+
+            # os.kill must NOT have been called on fake_pid
+            mock_kill.assert_not_called()
+            # Stale PID file must have been unlinked
+            assert not mpv_pid_file.exists()
+
+
+def test_user_prompt_submit_kills_and_unlinks_mpv_pid() -> None:
+    """Verifies that an authentic mpv process in mpv.pid is terminated with SIGTERM and unlinked."""
+    svc = narrator_service.NarratorService.__new__(narrator_service.NarratorService)
+    svc._classifier = MagicMock()
+    svc._sink = _MockSink()
+    svc._is_cron_tick = lambda _p: False
+    svc._phases_this_turn = 5
+    svc._get_summarizer = lambda: None
+
+    session_id = "test-session-pid-kill"
+    with tempfile.TemporaryDirectory() as tmp_dir:
+        home = Path(tmp_dir)
+        sessions_dir = home / ".claude" / "auto-speech-narrate-sessions"
+        sessions_dir.mkdir(parents=True)
+        (sessions_dir / session_id).touch()
+
+        fake_pid = 88888
+        mpv_pid_file = Path("/tmp/auto-speech-mpv.pid")
+        mpv_pid_file.write_text(str(fake_pid))
+
+        chunk = (
+            json.dumps(
+                {
+                    "event": "UserPromptSubmit",
+                    "ts": time.time(),
+                    "payload": {"session_id": session_id, "conversation_history": "User: hi"},
+                }
+            )
+            + "\n"
+        ).encode("utf-8")
+
+        with (
+            patch.object(Path, "home", staticmethod(lambda: home)),
+            patch.object(os, "kill") as mock_kill,
+            patch.object(narrator_service, "_pid_is_mpv", return_value=True),
+        ):
+            svc._process_chunk(chunk)
+
+            mock_kill.assert_called_once_with(fake_pid, signal.SIGTERM)
+            assert not mpv_pid_file.exists()
+
+
 def test_tts_worker_recovers_from_item_error() -> None:
     sink = _MockSink()
     synth = _MockSynthesizer(should_succeed=True)
@@ -723,6 +839,10 @@ def main() -> int:
         test_pid_is_our_daemon_true_for_matching_cmdline,
         test_pid_is_our_daemon_false_for_recycled_pid,
         test_pid_is_our_daemon_false_for_dead_pid,
+        test_pid_is_mpv_true_for_matching_cmdline,
+        test_pid_is_mpv_false_for_recycled_pid,
+        test_pid_is_mpv_false_for_dead_pid,
+        test_pid_is_mpv_false_for_nonpositive_pid,
         test_sweep_removes_old_session_markers_but_not_fresh_ones,
         test_sweep_tolerates_missing_dirs,
         test_process_chunk_filters_events_without_session_marker,
@@ -737,6 +857,8 @@ def main() -> int:
         test_speak_cleans_up_on_synthesis_fault,
         test_speak_cleans_up_on_playback_failure,
         test_process_chunk_user_prompt_submit_interrupts_audio_sink,
+        test_user_prompt_submit_does_not_kill_non_mpv_pid,
+        test_user_prompt_submit_kills_and_unlinks_mpv_pid,
         test_tts_worker_recovers_from_item_error,
         test_socket_server_startup_unlinks_stale_socket_and_cleans_up_on_stop,
         test_socket_server_enqueues_text_to_tts_queue,

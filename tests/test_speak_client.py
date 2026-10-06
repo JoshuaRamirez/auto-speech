@@ -406,5 +406,81 @@ class TestSpeakClientLiveSocketServer(unittest.TestCase):
             server.server_close()
 
 
+class TestSpeakClientStructuredWire1(unittest.TestCase):
+    """Unit tests verifying DaemonClient Wire 1 structured routing in speak.py."""
+
+    @mock.patch("speak.DaemonClient")
+    def test_send_speech_request_forwards_source_hash_via_daemon_client(
+        self, mock_client_cls: mock.MagicMock
+    ) -> None:
+        """When source_hash is provided, send_speech_request prefers DaemonClient structured speak."""
+        mock_client = mock.MagicMock()
+        mock_client.speak.return_value = speak.DaemonResponse(status="ok", action="speak")
+        mock_client_cls.return_value = mock_client
+
+        valid_hash = "f" * 64
+        rc = speak.send_speech_request(
+            "Text with hash",
+            source_hash=valid_hash,
+            priority=speak.Priority.EXPLICIT_MCP,
+        )
+        self.assertEqual(rc, 0)
+        mock_client.speak.assert_called_once_with(
+            "Text with hash",
+            source_hash=valid_hash,
+            priority=speak.Priority.EXPLICIT_MCP,
+        )
+
+    @mock.patch("speak.DaemonClient")
+    @mock.patch("socket.socket")
+    def test_send_speech_request_falls_back_to_raw_socket_if_daemon_client_fails(
+        self, mock_socket_cls: mock.MagicMock, mock_client_cls: mock.MagicMock
+    ) -> None:
+        """If DaemonClient structured speak raises an exception, falls back to raw socket transmission."""
+        mock_client = mock.MagicMock()
+        mock_client.speak.side_effect = RuntimeError("DaemonClient failed")
+        mock_client_cls.return_value = mock_client
+
+        mock_sock_inst = mock.MagicMock()
+        mock_socket_cls.return_value = mock_sock_inst
+
+        target_sock = "/tmp/test-daemon.sock"
+        valid_hash = "e" * 64
+        rc = speak.send_speech_request(
+            "Fallback text",
+            socket_path=target_sock,
+            source_hash=valid_hash,
+        )
+        self.assertEqual(rc, 0)
+        mock_sock_inst.connect.assert_called_once_with(target_sock)
+        mock_sock_inst.sendall.assert_called_once_with(b"Fallback text")
+
+    def test_speak_main_never_imports_or_instantiates_native_audio_sink(self) -> None:
+        """speak.main must route through DaemonClient and never instantiate NativeAudioSink directly."""
+        valid_hash = "d" * 64
+        with (
+            tempfile.TemporaryDirectory() as tmpdir,
+            mock.patch("sys.stdin", io.StringIO("")),
+            mock.patch("speak.DaemonClient") as mock_client_cls,
+            mock.patch.dict("sys.modules", {"native_audio_sink": mock.MagicMock()}),
+        ):
+            mock_client = mock.MagicMock()
+            mock_client.play_cache.return_value = speak.DaemonResponse(status="queued", action="play_cache")
+            mock_client_cls.return_value = mock_client
+
+            with mock.patch("pathlib.Path.resolve") as mock_resolve:
+                mock_resolve.return_value = Path(tmpdir) / "plugin" / "scripts" / "python" / "speak.py"
+                target_wav = Path(tmpdir) / "config" / "cache" / valid_hash[:16] / "full.wav"
+                target_wav.parent.mkdir(parents=True, exist_ok=True)
+                target_wav.touch()
+
+                rc = speak.main(["--source-hash", valid_hash])
+                self.assertEqual(rc, 0)
+                mock_client.play_cache.assert_called_once_with(valid_hash)
+                import native_audio_sink
+                native_audio_sink.NativeAudioSink.assert_not_called()
+
+
 if __name__ == "__main__":
     unittest.main()
+
