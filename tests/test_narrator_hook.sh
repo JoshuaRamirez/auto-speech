@@ -21,6 +21,11 @@ ran=0
 ok()   { ran=$((ran+1)); printf '  ok  %s\n' "$1"; }
 fail() { ran=$((ran+1)); failures=$((failures+1)); printf '  FAIL %s: %s\n' "$1" "$2"; }
 
+# ---- Hook anchors: daemon PID guard (anti-PID-reuse) ----
+grep -q 'narrator_pid_is_ours' "$HOOK" || fail "anchor:narrator-hook-pid-guard" "hook does not use narrator_pid_is_ours"
+grep -q 'kill -0 "\$DAEMON_PID"' "$HOOK" && fail "anchor:narrator-hook-bare-kill" "hook still uses bare kill -0 on DAEMON_PID"
+ok "anchor:hook-uses-narrator-pid-is-ours"
+
 # Each test: set up a fresh temp HOME and EVENTS_LOG, fire the hook,
 # count delta in the events log.
 run_hook_case() {

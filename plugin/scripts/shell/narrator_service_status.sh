@@ -33,9 +33,15 @@ if [[ -d "$MARKER_DIR" ]]; then
     fi
 fi
 
+SHELL_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+if [[ -f "$SHELL_DIR/daemon_pid.sh" ]]; then
+    # shellcheck source=daemon_pid.sh
+    source "$SHELL_DIR/daemon_pid.sh"
+fi
+
 if [[ -f "$PID_FILE" ]]; then
     PID="$(cat "$PID_FILE" 2>/dev/null || true)"
-    if [[ -n "${PID:-}" ]] && kill -0 "$PID" 2>/dev/null; then
+    if [[ -n "${PID:-}" ]] && narrator_pid_is_ours "$PID"; then
         echo "  daemon:    running (pid=$PID)"
     else
         echo "  daemon:    stale pid file (pid=$PID not alive)"

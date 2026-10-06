@@ -13,12 +13,11 @@ from pathlib import Path
 
 from calibration_run import CalibrationRun
 from tts_engine import TTSEngine
+from config_constants import DEFAULT_SPEED, DEFAULT_VOICE_ID
 from voice_profile import VoiceProfile
 from voice_profile_store import VoiceProfileStore
 from wav_inspector import WavInspector
 
-DEFAULT_VOICE_ID = "af_heart"
-DEFAULT_SPEED = 1.0
 SANITY_MIN_CPS = 10.0
 SANITY_MAX_CPS = 30.0
 

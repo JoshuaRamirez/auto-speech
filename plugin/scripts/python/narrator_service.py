@@ -877,7 +877,10 @@ class NarratorService:
             pass
 
     def _get_summarizer(self) -> Summarizer:
-        with self._summarizer_lock:
+        lock = getattr(self, "_summarizer_lock", None)
+        if lock is None:
+            self._summarizer_lock = lock = threading.Lock()
+        with lock:
             if self._summarizer is None:
                 _log("loading summarizer (first use)")
                 t0 = time.time()

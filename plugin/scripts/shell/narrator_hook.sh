@@ -53,17 +53,21 @@ fi
 # started after a fresh boot). Without this, the user runs
 # /auto-speech-narrate-on once, comes back hours later, and hears
 # silence with no obvious diagnostic.
+SHELL_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PID_FILE="/tmp/auto-speech-narrator-daemon.pid"
 DAEMON_ALIVE=0
+if [[ -f "$SHELL_DIR/daemon_pid.sh" ]]; then
+    # shellcheck source=daemon_pid.sh
+    source "$SHELL_DIR/daemon_pid.sh"
+fi
 if [[ -f "$PID_FILE" ]]; then
     DAEMON_PID="$(cat "$PID_FILE" 2>/dev/null || true)"
-    if [[ -n "${DAEMON_PID:-}" ]] && kill -0 "$DAEMON_PID" 2>/dev/null; then
+    if [[ -n "${DAEMON_PID:-}" ]] && narrator_pid_is_ours "$DAEMON_PID"; then
         DAEMON_ALIVE=1
     fi
 fi
 if [[ "$DAEMON_ALIVE" -eq 0 ]]; then
-    PLUGIN_SCRIPTS_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-    START_SCRIPT="$PLUGIN_SCRIPTS_DIR/narrator_service_start.sh"
+    START_SCRIPT="$SHELL_DIR/narrator_service_start.sh"
     if [[ -x "$START_SCRIPT" ]]; then
         # Spawn detached so we don't block the hook. Stderr to err log.
         ( "$START_SCRIPT" >/dev/null 2>>"$ERR_LOG" & ) 2>/dev/null

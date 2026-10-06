@@ -42,7 +42,7 @@ try:
     voice_id = str(data["voice_id"])
     speed = float(data["speed"])
 except (FileNotFoundError, KeyError, ValueError, json.JSONDecodeError):
-    voice_id = "af_heart"
+    voice_id = "system"
     speed = 1.0
 
 source_bytes = src_path.read_bytes()

@@ -335,11 +335,12 @@ class AutoplayWorker:
                 extract_argv += ["--transcript-path", self._transcript_path]
             return self._runner(extract_argv)
         try:
+            t_path = None
             if self._transcript_path:
-                t_path = Path(self._transcript_path)
-                if not t_path.is_file():
-                    return 1, None
-            else:
+                cand = Path(self._transcript_path)
+                if cand.is_file():
+                    t_path = cand
+            if t_path is None:
                 t_path = TranscriptLocator().locate(session_id=self._session_id or None)
             msg = MessageSelector().select(t_path, 1)
             return 0, msg.text
@@ -360,7 +361,7 @@ class AutoplayWorker:
                 voice_id = str(data["voice_id"])
                 speed = float(data["speed"])
             except (FileNotFoundError, KeyError, ValueError, json.JSONDecodeError):
-                voice_id = "af_heart"
+                voice_id = "system"
                 speed = 1.0
 
             source_bytes = src.encode("utf-8")
@@ -418,7 +419,7 @@ class AutoplayWorker:
         self._log(f"source chars={src_len} hash={hash_prefix}")
 
         cache_wav = _PROJECT_ROOT / "config" / "cache" / hash_prefix / "full.wav"
-        if cache_wav.is_file():
+        if cache_wav.is_file() and cache_wav.stat().st_size > 0:
             return self._play_cache_hit(source_hash)
         return self._play_cache_miss(source_hash, src)
 
@@ -454,32 +455,34 @@ class AutoplayWorker:
             # Cache miss requires the claude binary for the rewrite step.
             from shutil import which
 
-            if which("claude") is None:
-                self._log("claude not on PATH; skipping rewrite")
-                self._machine.transition(BAILED)
-                return 0
+            claude_bin = which("claude")
+            rewrite_failed = False
+            if claude_bin is None:
+                self._log("claude not on PATH; falling back to raw message")
+                rewrite_failed = True
+            elif not VENV.is_dir():
+                self._log(f"venv missing at {VENV}; falling back to raw message")
+                rewrite_failed = True
+            else:
+                self._log("invoking cli_rewrite.py (wraps claude -p with timeout)")
+                rc, rewrite = self._runner(
+                    [str(VENV / "bin" / "python"), str(CLI_REWRITE), "--timeout", "90"],
+                    stdin_text=src,
+                )
+                if rc != 0:
+                    self._log(f"cli_rewrite exit {rc}; falling back to raw message")
+                    rewrite_failed = True
+                else:
+                    rewrite = (rewrite or "").strip()
+                    if not rewrite:
+                        self._log("cli_rewrite produced empty output; falling back to raw message")
+                        rewrite_failed = True
+                    else:
+                        self._log(f"rewrite chars={len(rewrite.encode('utf-8'))}")
+                        text_to_speak = rewrite
 
-            self._log("invoking cli_rewrite.py (wraps claude -p with timeout)")
-            if not VENV.is_dir():
-                self._log(f"venv missing at {VENV}; skipping")
-                self._machine.transition(BAILED)
-                return 0
-
-            rc, rewrite = self._runner(
-                [str(VENV / "bin" / "python"), str(CLI_REWRITE), "--timeout", "90"],
-                stdin_text=src,
-            )
-            if rc != 0:
-                self._log(f"cli_rewrite exit {rc}; skipping")
-                self._machine.transition(BAILED)
-                return 0
-            rewrite = rewrite or ""
-            if len(rewrite.encode("utf-8")) < 1:
-                self._log("cli_rewrite produced empty output; skipping")
-                self._machine.transition(BAILED)
-                return 0
-            self._log(f"rewrite chars={len(rewrite.encode('utf-8'))}")
-            text_to_speak = rewrite
+            if rewrite_failed:
+                text_to_speak = src
 
         if self._dedup.already_playing(source_hash):
             self._log("same hash already playing; skipping duplicate (post-rewrite path)")
@@ -498,7 +501,7 @@ class AutoplayWorker:
         self._speak(source_hash, stdin_text=text_to_speak, path_label="after rewrite" if not bypass else "direct as-is")
         return 0
 
-    def _speak(self, source_hash: str, *, stdin_text: str, path_label: str) -> None:
+    def _speak(self, source_hash: str, *, stdin_text: str, path_label: str) -> bool:
         # The now-playing marker was already stamped atomically by
         # try_claim() before this point (see _play_cache_* paths).
         self._machine.transition(SPEAKING)
@@ -520,7 +523,7 @@ class AutoplayWorker:
                 if resp.status in ("ok", "queued"):
                     self._log(f"enqueued to daemon queue (status={resp.status}, depth={resp.queue_depth})")
                     self._machine.transition(DONE)
-                    return
+                    return True
             except (ConnectionError, OSError) as exc:
                 self._log(f"daemon client speak failed, falling back to speak.py: {exc}")
 
@@ -530,7 +533,9 @@ class AutoplayWorker:
         )
         if rc != 0:
             self._log(f"speak.py exit {rc} ({path_label})")
+            return False
         self._machine.transition(DONE)
+        return True
 
 
 def main(argv: list[str] | None = None) -> int:

@@ -434,6 +434,110 @@ def test_in_process_fifo_returns_true_immediately() -> None:
     assert fifo.wait_for_queue_turn(timeout=10, mpv_running=lambda: True, narrator_depth=lambda: 5, is_stale=lambda: True) is True
 
 
+def test_zero_byte_cache_wav_routes_to_cache_miss() -> None:
+    """When cache full.wav is 0 bytes (corrupted/interrupted), worker treats as miss and synthesizes."""
+    long_msg = "x" * 40
+    full_hash = "d" * 64
+    tmp = Path(tempfile.mkdtemp(prefix="auto-speech-worker-test-"))
+    # Write 0-byte full.wav
+    wav = tmp / "config" / "cache" / full_hash[:16] / "full.wav"
+    wav.parent.mkdir(parents=True, exist_ok=True)
+    wav.write_bytes(b"")
+
+    calls = []
+
+    def script(argv, stdin):
+        prog = (
+            argv[1]
+            if (
+                argv[0] in ("bash", sys.executable, "python", "python3")
+                or Path(argv[0]).name.startswith("python")
+            )
+            else argv[0]
+        )
+        if str(prog).endswith("run_extract.sh"):
+            return 0, long_msg
+        if str(prog).endswith("compute_hash.sh"):
+            return 0, full_hash + "\n"
+        if str(prog).endswith("cli_rewrite.py"):
+            calls.append("rewrite")
+            return 0, "rewritten text"
+        if str(prog).endswith("speak.py") and stdin == "rewritten text":
+            calls.append("synth_speak_ok")
+            return 0, None
+        raise AssertionError(f"unexpected call: argv={argv} stdin={stdin!r}")
+
+    orig_root = awmod._PROJECT_ROOT
+    awmod._PROJECT_ROOT = tmp
+    try:
+        w = _worker(runner=_Recorder(script))
+        assert w.run() == 0
+    finally:
+        awmod._PROJECT_ROOT = orig_root
+
+    assert w.machine.state == DONE
+    assert "rewrite" in calls
+    assert "synth_speak_ok" in calls
+
+
+def test_cli_rewrite_failure_falls_back_to_raw_message() -> None:
+    """When cli_rewrite fails (e.g. timeout or exit 1), worker falls back to raw text."""
+    long_msg = "Raw unsummarized text that must still be spoken on rewrite failure"
+    full_hash = "e" * 64
+    tmp = Path(tempfile.mkdtemp(prefix="auto-speech-worker-test-"))
+
+    spoken_text = {"val": None}
+
+    def script(argv, stdin):
+        prog = (
+            argv[1]
+            if (
+                argv[0] in ("bash", sys.executable, "python", "python3")
+                or Path(argv[0]).name.startswith("python")
+            )
+            else argv[0]
+        )
+        if str(prog).endswith("run_extract.sh"):
+            return 0, long_msg
+        if str(prog).endswith("compute_hash.sh"):
+            return 0, full_hash + "\n"
+        if str(prog).endswith("cli_rewrite.py"):
+            return 1, ""  # Simulate rewrite failure/timeout
+        if str(prog).endswith("speak.py"):
+            spoken_text["val"] = stdin
+            return 0, None
+        raise AssertionError(f"unexpected call: argv={argv} stdin={stdin!r}")
+
+    orig_root = awmod._PROJECT_ROOT
+    awmod._PROJECT_ROOT = tmp
+    try:
+        w = _worker(runner=_Recorder(script))
+        assert w.run() == 0
+    finally:
+        awmod._PROJECT_ROOT = orig_root
+
+    assert w.machine.state == DONE
+    assert spoken_text["val"] == long_msg
+
+
+def test_compute_hash_fallback_voice_is_system() -> None:
+    """When voice_calibration.json is absent, _compute_hash falls back to system:1.0."""
+    import hashlib
+
+    tmp = Path(tempfile.mkdtemp(prefix="auto-speech-worker-test-"))
+    orig_root = awmod._PROJECT_ROOT
+    awmod._PROJECT_ROOT = tmp
+    try:
+        w = awmod.AutoplayWorker(0.0)
+        src = "test message content"
+        rc, h = w._compute_hash(src)
+        assert rc == 0
+        expected_key = src.encode("utf-8") + b"\x00" + b"system:1.0"
+        assert h == hashlib.sha256(expected_key).hexdigest()
+    finally:
+        awmod._PROJECT_ROOT = orig_root
+
+
 def main() -> int:
     tests = [
         test_global_disable_bails,
@@ -446,6 +550,9 @@ def main() -> int:
         test_cache_miss_raw_mode_bypasses_llm_and_speaks_as_is,
         test_post_coalesce_staleness_does_not_drop_message,
         test_in_process_fifo_returns_true_immediately,
+        test_zero_byte_cache_wav_routes_to_cache_miss,
+        test_cli_rewrite_failure_falls_back_to_raw_message,
+        test_compute_hash_fallback_voice_is_system,
     ]
     for t in tests:
         t()
