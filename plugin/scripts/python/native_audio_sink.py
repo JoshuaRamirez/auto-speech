@@ -104,7 +104,7 @@ class NativeAudioSink:
                     pass
 
             try:
-                stdout, stderr = proc.communicate(timeout=timeout)
+                _stdout, stderr = proc.communicate(timeout=timeout)
                 retcode = proc.returncode
             except subprocess.TimeoutExpired:
                 self.interrupt()

@@ -39,9 +39,9 @@ PLUGIN_PYTHON = PROJECT_ROOT / "plugin" / "scripts" / "python"
 sys.path.insert(0, str(PROJECT_ROOT))
 sys.path.insert(0, str(PLUGIN_PYTHON))
 
-import narrator_service  # noqa: E402
-from speak import send_speech_request  # noqa: E402
-from voice_profile import VoiceProfile  # noqa: E402
+import narrator_service
+from speak import send_speech_request
+from voice_profile import VoiceProfile
 
 
 class FakeAudioSink:
@@ -460,7 +460,7 @@ class TestQueueBackpressureSocketFlood(unittest.TestCase):
                 s = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
                 try:
                     s.connect(str(self.sock_path))
-                    s.sendall(f"abrupt_{i}".encode("utf-8"))
+                    s.sendall(f"abrupt_{i}".encode())
                     s.setsockopt(socket.SOL_SOCKET, socket.SO_LINGER, linger)
                 except (OSError, ConnectionResetError):
                     pass
@@ -631,7 +631,7 @@ class TestSimultaneousSocketAndJsonlEvents(unittest.TestCase):
                 svc._stop_socket_server()
                 try:
                     svc._tts_queue.put_nowait(None)
-                except Exception:
+                except Exception:  # noqa: BLE001, S110 — cleanup must not mask the test result
                     pass
                 tts_thread.join(timeout=2.0)
                 tail_thread.join(timeout=2.0)

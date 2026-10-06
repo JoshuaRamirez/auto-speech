@@ -31,11 +31,12 @@ PLUGIN_PYTHON = PROJECT_ROOT / "plugin" / "scripts" / "python"
 sys.path.insert(0, str(PROJECT_ROOT))
 sys.path.insert(0, str(PLUGIN_PYTHON))
 
-import narrator_service  # noqa: E402
-from native_audio_sink import NativeAudioSink, PlaybackError  # noqa: E402
-from tts_engine import TTSGenerationError  # noqa: E402
-from voice_profile import VoiceProfile  # noqa: E402
-from tests.e2e.harness import IsolatedEnvironment, create_dummy_wav  # noqa: E402
+import narrator_service
+from native_audio_sink import NativeAudioSink, PlaybackError
+from tts_engine import TTSGenerationError
+from voice_profile import VoiceProfile
+
+from tests.e2e.harness import IsolatedEnvironment, create_dummy_wav
 
 
 class MockFailingSynthesizer:
@@ -272,14 +273,16 @@ class TestPromptInterruption(unittest.TestCase):
             )
 
             # Spy on subprocess calls to verify pkill is NEVER called
-            with patch.object(Path, "home", staticmethod(lambda: home)):
-                with patch("subprocess.run") as mock_subproc_run:
-                    svc._process_chunk(burst_chunk)
+            with (
+                patch.object(Path, "home", staticmethod(lambda: home)),
+                patch("subprocess.run") as mock_subproc_run,
+            ):
+                svc._process_chunk(burst_chunk)
 
-                    # Ensure subprocess.run was NEVER called with pkill
-                    for call_arg in mock_subproc_run.call_args_list:
-                        args = call_arg[0][0] if call_arg[0] else []
-                        self.assertNotIn("pkill", args, "pkill must NEVER be called!")
+                # Ensure subprocess.run was NEVER called with pkill
+                for call_arg in mock_subproc_run.call_args_list:
+                    args = call_arg[0][0] if call_arg[0] else []
+                    self.assertNotIn("pkill", args, "pkill must NEVER be called!")
 
         self.assertEqual(svc._phases_this_turn, 0)
 
@@ -295,7 +298,7 @@ class TestPromptInterruption(unittest.TestCase):
                 try:
                     with patch.dict(os.environ, self.sandbox.env):
                         sink.play(wav)
-                except Exception as exc:
+                except Exception as exc:  # noqa: BLE001 — stress worker records any playback failure
                     errors.append(exc)
                 time.sleep(0.01)
 
@@ -303,7 +306,7 @@ class TestPromptInterruption(unittest.TestCase):
             while not stop_event.is_set():
                 try:
                     sink.interrupt()
-                except Exception as exc:
+                except Exception as exc:  # noqa: BLE001 — stress worker records any interrupt failure
                     errors.append(exc)
                 time.sleep(0.005)
 

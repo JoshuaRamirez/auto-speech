@@ -13,11 +13,10 @@ SRC = Path(__file__).resolve().parents[1] / "plugin" / "scripts" / "python"
 if str(SRC) not in sys.path:
     sys.path.insert(0, str(SRC))
 
-import control  # noqa: E402
-import replay  # noqa: E402
-from cache_entry import CacheEntry  # noqa: E402
-from native_audio_sink import AudioSinkError  # noqa: E402
-
+import control
+import replay
+from cache_entry import CacheEntry
+from native_audio_sink import AudioSinkError
 
 # --- control.py tests ---
 
@@ -68,14 +67,14 @@ def test_replay_bad_ordinal() -> None:
 
 
 def test_replay_no_cache_entries() -> None:
-    with tempfile.TemporaryDirectory() as tmpdir:
-        with (
-            mock.patch("replay._default_cache_root", return_value=Path(tmpdir)),
-            mock.patch("sys.stderr", io.StringIO()) as stderr,
-        ):
-            rc = replay.main([])
-            assert rc == replay.EXIT_NO_CACHE_ENTRY
-            assert "no cache entries found" in stderr.getvalue()
+    with (
+        tempfile.TemporaryDirectory() as tmpdir,
+        mock.patch("replay._default_cache_root", return_value=Path(tmpdir)),
+        mock.patch("sys.stderr", io.StringIO()) as stderr,
+    ):
+        rc = replay.main([])
+        assert rc == replay.EXIT_NO_CACHE_ENTRY
+        assert "no cache entries found" in stderr.getvalue()
 
 
 def test_replay_ordinal_out_of_range() -> None:

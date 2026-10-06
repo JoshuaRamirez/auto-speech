@@ -13,13 +13,13 @@ SRC = Path(__file__).resolve().parents[1] / "plugin" / "scripts" / "python"
 if str(SRC) not in sys.path:
     sys.path.insert(0, str(SRC))
 
-from apple_say_engine import (  # noqa: E402
+from apple_say_engine import (
     AppleSayEngine,
     get_available_say_voices,
     get_default_say_voice,
 )
-from tts_engine import TTSGenerationError  # noqa: E402
-from voice_profile import VoiceProfile  # noqa: E402
+from tts_engine import TTSGenerationError
+from voice_profile import VoiceProfile
 
 
 class TestAppleSayEngine(unittest.TestCase):

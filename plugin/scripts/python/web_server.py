@@ -10,16 +10,16 @@ from __future__ import annotations
 import argparse
 import sys
 import threading
+from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any, Callable
-
-from flask import Flask
+from typing import Any
 
 from cache_store import CacheStore
 from claude_cli_rewriter import ClaudeCliRewriter, load_default_template
 from config_constants import DEFAULT_SPEED, DEFAULT_VOICE_ID, FALLBACK_CHARS_PER_SEC
+from flask import Flask
 from http_routing import HttpRoutes, _supported_lang_prefixes
 from job_tracker import JobTracker
 from native_audio_sink import NativeAudioSink

@@ -347,7 +347,7 @@ class AutoplayWorker:
                 t_path = TranscriptLocator().locate(session_id=self._session_id or None)
             msg = MessageSelector().select(t_path, 1)
             return 0, msg.text
-        except Exception:
+        except Exception:  # noqa: BLE001 — in-process extract falls back to bash
             extract_argv = ["bash", str(EXTRACT), "--ordinal", "1"]
             if self._transcript_path:
                 extract_argv += ["--transcript-path", self._transcript_path]
@@ -368,9 +368,9 @@ class AutoplayWorker:
                 speed = 1.0
 
             source_bytes = src.encode("utf-8")
-            key_input = source_bytes + b"\x00" + f"{voice_id}:{speed}".encode("utf-8")
+            key_input = source_bytes + b"\x00" + f"{voice_id}:{speed}".encode()
             return 0, hashlib.sha256(key_input).hexdigest()
-        except Exception:
+        except Exception:  # noqa: BLE001 — in-process hash falls back to bash
             rc, h = self._runner(["bash", str(COMPUTE_HASH)], stdin_text=src)
             return rc, h.strip() if h else h
 

@@ -23,7 +23,7 @@ from unittest import mock
 SRC = Path(__file__).resolve().parents[1] / "plugin" / "scripts" / "python"
 sys.path.insert(0, str(SRC))
 
-from native_audio_sink import (  # noqa: E402
+from native_audio_sink import (
     MpvNotInstalledError,
     NativeAudioSink,
     PlaybackError,
@@ -32,8 +32,8 @@ from native_audio_sink import (  # noqa: E402
 
 def _create_wav(duration_s: float = 0.05, framerate: int = 24000) -> Path:
     """Creates a temporary silent WAV file of the given duration."""
-    tmp = tempfile.NamedTemporaryFile(suffix=".wav", delete=False)
-    wav_path = Path(tmp.name)
+    with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as tmp:
+        wav_path = Path(tmp.name)
     n_frames = int(framerate * duration_s)
     with wave.open(str(wav_path), "wb") as w:
         w.setnchannels(1)
@@ -51,7 +51,7 @@ def _count_system_mpv_processes() -> tuple[int, int]:
             text=True,
             stderr=subprocess.DEVNULL,
         )
-    except Exception:
+    except (OSError, subprocess.SubprocessError):
         return 0, 0
 
     total = 0
@@ -74,7 +74,7 @@ class TestStressSequentialAndConcurrentPlayback(unittest.TestCase):
     def setUp(self) -> None:
         if not shutil.which("mpv"):
             self.skipTest("mpv binary required for empirical stress tests")
-        total, zombies = _count_system_mpv_processes()
+        total, _zombies = _count_system_mpv_processes()
         self.assertEqual(total, 0, f"Found pre-existing mpv processes before test: {total}")
 
     def test_rapid_sequential_playback(self) -> None:
@@ -107,7 +107,7 @@ class TestStressSequentialAndConcurrentPlayback(unittest.TestCase):
             for _ in range(calls_per_thread):
                 try:
                     sink.play(wav_path)
-                except Exception as e:
+                except Exception as e:  # noqa: BLE001 — worker records any playback failure
                     errors.append((tid, e))
 
         threads = [
@@ -190,7 +190,7 @@ class TestStressInterruptionAndLatency(unittest.TestCase):
             for _ in range(100):
                 try:
                     sink.interrupt()
-                except Exception as e:
+                except Exception as e:  # noqa: BLE001 — flooder records any interrupt failure
                     errors.append(e)
 
         threads = [threading.Thread(target=flooder) for _ in range(10)]
@@ -213,7 +213,7 @@ class TestStressInterruptionAndLatency(unittest.TestCase):
         def player():
             try:
                 sink.play(wav)
-            except Exception as e:
+            except Exception as e:  # noqa: BLE001 — player thread records any playback failure
                 player_error.append(e)
             finally:
                 play_done.set()
@@ -232,7 +232,7 @@ class TestStressInterruptionAndLatency(unittest.TestCase):
             for _ in range(20):
                 try:
                     sink.interrupt()
-                except Exception as e:
+                except Exception as e:  # noqa: BLE001 — interrupter records any interrupt failure
                     interrupter_errors.append(e)
 
         interrupters = [threading.Thread(target=hammer) for _ in range(20)]
@@ -265,10 +265,10 @@ class TestStressInterruptionAndLatency(unittest.TestCase):
             for iteration in range(15):
                 player_error = []
 
-                def player():
+                def player(player_error=player_error):
                     try:
                         sink.play(wav)
-                    except Exception as e:
+                    except Exception as e:  # noqa: BLE001 — trial records any playback failure
                         player_error.append(e)
 
                 t = threading.Thread(target=player)
@@ -305,10 +305,10 @@ class TestStressInterruptionAndLatency(unittest.TestCase):
             for iteration in range(25):
                 player_error = []
 
-                def player():
+                def player(player_error=player_error):
                     try:
                         sink.play(wav)
-                    except Exception as e:
+                    except Exception as e:  # noqa: BLE001 — trial records any playback failure
                         player_error.append(e)
 
                 t = threading.Thread(target=player)
@@ -340,7 +340,7 @@ class TestStressInterruptionAndLatency(unittest.TestCase):
                 unblock_event = threading.Event()
                 t_play_unblocked = [0.0]
 
-                def player():
+                def player(t_play_unblocked=t_play_unblocked, unblock_event=unblock_event):
                     sink.play(wav)
                     t_play_unblocked[0] = time.perf_counter()
                     unblock_event.set()
@@ -389,24 +389,24 @@ class TestStressInterruptionAndLatency(unittest.TestCase):
 
     def test_sigkill_escalation_on_unresponsive_process(self) -> None:
         """When a process ignores SIGTERM, sink must escalate to SIGKILL and reap it."""
-        script = tempfile.NamedTemporaryFile(mode="w", suffix=".py", delete=False)
-        script.write("""#!/usr/bin/env python3
+        with tempfile.NamedTemporaryFile(mode="w", suffix=".py", delete=False) as script:
+            script.write("""#!/usr/bin/env python3
 import signal, time, sys
 signal.signal(signal.SIGTERM, signal.SIG_IGN)
 with open("/tmp/sink_stub_ready.txt", "w") as f:
     f.write("ready")
 time.sleep(10)
 """)
-        script.close()
-        os.chmod(script.name, stat.S_IRWXU)
+            script_path = script.name
+        os.chmod(script_path, stat.S_IRWXU)
 
-        dummy_wav = tempfile.NamedTemporaryFile(suffix=".wav", delete=False)
-        dummy_wav.close()
+        with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as dummy_wav:
+            dummy_wav_path = dummy_wav.name
 
-        sink = NativeAudioSink(mpv_path=script.name)
+        sink = NativeAudioSink(mpv_path=script_path)
 
         def player():
-            sink.play(dummy_wav.name)
+            sink.play(dummy_wav_path)
 
         t = threading.Thread(target=player)
         t.start()
@@ -421,8 +421,8 @@ time.sleep(10)
         t.join(timeout=2.0)
 
         ready_path.unlink(missing_ok=True)
-        os.unlink(script.name)
-        os.unlink(dummy_wav.name)
+        os.unlink(script_path)
+        os.unlink(dummy_wav_path)
 
         self.assertTrue(sink.was_interrupted)
         # Should have waited ~500ms for SIGTERM, then sent SIGKILL and finished in ~505-550ms
@@ -444,9 +444,11 @@ class TestStressEdgeCasesAndErrorHandling(unittest.TestCase):
         wav = _create_wav(duration_s=0.01)
         try:
             sink = NativeAudioSink()
-            with mock.patch("shutil.which", return_value=None):
-                with self.assertRaises(MpvNotInstalledError):
-                    sink.play(wav)
+            with (
+                mock.patch("shutil.which", return_value=None),
+                self.assertRaises(MpvNotInstalledError),
+            ):
+                sink.play(wav)
         finally:
             wav.unlink(missing_ok=True)
 
@@ -523,7 +525,7 @@ class TestStressEdgeCasesAndErrorHandling(unittest.TestCase):
             time.sleep(0.01)  # Ensure worker1 holds the playback lock
             try:
                 sink.play(wav2)
-            except Exception as e:
+            except Exception as e:  # noqa: BLE001 — queued worker records any playback failure
                 t2_error.append(e)
 
         t1 = threading.Thread(target=worker1)

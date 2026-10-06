@@ -7,6 +7,7 @@ via UNIX domain socket (/tmp/auto-speech-daemon.sock).
 from __future__ import annotations
 
 import argparse
+import logging
 import os
 import socket
 import sys
@@ -15,6 +16,8 @@ from pathlib import Path
 from typing import Any
 
 from daemon_client import DEFAULT_SOCKET_PATH, DaemonClient, DaemonResponse, Priority  # noqa: F401
+
+logger = logging.getLogger(__name__)
 
 
 def get_socket_path() -> Path:
@@ -55,8 +58,8 @@ def send_speech_request(
                     if Path(socket_path).is_socket():
                         break
                     time.sleep(0.04)
-            except Exception:
-                pass
+            except Exception:  # daemon autostart is best-effort
+                logger.debug("daemon autostart failed", exc_info=True)
 
     max_attempts = 5
     retry_delay = 0.02
@@ -81,7 +84,7 @@ def send_speech_request(
                 continue
             print(f"Error: cannot connect to auto-speech daemon at {socket_path}", file=sys.stderr)
             return 1
-        except (socket.timeout, OSError) as exc:
+        except (TimeoutError, OSError) as exc:
             print(
                 f"Error: cannot connect to auto-speech daemon at {socket_path}: {exc}", file=sys.stderr
             )
@@ -135,8 +138,8 @@ def main(
                     resp = client.play_cache(args.source_hash)
                     if resp.status in ("ok", "queued"):
                         return 0
-                except Exception:
-                    pass
+                except Exception:  # cache play falls through to the wav file
+                    logger.debug("injected client play_cache failed", exc_info=True)
             elif sink is None:
                 try:
                     c = DaemonClient(socket_path=args.socket_path)
@@ -144,8 +147,8 @@ def main(
                         resp = c.play_cache(args.source_hash)
                         if resp.status in ("ok", "queued"):
                             return 0
-                except Exception:
-                    pass
+                except Exception:  # cache play falls through to the wav file
+                    logger.debug("daemon play_cache failed", exc_info=True)
 
             cache_root = Path(__file__).resolve().parents[3] / "config" / "cache"
             cache_wav = cache_root / args.source_hash[:16] / "full.wav"
@@ -160,7 +163,7 @@ def main(
                 try:
                     active_sink.play(cache_wav)
                     return 0
-                except Exception as exc:
+                except Exception as exc:  # noqa: BLE001 — playback failure is reported, not raised
                     print(f"speak: cached playback failed: {exc}", file=sys.stderr)
                     return 1
         return 0

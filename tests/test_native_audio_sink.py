@@ -17,7 +17,7 @@ from unittest import mock
 SRC = Path(__file__).resolve().parents[1] / "plugin" / "scripts" / "python"
 sys.path.insert(0, str(SRC))
 
-from native_audio_sink import (  # noqa: E402
+from native_audio_sink import (
     MpvNotInstalledError,
     NativeAudioSink,
     PlaybackError,
@@ -25,8 +25,8 @@ from native_audio_sink import (  # noqa: E402
 
 
 def _make_silent_wav(duration_s: float = 0.05, framerate: int = 24000) -> Path:
-    tmp = tempfile.NamedTemporaryFile(suffix=".wav", delete=False)
-    wav_path = Path(tmp.name)
+    with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as tmp:
+        wav_path = Path(tmp.name)
     n_frames = int(framerate * duration_s)
     with wave.open(str(wav_path), "wb") as w:
         w.setnchannels(1)
@@ -218,8 +218,7 @@ class TestNativeAudioSink(unittest.TestCase):
                 nonlocal active_count, max_active
                 with count_lock:
                     active_count += 1
-                    if active_count > max_active:
-                        max_active = active_count
+                    max_active = max(max_active, active_count)
                 time.sleep(0.02)
                 with count_lock:
                     active_count -= 1

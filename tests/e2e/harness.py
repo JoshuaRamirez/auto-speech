@@ -190,7 +190,7 @@ class UnixSocketClient:
                     if not chunk:
                         break
                     response_chunks.append(chunk)
-                except socket.timeout:
+                except TimeoutError:
                     break
             return b"".join(response_chunks).decode("utf-8", errors="replace")
         finally:
@@ -207,7 +207,7 @@ class UnixSocketClient:
         try:
             sock.connect(sock_path_str)
             return True
-        except (socket.error, OSError):
+        except OSError:
             return False
         finally:
             sock.close()
@@ -233,6 +233,7 @@ def run_speak_cli(
             capture_output=True,
             env=env,
             timeout=timeout,
+            check=False,
         )
     except subprocess.TimeoutExpired as exc:
         stdout_str = (

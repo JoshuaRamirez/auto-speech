@@ -26,17 +26,15 @@ import tempfile
 import threading
 import time
 import wave
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any, Optional
+from typing import Any
 
 # Daemon runs a UNIX domain socket server (socket.AF_UNIX) via unix_ipc_server._DaemonSocketServer
-
 from auto_speech_log import get_logger
 from cache_entry import CacheEntry
 from cache_store import CachePromotionError, CacheStore
 from config_constants import DEFAULT_SPEED, DEFAULT_VOICE_ID, FALLBACK_CHARS_PER_SEC
-from native_audio_sink import NativeAudioSink
 from narrator_config import load_config
 from narrator_phase_classifier import Category, Phase, PhaseClassifier
 from narrator_state import (
@@ -48,11 +46,12 @@ from narrator_state import (
     NarratorStateMachine,
 )
 from narrator_summarizer import Summarizer, load_summarizer
+from native_audio_sink import NativeAudioSink
 from priority_arbiter import Priority, PriorityArbiter, QueueItem, QueueProxyFacade
-from unix_ipc_server import _DaemonSocketServer
-from tts_executor import TTSExecutor
 from resilient_synthesizer import ResilientSynthesizer
 from tts_engine import TTSEngine
+from tts_executor import TTSExecutor
+from unix_ipc_server import _DaemonSocketServer
 from voice_profile import VoiceProfile
 from voice_profile_store import VoiceProfileStore
 
@@ -88,7 +87,7 @@ def _wav_duration_seconds(path: Path) -> float:
             frames = wf.getnframes()
             rate = wf.getframerate()
         return frames / rate if rate else 0.0
-    except Exception:
+    except Exception:  # noqa: BLE001 — unreadable wav reports zero duration
         return 0.0
 
 
@@ -231,8 +230,8 @@ class NarratorService:
         self._dropped_phases = 0
         self._state_lock = threading.Lock()
         self._engine_state = "IDLE"
-        self._active_priority: Optional[int] = None
-        self._active_item: Optional[QueueItem] = None
+        self._active_priority: int | None = None
+        self._active_item: QueueItem | None = None
         self._interrupted: bool = False
         self._preempted: bool = False
         self._start_time = time.time()
@@ -374,11 +373,11 @@ class NarratorService:
         if server is not None:
             try:
                 server.shutdown()
-            except Exception as exc:
+            except Exception as exc:  # noqa: BLE001 — shutdown must finish
                 _log(f"error shutting down socket server: {exc}")
             try:
                 server.server_close()
-            except Exception as exc:
+            except Exception as exc:  # noqa: BLE001 — close must finish
                 _log(f"error closing socket server: {exc}")
 
         if self._socket_thread is not None:
@@ -390,8 +389,8 @@ class NarratorService:
         if self._atexit_registered:
             try:
                 atexit.unregister(self._cleanup_socket_file)
-            except Exception:
-                pass
+            except Exception as exc:  # noqa: BLE001 — atexit cleanup must not raise
+                _log(f"error unregistering socket cleanup: {exc}")
             self._atexit_registered = False
 
     def enqueue_text(self, text: str) -> None:
@@ -425,13 +424,13 @@ class NarratorService:
             voice_id = str(payload.get("voice_id", DEFAULT_VOICE_ID))
             speed = float(payload.get("speed", DEFAULT_SPEED))
 
-            cached_wav: Optional[Path] = None
+            cached_wav: Path | None = None
             if source_hash and len(source_hash) == 64 and all(c in "0123456789abcdef" for c in source_hash):
                 try:
                     hit = self._cache.lookup(source_hash)
                     if hit is not None:
                         cached_wav = hit[0]
-                except Exception:
+                except Exception:  # noqa: BLE001 — cache lookup failure leaves no wav
                     cached_wav = None
 
             if cached_wav is not None:
@@ -490,7 +489,7 @@ class NarratorService:
 
             try:
                 hit = self._cache.lookup(source_hash)
-            except Exception:
+            except Exception:  # noqa: BLE001 — cache lookup failure is a miss
                 hit = None
 
             if hit is None:
@@ -566,7 +565,7 @@ class NarratorService:
         if hasattr(self, "_sink") and self._sink is not None:
             try:
                 self._sink.interrupt()
-            except Exception as exc:
+            except Exception as exc:  # noqa: BLE001 — interrupt must not raise
                 _log(f"sink interrupt error: {exc}")
 
         if state_lock:
@@ -623,7 +622,7 @@ class NarratorService:
             if hasattr(self, "_sink") and self._sink is not None:
                 try:
                     self._sink.interrupt()
-                except Exception as exc:
+                except Exception as exc:  # noqa: BLE001 — preemption must not raise
                     _log(f"sink interrupt during preemption error: {exc}")
 
             if active_item is not None and hasattr(self, "_priority_arbiter"):
@@ -710,9 +709,9 @@ class NarratorService:
                                     f"DEBUG is_cron_tick: False (found non-cron content: {content[:50]})"
                                 )
                                 break
-                        except Exception:
+                        except Exception:  # noqa: BLE001, S110 — skip malformed transcript lines
                             pass
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001 — cron check must not raise
             _log(f"DEBUG is_cron_tick: exception {e}")
         _log("DEBUG is_cron_tick: False (fell through)")
         return False
@@ -776,7 +775,7 @@ class NarratorService:
                         )
                         if words:
                             self._enqueue_phase(words)
-                except Exception as e:
+                except Exception as e:  # noqa: BLE001 — start-words failure must not stop the loop
                     _log(f"Failed to generate start words: {e}")
                 continue
 
@@ -1055,10 +1054,10 @@ class NarratorService:
     def _speak(
         self,
         line: str,
-        source_hash: Optional[str] = None,
+        source_hash: str | None = None,
         *,
-        voice_id: Optional[str] = None,
-        speed: Optional[float] = None,
+        voice_id: str | None = None,
+        speed: float | None = None,
     ) -> None:
         line = line.strip()
         if not line:
@@ -1110,7 +1109,7 @@ class NarratorService:
                             if getattr(self, "_engine_state", "IDLE") == "PLAYING":
                                 self._engine_state = "IDLE"
                     return
-            except Exception as exc:
+            except Exception as exc:  # noqa: BLE001 — cache lookup error falls through to synth
                 _log(f"cache lookup error for {source_hash}: {exc}")
 
         with tempfile.NamedTemporaryFile(prefix="narrator_", suffix=".wav", delete=False) as f:
@@ -1159,7 +1158,7 @@ class NarratorService:
                             speed=profile.speed if profile else DEFAULT_SPEED,
                             char_count=len(line),
                             duration_seconds=duration,
-                            created_at=datetime.now(timezone.utc)
+                            created_at=datetime.now(UTC)
                             .isoformat(timespec="seconds")
                             .replace("+00:00", "Z"),
                             chars_per_second_at_creation=cps,
@@ -1170,7 +1169,7 @@ class NarratorService:
                     except CachePromotionError as exc:
                         _log(f"cache promotion error: {exc}; falling back to staging wav")
                         play_target = temp_wav
-                    except Exception as exc:
+                    except Exception as exc:  # noqa: BLE001 — promotion failure uses the staging wav
                         _log(f"unexpected cache promotion error: {exc}; falling back to staging wav")
                         play_target = temp_wav
 
@@ -1188,7 +1187,7 @@ class NarratorService:
                 self._sink.play(play_target)
             else:
                 _log(f"no speakable audio generated for: {line[:50]!r}")
-        except Exception as exc:
+        except Exception as exc:  # noqa: BLE001 — speak failure must not kill the worker
             _log(f"speak error: {exc!r}")
         finally:
             state_lock = getattr(self, "_state_lock", None)

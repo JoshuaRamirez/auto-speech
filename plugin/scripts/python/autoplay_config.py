@@ -21,6 +21,7 @@ import os
 import sys
 import tomllib
 from pathlib import Path
+
 VALID_MODES = ("verbatim", "summary", "raw", "bypass", "as_is", "direct")
 VALID_SIZES = ("small", "medium", "large")
 
