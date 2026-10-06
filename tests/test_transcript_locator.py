@@ -291,6 +291,46 @@ def test_raises_when_slug_dir_empty() -> None:
                 os.environ["CLAUDE_SESSION_ID"] = prev
 
 
+def test_locate_from_subdirectory_resolves_parent_slug() -> None:
+    with (
+        tempfile.TemporaryDirectory() as project_root_str,
+        tempfile.TemporaryDirectory() as repo_str,
+    ):
+        project_root = Path(project_root_str)
+        repo_dir = Path(repo_str)
+        # Create a .git marker in repo_dir
+        (repo_dir / ".git").mkdir()
+        sub_dir = repo_dir / "tests" / "unit"
+        sub_dir.mkdir(parents=True)
+
+        slug_dir = project_root / _slug_for(repo_dir)
+        slug_dir.mkdir()
+        target = slug_dir / "session-sub.jsonl"
+        _make_jsonl(target)
+
+        loc = _patched_locator(project_root)
+        result = loc.locate(sub_dir)
+        assert result == target, f"expected target in parent slug dir; got {result}"
+
+
+def test_global_session_id_lookup_finds_transcript_when_slug_missing() -> None:
+    with (
+        tempfile.TemporaryDirectory() as project_root_str,
+        tempfile.TemporaryDirectory() as foreign_cwd_str,
+    ):
+        project_root = Path(project_root_str)
+        foreign_cwd = Path(foreign_cwd_str)
+        # Project exists under another slug
+        other_slug_dir = project_root / "-some-other-project-dir"
+        other_slug_dir.mkdir()
+        target = other_slug_dir / "globally-unique-sid.jsonl"
+        _make_jsonl(target)
+
+        loc = _patched_locator(project_root)
+        result = loc.locate(foreign_cwd, session_id="globally-unique-sid")
+        assert result == target, f"expected global match for session_id; got {result}"
+
+
 def main() -> int:
     tests = [
         test_session_id_kwarg_wins_over_env_and_mtime,
@@ -301,6 +341,8 @@ def main() -> int:
         test_raises_when_slug_dir_missing,
         test_raises_when_slug_dir_empty,
         test_dot_in_cwd_basename_maps_to_dash_in_slug,
+        test_locate_from_subdirectory_resolves_parent_slug,
+        test_global_session_id_lookup_finds_transcript_when_slug_missing,
     ]
     for t in tests:
         t()

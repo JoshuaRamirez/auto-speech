@@ -60,6 +60,7 @@ class TranscriptLocator:
         seen: set[str] = set()
         slug_dir: Path | None = None
         tried: list[Path] = []
+        # 1. Try slug candidates for cwd directly
         for slug in _slug_candidates(cwd):
             if slug in seen:
                 continue
@@ -71,12 +72,25 @@ class TranscriptLocator:
                 print(f"[locator] slug_dir={slug_dir}", file=sys.stderr)
                 break
 
+        # 2. If no direct match, check parent directories up to git root or home
         if slug_dir is None:
-            tried_str = ", ".join(str(p) for p in tried)
-            raise TranscriptNotFoundError(
-                f"no project directory matched cwd {cwd}; tried: {tried_str}. "
-                f"Run Claude Code in this cwd first."
-            )
+            for parent in cwd.parents:
+                if parent == parent.parent or parent in (Path.home(), Path.home().parent, Path("/"), Path("/private")):
+                    break
+                for slug in _slug_candidates(parent):
+                    if slug in seen:
+                        continue
+                    seen.add(slug)
+                    candidate = self.PROJECTS_ROOT / slug
+                    tried.append(candidate)
+                    if candidate.exists() and candidate.is_dir():
+                        slug_dir = candidate
+                        print(f"[locator] slug_dir={slug_dir} (from parent {parent})", file=sys.stderr)
+                        break
+                if slug_dir is not None:
+                    break
+                if (parent / ".git").exists():
+                    break
 
         # Precedence: explicit session_id arg → CLAUDE_SESSION_ID env →
         # CLAUDE_CODE_SESSION_ID env (newer Claude Code) → newest-mtime
@@ -89,13 +103,29 @@ class TranscriptLocator:
             or os.environ.get("CLAUDE_CODE_SESSION_ID")
         )
         if sid:
-            candidate = slug_dir / f"{sid}.jsonl"
-            if candidate.exists():
-                print(f"[locator] using session_id file {candidate}", file=sys.stderr)
-                return candidate
-            print(
-                f"[locator] session_id={sid} but {candidate} missing; falling back to newest-jsonl",
-                file=sys.stderr,
+            if slug_dir is not None:
+                candidate = slug_dir / f"{sid}.jsonl"
+                if candidate.exists():
+                    print(f"[locator] using session_id file {candidate}", file=sys.stderr)
+                    return candidate
+            # Global lookup under PROJECTS_ROOT if missing in slug_dir or slug_dir not found
+            if self.PROJECTS_ROOT.is_dir():
+                matches = list(self.PROJECTS_ROOT.glob(f"*/{sid}.jsonl"))
+                if matches:
+                    found = matches[0]
+                    print(f"[locator] found session_id file globally: {found}", file=sys.stderr)
+                    return found
+            if slug_dir is not None:
+                print(
+                    f"[locator] session_id={sid} but candidate missing; falling back to newest-jsonl",
+                    file=sys.stderr,
+                )
+
+        if slug_dir is None:
+            tried_str = ", ".join(str(p) for p in tried)
+            raise TranscriptNotFoundError(
+                f"no project directory matched cwd {cwd}; tried: {tried_str}. "
+                f"Run Claude Code in this cwd first."
             )
 
         candidates = sorted(

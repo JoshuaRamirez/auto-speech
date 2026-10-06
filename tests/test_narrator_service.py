@@ -552,7 +552,47 @@ def test_process_chunk_user_prompt_submit_interrupts_audio_sink() -> None:
         with patch.object(Path, "home", staticmethod(lambda: home)):
             svc._process_chunk(chunk)
 
-    assert sink.interrupted is True, "UserPromptSubmit must call sink.interrupt()"
+    assert sink.interrupted is True, "UserPromptSubmit must call sink.interrupt() when autoplay is off"
+    assert svc._phases_this_turn == 0
+
+
+def test_user_prompt_submit_preserves_autoplay_playback_and_queue() -> None:
+    """When a session has autoplay enabled, UserPromptSubmit must NOT interrupt sink or kill playback."""
+    sink = _MockSink()
+    svc = narrator_service.NarratorService.__new__(narrator_service.NarratorService)
+    svc._config = {}
+    svc._sink = sink
+    svc._classifier = narrator_service.PhaseClassifier(silence_seconds=0.5, max_events_per_phase=1)
+    svc._phases_this_turn = 3
+    svc._tts_queue = queue.Queue()
+    svc._last_event_ts = 0.0
+
+    with tempfile.TemporaryDirectory() as home_str:
+        home = Path(home_str)
+        session_id = "test-session-autoplay-preservation"
+        narrate_marker = home / ".claude" / "auto-speech-narrate-sessions" / session_id
+        narrate_marker.parent.mkdir(parents=True)
+        narrate_marker.touch()
+
+        autoplay_marker = home / ".claude" / "auto-speech-autoplay-enabled" / session_id
+        autoplay_marker.parent.mkdir(parents=True)
+        autoplay_marker.touch()
+
+        chunk = (
+            json.dumps(
+                {
+                    "event": "UserPromptSubmit",
+                    "ts": time.time(),
+                    "payload": {"session_id": session_id, "conversation_history": "User: hi"},
+                }
+            )
+            + "\n"
+        ).encode("utf-8")
+
+        with patch.object(Path, "home", staticmethod(lambda: home)):
+            svc._process_chunk(chunk)
+
+    assert sink.interrupted is False, "UserPromptSubmit must NOT interrupt sink when autoplay is enabled"
     assert svc._phases_this_turn == 0
 
 

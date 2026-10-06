@@ -731,6 +731,15 @@ class NarratorService:
                     _log("Skipping UserPromptSubmit narration for background cron tick.")
                     continue
 
+                # Preserve playback and queue for sessions enrolled in autoplay mode
+                if session_id:
+                    ap_marker = Path.home() / ".claude" / "auto-speech-autoplay-enabled" / session_id
+                    if ap_marker.exists():
+                        _log(f"Session {session_id} has autoplay enabled; preserving queue and playback on UserPromptSubmit")
+                        self._classifier.flush(session_id)
+                        self._phases_this_turn = 0
+                        continue
+
                 # Immediately interrupt any currently playing audio and purge lower queues!
                 self._handle_p1_interrupt()
                 try:
