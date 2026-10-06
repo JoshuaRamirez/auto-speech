@@ -331,6 +331,52 @@ def test_global_session_id_lookup_finds_transcript_when_slug_missing() -> None:
         assert result == target, f"expected global match for session_id; got {result}"
 
 
+def test_deep_nested_subdirectory_resolves_git_root_slug() -> None:
+    with (
+        tempfile.TemporaryDirectory() as project_root_str,
+        tempfile.TemporaryDirectory() as repo_str,
+    ):
+        project_root = Path(project_root_str)
+        repo_dir = Path(repo_str)
+        (repo_dir / ".git").mkdir()
+        deep_dir = repo_dir / "src" / "pkg" / "sub" / "deep" / "nested"
+        deep_dir.mkdir(parents=True)
+
+        slug_dir = project_root / _slug_for(repo_dir)
+        slug_dir.mkdir()
+        target = slug_dir / "session-deep.jsonl"
+        _make_jsonl(target)
+
+        loc = _patched_locator(project_root)
+        result = loc.locate(deep_dir)
+        assert result == target, f"expected target in repo slug dir; got {result}"
+
+
+def test_global_session_id_lookup_honors_claude_code_session_id_env() -> None:
+    with (
+        tempfile.TemporaryDirectory() as project_root_str,
+        tempfile.TemporaryDirectory() as foreign_cwd_str,
+    ):
+        project_root = Path(project_root_str)
+        foreign_cwd = Path(foreign_cwd_str)
+        other_slug_dir = project_root / "-another-random-project"
+        other_slug_dir.mkdir()
+        target = other_slug_dir / "env-global-sid.jsonl"
+        _make_jsonl(target)
+
+        loc = _patched_locator(project_root)
+        prev = os.environ.get("CLAUDE_CODE_SESSION_ID")
+        try:
+            os.environ["CLAUDE_CODE_SESSION_ID"] = "env-global-sid"
+            result = loc.locate(foreign_cwd)
+            assert result == target, f"expected global match from CLAUDE_CODE_SESSION_ID; got {result}"
+        finally:
+            if prev is not None:
+                os.environ["CLAUDE_CODE_SESSION_ID"] = prev
+            else:
+                os.environ.pop("CLAUDE_CODE_SESSION_ID", None)
+
+
 def main() -> int:
     tests = [
         test_session_id_kwarg_wins_over_env_and_mtime,
@@ -343,6 +389,8 @@ def main() -> int:
         test_dot_in_cwd_basename_maps_to_dash_in_slug,
         test_locate_from_subdirectory_resolves_parent_slug,
         test_global_session_id_lookup_finds_transcript_when_slug_missing,
+        test_deep_nested_subdirectory_resolves_git_root_slug,
+        test_global_session_id_lookup_honors_claude_code_session_id_env,
     ]
     for t in tests:
         t()

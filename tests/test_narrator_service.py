@@ -565,35 +565,70 @@ def test_user_prompt_submit_preserves_autoplay_playback_and_queue() -> None:
     svc._classifier = narrator_service.PhaseClassifier(silence_seconds=0.5, max_events_per_phase=1)
     svc._phases_this_turn = 3
     svc._tts_queue = queue.Queue()
+    svc._tts_queue.put("queued utterance 1")
     svc._last_event_ts = 0.0
 
-    with tempfile.TemporaryDirectory() as home_str:
-        home = Path(home_str)
-        session_id = "test-session-autoplay-preservation"
-        narrate_marker = home / ".claude" / "auto-speech-narrate-sessions" / session_id
-        narrate_marker.parent.mkdir(parents=True)
-        narrate_marker.touch()
+    session_id = "test-session-autoplay-preservation"
+    fake_mpv_pid = 88888
+    mpv_pid_file = Path("/tmp/auto-speech-mpv.pid")
+    mpv_pid_file.write_text(str(fake_mpv_pid))
 
-        autoplay_marker = home / ".claude" / "auto-speech-autoplay-enabled" / session_id
-        autoplay_marker.parent.mkdir(parents=True)
-        autoplay_marker.touch()
+    try:
+        with tempfile.TemporaryDirectory() as home_str:
+            home = Path(home_str)
+            narrate_marker = home / ".claude" / "auto-speech-narrate-sessions" / session_id
+            narrate_marker.parent.mkdir(parents=True)
+            narrate_marker.touch()
 
-        chunk = (
-            json.dumps(
-                {
-                    "event": "UserPromptSubmit",
-                    "ts": time.time(),
-                    "payload": {"session_id": session_id, "conversation_history": "User: hi"},
-                }
-            )
-            + "\n"
-        ).encode("utf-8")
+            autoplay_marker = home / ".claude" / "auto-speech-autoplay-enabled" / session_id
+            autoplay_marker.parent.mkdir(parents=True)
+            autoplay_marker.touch()
 
-        with patch.object(Path, "home", staticmethod(lambda: home)):
-            svc._process_chunk(chunk)
+            chunk = (
+                json.dumps(
+                    {
+                        "event": "UserPromptSubmit",
+                        "ts": time.time(),
+                        "payload": {"session_id": session_id, "conversation_history": "User: hi"},
+                    }
+                )
+                + "\n"
+            ).encode("utf-8")
 
-    assert sink.interrupted is False, "UserPromptSubmit must NOT interrupt sink when autoplay is enabled"
-    assert svc._phases_this_turn == 0
+            with (
+                patch.object(Path, "home", staticmethod(lambda: home)),
+                patch.object(os, "kill") as mock_kill,
+            ):
+                svc._process_chunk(chunk)
+
+                # os.kill must NOT have been called on mpv PID
+                mock_kill.assert_not_called()
+                # mpv PID file must remain intact
+                assert mpv_pid_file.exists(), "mpv.pid must not be unlinked when autoplay is enabled"
+
+        assert sink.interrupted is False, "UserPromptSubmit must NOT interrupt sink when autoplay is enabled"
+        assert svc._phases_this_turn == 0
+        # TTS queue must not have been flushed/cleared
+        assert svc._tts_queue.qsize() == 1, "Queue items must be preserved on autoplay UserPromptSubmit"
+    finally:
+        mpv_pid_file.unlink(missing_ok=True)
+
+
+def test_get_summarizer_defensively_initializes_lock() -> None:
+    """_get_summarizer must safely initialize _summarizer_lock if missing on the instance."""
+    svc = narrator_service.NarratorService.__new__(narrator_service.NarratorService)
+    svc._config = {}
+    svc._summarizer = None
+    if hasattr(svc, "_summarizer_lock"):
+        delattr(svc, "_summarizer_lock")
+
+    mock_sum = MagicMock()
+    with patch("narrator_service.load_summarizer", return_value=mock_sum):
+        res = svc._get_summarizer()
+
+    assert res is mock_sum
+    assert hasattr(svc, "_summarizer_lock")
+    assert isinstance(svc._summarizer_lock, type(threading.Lock()))
 
 
 def test_user_prompt_submit_does_not_kill_non_mpv_pid() -> None:
@@ -897,6 +932,8 @@ def main() -> int:
         test_speak_cleans_up_on_synthesis_fault,
         test_speak_cleans_up_on_playback_failure,
         test_process_chunk_user_prompt_submit_interrupts_audio_sink,
+        test_user_prompt_submit_preserves_autoplay_playback_and_queue,
+        test_get_summarizer_defensively_initializes_lock,
         test_user_prompt_submit_does_not_kill_non_mpv_pid,
         test_user_prompt_submit_kills_and_unlinks_mpv_pid,
         test_tts_worker_recovers_from_item_error,

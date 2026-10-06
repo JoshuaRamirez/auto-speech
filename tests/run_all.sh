@@ -79,12 +79,19 @@ CHEAP=(
     test_cli_rewrite.py
     test_mlx_summarizer.py
     test_narrator_service.py
+    test_queue_robustness.py
+    test_daemon_client.py
+    test_apple_say_engine.py
+    test_native_audio_sink.py
+    test_speak_client.py
 )
 
 # Bash-script tests for shell helpers.
 SHELL_TESTS=(
     test_autoplay_shim.sh
     test_narrator_hook.sh
+    test_narrator_service_status.sh
+    test_compute_hash.sh
     test_install_idempotent.sh
     test_install_plugin.sh
     test_bootstrap_hook_idempotent.sh

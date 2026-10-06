@@ -333,3 +333,23 @@ def test_dedup_guard_history_tracks_multiple_distinct_messages() -> None:
     # Turn 3: Hash C claims
     assert g.try_claim(hash_c) is True
 
+
+def main() -> int:
+    tests = [
+        test_active_speech_never_interrupted_by_new_messages,
+        test_autoplay_worker_queues_consecutive_turns_without_staleness_drop,
+        test_autoplay_worker_speaks_even_when_coalesce_beacon_is_immediately_stale,
+        test_autoplay_worker_uses_real_in_process_fifo,
+        test_tts_worker_plays_queued_items_sequentially_without_interruption,
+        test_dedup_guard_history_tracks_multiple_distinct_messages,
+    ]
+    for t in tests:
+        t()
+        print(f"  ok  {t.__name__}")
+    print(f"queue_robustness: {len(tests)} tests passed")
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())
+
