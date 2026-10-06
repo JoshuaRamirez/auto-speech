@@ -61,6 +61,21 @@ class TestPriorityArbiterModernized(unittest.TestCase):
         self.assertEqual(purged, 2)
         self.assertEqual(arbiter.total_depth(), 0)
 
+    def test_p2_mcp_does_not_purge_lower_priority_items(self) -> None:
+        """P2 explicit MCP requests must NOT purge lower-tier queues (unlike P1 user barge-in)."""
+        arbiter = PriorityArbiter(maxsize=10)
+        arbiter.enqueue("autoplay_turn_1", priority=Priority.AUTOPLAY)
+        arbiter.enqueue("narration_turn_1", priority=Priority.TOOL_NARRATION)
+        arbiter.enqueue("mcp_turn_1", priority=Priority.EXPLICIT_MCP)
+
+        # Total depth must remain 3; no items purged
+        self.assertEqual(arbiter.total_depth(), 3)
+        # Dequeue must yield P2 first, then P3, then P4 intact
+        self.assertEqual(arbiter.dequeue(timeout=0.1), "mcp_turn_1")
+        self.assertEqual(arbiter.dequeue(timeout=0.1), "autoplay_turn_1")
+        self.assertEqual(arbiter.dequeue(timeout=0.1), "narration_turn_1")
+
+
     def test_drop_oldest_backpressure_shedding(self) -> None:
         arbiter = PriorityArbiter(maxsize=3)
         arbiter.enqueue("item_1", priority=Priority.TOOL_NARRATION)

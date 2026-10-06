@@ -11,10 +11,21 @@ from __future__ import annotations
 import os
 import queue
 import socketserver
+import sys
 import threading
 import time
 import unittest
+from pathlib import Path
+from unittest.mock import MagicMock
 
+PROJECT_ROOT = Path(__file__).resolve().parents[2]
+PLUGIN_PYTHON = PROJECT_ROOT / "plugin" / "scripts" / "python"
+if str(PLUGIN_PYTHON) not in sys.path:
+    sys.path.insert(0, str(PLUGIN_PYTHON))
+
+import narrator_service
+from priority_arbiter import PriorityArbiter, QueueProxyFacade
+from voice_profile import VoiceProfile
 from tests.e2e.harness import (
     IsolatedEnvironment,
     run_speak_cli,
@@ -31,63 +42,60 @@ class TestTier4RealWorldScenarios(unittest.TestCase):
         self.sandbox.cleanup()
 
     def test_tier4_scenario_full_user_session_lifecycle(self) -> None:
-        """Simulates full session: boot daemon, stream tool events, run speak.py, shutdown, and verify cleanup."""
-        # Setup simulated unified daemon pipeline
-        speech_queue: queue.Queue[str] = queue.Queue(maxsize=32)
-        played_items: list[str] = []
-        stop_daemon = threading.Event()
+        """Simulates full session with real NarratorService: boot daemon, stream tool events, run speak.py, shutdown, and verify cleanup."""
+        sink = MagicMock()
+        sink.interrupt = MagicMock()
 
-        class DaemonSocketHandler(socketserver.BaseRequestHandler):
-            def handle(self) -> None:
-                data = self.request.recv(4096).decode("utf-8").strip()
-                if data:
-                    speech_queue.put(f"cli:{data}")
+        svc = narrator_service.NarratorService.__new__(narrator_service.NarratorService)
+        svc._config = {"max_queue_depth": 32, "idle_shutdown_seconds": 600}
+        svc._socket_path = self.sandbox.socket_path
+        svc._socket_server = None
+        svc._socket_thread = None
+        svc._queue_lock = threading.Lock()
+        svc._atexit_registered = False
+        svc._max_queue = 32
+        svc._priority_arbiter = PriorityArbiter(maxsize=32)
+        svc._tts_queue = QueueProxyFacade(svc._priority_arbiter, maxsize=32)
+        svc._dropped_phases = 0
+        svc._last_event_ts = time.time()
+        svc._update_depth = lambda d: None
+        svc._sink = sink
+        svc._engine_state = "IDLE"
+        svc._active_priority = None
+        svc._active_item = None
+        svc._interrupted = False
+        svc._preempted = False
+        svc._state_lock = threading.Lock()
+        svc._stop = threading.Event()
+        svc._fsm = narrator_service.NarratorStateMachine()
+        svc._phases_this_turn = 0
+        svc._profile = VoiceProfile("test", 1.0, 15.0, "cal", 0)
+        svc._ensure_tts_initialized = lambda: None
 
-        # 1. Daemon boots socket listener
-        server = socketserver.ThreadingUnixStreamServer(
-            str(self.sandbox.socket_path), DaemonSocketHandler
-        )
-        server_thread = threading.Thread(target=server.serve_forever, daemon=True)
-        server_thread.start()
+        # 1. Daemon boots real socket listener
+        svc._start_socket_server()
         self.sandbox.pid_path.write_text(str(os.getpid()), encoding="utf-8")
         time.sleep(0.05)
 
-        # 2. Worker thread processing speech queue
-        def _tts_worker() -> None:
-            while not stop_daemon.is_set() or not speech_queue.empty():
-                try:
-                    item = speech_queue.get(timeout=0.05)
-                except queue.Empty:
-                    continue
-                played_items.append(item)
-                speech_queue.task_done()
-
-        worker_thread = threading.Thread(target=_tts_worker, daemon=True)
-        worker_thread.start()
-
         try:
-            # 3. Simulate tool event arrival
+            # 2. Simulate tool event arrival
             self.sandbox.write_event("ToolExecution", {"tool": "Grep", "pattern": "def main"})
-            speech_queue.put("event:Grep pattern def main")
+            svc.enqueue_text("event:Grep pattern def main")
 
-            # 4. User runs speak.py
+            # 3. User runs speak.py
             cli_res = run_speak_cli("Claude explanation text", env=self.sandbox.env)
             self.assertEqual(cli_res.returncode, 0, f"speak.py failed: {cli_res.stderr}")
 
-            # Wait for queue to drain
-            speech_queue.join()
+            # Verify both items were queued in the real daemon queue
+            self.assertEqual(svc._tts_queue.qsize(), 2)
+            item1 = svc._tts_queue.get_nowait()
+            item2 = svc._tts_queue.get_nowait()
+            self.assertEqual(getattr(item1, "payload", item1), "event:Grep pattern def main")
+            self.assertEqual(getattr(item2, "payload", item2), "Claude explanation text")
+            sink.interrupt.assert_not_called()
 
-            self.assertEqual(
-                played_items,
-                ["event:Grep pattern def main", "cli:Claude explanation text"],
-            )
-
-            # 5. Clean shutdown
-            stop_daemon.set()
-            server.shutdown()
-            server.server_close()
-            if self.sandbox.socket_path.exists():
-                self.sandbox.socket_path.unlink()
+            # 4. Clean shutdown
+            svc._stop_socket_server()
             if self.sandbox.pid_path.exists():
                 self.sandbox.pid_path.unlink()
 
@@ -95,7 +103,7 @@ class TestTier4RealWorldScenarios(unittest.TestCase):
             self.assertFalse(self.sandbox.socket_path.exists(), "Socket file was not cleaned up")
             self.assertFalse(self.sandbox.pid_path.exists(), "PID file was not cleaned up")
         finally:
-            stop_daemon.set()
+            svc._stop_socket_server()
             if self.sandbox.socket_path.exists():
                 self.sandbox.socket_path.unlink()
 

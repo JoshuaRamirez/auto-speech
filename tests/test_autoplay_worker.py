@@ -102,12 +102,13 @@ def _worker(**kw):
         "config": _CFG,
         "gate": _StubGate(False),
         "beacon": _StubBeacon([False, False, False, False, False]),
-        "fifo": _StubFifo(),
+        "fifo": awmod.InProcessFifo(),
         "dedup": _StubDedup(False),
         "sleep": lambda s: None,
     }
     base.update(kw)
     return AutoplayWorker(0.0, "", "sid12345", **base)
+
 
 
 def test_global_disable_bails() -> None:
@@ -168,12 +169,13 @@ def test_cache_hit_success_path() -> None:
             return 0, None
         raise AssertionError(f"unexpected argv {argv}")
 
-    fifo = _StubFifo(turn=True)
+    # Uses real InProcessFifo and verifies that post-coalesce staleness does not bail
+    beacon = _StubBeacon([False, True, True, True, True])
     dedup = _StubDedup(False)
     orig_root = awmod._PROJECT_ROOT
     awmod._PROJECT_ROOT = tmp
     try:
-        w = _worker(runner=_Recorder(script), fifo=fifo, dedup=dedup)
+        w = _worker(runner=_Recorder(script), beacon=beacon, dedup=dedup)
         # EXTRACT exec-check: os.access on the real wrapper — present in repo.
         assert os.access(str(awmod.EXTRACT), os.X_OK), "run_extract.sh must be executable"
         assert w.run() == 0
@@ -184,7 +186,6 @@ def test_cache_hit_success_path() -> None:
     assert spoke["called"] is True
     assert spoke["hash"] == full_hash
     assert spoke["stdin"] == ""  # cache-hit path speaks with empty stdin
-    assert fifo.played is True
     assert dedup.written == full_hash
 
 
@@ -321,7 +322,8 @@ def test_cache_miss_raw_mode_bypasses_llm_and_speaks_as_is() -> None:
             return 0, None
         raise AssertionError(f"unexpected argv {argv}")
 
-    fifo = _StubFifo(turn=True)
+    # Uses real InProcessFifo and verifies that post-coalesce staleness does not bail
+    beacon = _StubBeacon([False, True, True, True, True])
     dedup = _StubDedup(False)
     orig_root = awmod._PROJECT_ROOT
     awmod._PROJECT_ROOT = tmp
@@ -329,7 +331,7 @@ def test_cache_miss_raw_mode_bypasses_llm_and_speaks_as_is() -> None:
         cfg = dict(_CFG)
         cfg["mode"] = "raw"
         cfg["bypass_llm"] = True
-        w = _worker(runner=_Recorder(script), fifo=fifo, dedup=dedup, config=cfg)
+        w = _worker(runner=_Recorder(script), beacon=beacon, dedup=dedup, config=cfg)
         assert w.run() == 0
     finally:
         awmod._PROJECT_ROOT = orig_root
@@ -338,7 +340,6 @@ def test_cache_miss_raw_mode_bypasses_llm_and_speaks_as_is() -> None:
     assert spoke["called"] is True
     assert spoke["hash"] == full_hash
     assert spoke["stdin"] == long_msg
-    assert fifo.played is True
     assert dedup.written == full_hash
 
 
