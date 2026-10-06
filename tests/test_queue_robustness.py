@@ -142,3 +142,144 @@ def test_autoplay_worker_queues_consecutive_turns_without_staleness_drop() -> No
     assert len(spoken_messages) == 2
     assert "Turn content 1" in spoken_messages[0][1]
     assert "Turn content 2" in spoken_messages[1][1]
+
+
+def test_autoplay_worker_uses_real_in_process_fifo() -> None:
+    """AutoplayWorker using the real InProcessFifo (not stubbed) completes cleanly."""
+    spoken = []
+
+    def mock_runner(argv, stdin_text=None, stdout_path=None):
+        prog = (
+            argv[1]
+            if (
+                argv[0] in ("bash", sys.executable, "python", "python3")
+                or Path(argv[0]).name.startswith("python")
+            )
+            else argv[0]
+        )
+        if str(prog).endswith("run_extract.sh"):
+            return 0, "Real InProcessFifo message turn that is long enough"
+        if str(prog).endswith("compute_hash.sh"):
+            return 0, "1" * 64 + "\n"
+        if str(prog).endswith("speak.py"):
+            spoken.append(stdin_text)
+            return 0, None
+        raise AssertionError(f"unexpected argv: {argv}")
+
+    tmp = Path(tempfile.mkdtemp(prefix="auto-speech-real-fifo-"))
+    orig_root = awmod._PROJECT_ROOT
+    awmod._PROJECT_ROOT = tmp
+
+    try:
+        w = AutoplayWorker(
+            beacon_mtime=100.0,
+            transcript_path="/fake/transcript.jsonl",
+            session_id="session-fifo-test",
+            config={"coalesce_seconds": 0, "narration_wait_max": 90, "queue_wait_max": 600, "min_len": 10, "mode": "raw", "bypass_llm": True},
+            gate=awmod.AutoplayGate(home=tmp),
+            beacon=MagicMock(is_stale=lambda: False),
+            fifo=awmod.InProcessFifo(),  # REAL InProcessFifo!
+            dedup=DedupGuard(marker_path=tmp / "marker", mpv_pid_path=tmp / "mpv.pid", lock_path=tmp / "lock"),
+            runner=mock_runner,
+            sleep=lambda s: None,
+        )
+        assert w.run() == 0
+        assert w.machine.state == DONE
+    finally:
+        awmod._PROJECT_ROOT = orig_root
+
+    assert len(spoken) == 1
+    assert "Real InProcessFifo message" in spoken[0]
+
+
+def test_tts_worker_plays_queued_items_sequentially_without_interruption() -> None:
+    """The narrator TTS worker must play queued items sequentially to completion without interruption."""
+    svc = NarratorService.__new__(NarratorService)
+    svc._tts_queue = queue.Queue(maxsize=10)
+    svc._priority_arbiter = PriorityArbiter(maxsize=10)
+    svc._state_lock = threading.Lock()
+    svc._engine_state = "IDLE"
+    svc._active_priority = None
+    svc._active_item = None
+    svc._interrupted = False
+    svc._preempted = False
+    svc._dropped_phases = 0
+    svc._update_depth = lambda _d: None
+    svc._profile = MagicMock(voice_id="test", speed=1.0)
+    svc._ensure_tts_initialized = lambda: None
+
+    playback_log = []
+
+    class MockSink:
+        def __init__(self):
+            self.interrupt_calls = 0
+
+        def play(self, wav_path):
+            playback_log.append(("start", str(wav_path)))
+            time.sleep(0.05)  # Simulate non-instant playback
+            playback_log.append(("finish", str(wav_path)))
+
+        def interrupt(self):
+            self.interrupt_calls += 1
+
+    sink = MockSink()
+    svc._sink = sink
+
+    # Mock synthesize to create a dummy WAV file
+    class MockSynth:
+        def synthesize_one(self, text, profile, wav_path):
+            wav_path.write_bytes(b"RIFFdummywav")
+            return True
+
+    svc._synth = MockSynth()
+    svc._tts_executor = None
+
+    # Queue two speech items
+    svc._tts_queue.put(QueueItem(priority=Priority.EXPLICIT_MCP, payload="Message One"))
+    svc._tts_queue.put(QueueItem(priority=Priority.AUTOPLAY, payload="Message Two"))
+    svc._tts_queue.put(None)  # Sentinel to stop worker
+
+    # Run the worker directly
+    svc._tts_worker()
+
+    assert sink.interrupt_calls == 0, "sink.interrupt must NEVER be called during sequential playback"
+    # Verify playback happened strictly in order: start 1 -> finish 1 -> start 2 -> finish 2
+    assert len(playback_log) == 4
+    assert playback_log[0][0] == "start"
+    assert playback_log[1][0] == "finish"
+    assert playback_log[2][0] == "start"
+    assert playback_log[3][0] == "finish"
+    assert playback_log[0][1] == playback_log[1][1]
+    assert playback_log[2][1] == playback_log[3][1]
+    assert playback_log[0][1] != playback_log[2][1]
+
+
+def test_dedup_guard_history_tracks_multiple_distinct_messages() -> None:
+    """DedupGuard allows multiple distinct consecutive turns while suppressing duplicate triggers."""
+    tmp = Path(tempfile.mkdtemp(prefix="auto-speech-dedup-hist-"))
+    marker = tmp / "marker"
+    pid = tmp / "mpv.pid"
+    lock = tmp / "lock"
+    g = DedupGuard(marker_path=marker, mpv_pid_path=pid, lock_path=lock)
+
+    hash_a = "a" * 64
+    hash_b = "b" * 64
+    hash_c = "c" * 64
+
+    # Turn 1: Hash A claims
+    assert g.try_claim(hash_a) is True
+    # Immediate duplicate hook for Hash A is suppressed
+    assert g.try_claim(hash_a) is False
+
+    # Turn 2: Hash B claims immediately after
+    assert g.try_claim(hash_b) is True
+    # Immediate duplicate hook for Hash B is suppressed
+    assert g.try_claim(hash_b) is False
+
+    # CRITICAL: Duplicate hook for Hash A arriving now must STILL be suppressed!
+    # (In the old single-marker implementation, Hash B overwrote the marker, allowing duplicate A)
+    assert g.try_claim(hash_a) is False
+
+    # Turn 3: Hash C claims
+    assert g.try_claim(hash_c) is True
+

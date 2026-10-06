@@ -159,9 +159,11 @@ class DaemonClient:
         line = json.dumps(payload).encode("utf-8") + b"\n"
         last_err: Optional[Exception] = None
 
+        ensured = False
         for attempt in range(self._max_retries + 1):
             if attempt == 0 and not self._socket_path.is_socket():
                 self.ensure_daemon_running()
+                ensured = True
 
             sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
             sock.settimeout(self._timeout)
@@ -192,8 +194,9 @@ class DaemonClient:
                 )
             except Exception as e:
                 last_err = e
-                if attempt == 0 and isinstance(e, (FileNotFoundError, ConnectionRefusedError)):
+                if not ensured and attempt == 0 and isinstance(e, (FileNotFoundError, ConnectionRefusedError)):
                     self.ensure_daemon_running()
+                    ensured = True
                 if attempt < self._max_retries:
                     time.sleep(0.02 * (attempt + 1))
             finally:

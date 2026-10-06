@@ -107,6 +107,20 @@ def test_try_claim_different_hash_allowed() -> None:
     assert g.try_claim("a-different-hash") is True
 
 
+def test_try_claim_history_prevents_reclaiming_prior_turns_within_window() -> None:
+    """Claiming Hash B must not wipe Hash A from history; duplicate Hash A remains suppressed."""
+    marker, pid, lock = _claim_files()
+    g = DedupGuard(marker_path=marker, mpv_pid_path=pid, lock_path=lock)
+    assert g.try_claim("hash-alpha") is True
+    assert g.try_claim("hash-beta") is True
+    # Duplicate of alpha is still suppressed by history window
+    assert g.try_claim("hash-alpha") is False
+    assert g.try_claim("hash-beta") is False
+    # Fresh hash is permitted
+    assert g.try_claim("hash-gamma") is True
+
+
+
 def test_try_claim_after_age_cap_allows_replay() -> None:
     """A fresh claim of the same hash >120s later is permitted (legit replay)."""
     marker, pid, lock = _claim_files()
@@ -147,6 +161,7 @@ def main() -> int:
         test_write_now_playing,
         test_try_claim_first_wins_second_suppressed,
         test_try_claim_different_hash_allowed,
+        test_try_claim_history_prevents_reclaiming_prior_turns_within_window,
         test_try_claim_after_age_cap_allows_replay,
         test_try_claim_concurrent_single_winner,
     ]

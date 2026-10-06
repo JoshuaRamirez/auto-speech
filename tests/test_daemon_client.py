@@ -220,6 +220,16 @@ class TestDaemonClientLiveRoundTrip(unittest.TestCase):
         with self.assertRaises(ConnectionError):
             client.speak("Test fail")
 
+    def test_ensure_daemon_running_invoked_when_socket_missing(self) -> None:
+        client = DaemonClient(socket_path="/tmp/nonexistent_test_sock_456.sock", max_retries=1)
+        with mock.patch.object(client, "ensure_daemon_running") as mock_ensure:
+            try:
+                client.speak("Test ensure auto-start")
+            except Exception:
+                pass
+            mock_ensure.assert_called_once()
+
 
 if __name__ == "__main__":
     unittest.main()
+
