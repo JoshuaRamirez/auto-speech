@@ -480,6 +480,36 @@ class TestSpeakClientStructuredWire1(unittest.TestCase):
                 import native_audio_sink
                 native_audio_sink.NativeAudioSink.assert_not_called()
 
+    def test_send_speech_request_forwards_session_id_and_priority(self) -> None:
+        """send_speech_request forwards session_id and priority via DaemonClient."""
+        with mock.patch("speak.DaemonClient") as mock_client_cls:
+            mock_client = mock.MagicMock()
+            mock_client.speak.return_value = speak.DaemonResponse(status="ok", action="speak")
+            mock_client_cls.return_value = mock_client
+
+            rc = speak.send_speech_request(
+                "Priority text",
+                session_id="sess-xyz",
+                priority=speak.Priority.AUTOPLAY,
+            )
+            self.assertEqual(rc, 0)
+            mock_client.speak.assert_called_once_with(
+                "Priority text",
+                source_hash=None,
+                priority=speak.Priority.AUTOPLAY,
+                session_id="sess-xyz",
+            )
+
+    def test_speak_main_forwards_session_id_and_priority_to_send(self) -> None:
+        """speak.main forwards --session-id and --priority to send_speech_request."""
+        with (
+            mock.patch("speak.send_speech_request", return_value=0) as mock_send,
+            mock.patch("sys.stdin", io.StringIO("cli text")),
+        ):
+            rc = speak.main(["--session-id", "sess-123", "--priority", "1"])
+            self.assertEqual(rc, 0)
+            mock_send.assert_called_once_with("cli text", session_id="sess-123", priority=1)
+
 
 if __name__ == "__main__":
     unittest.main()

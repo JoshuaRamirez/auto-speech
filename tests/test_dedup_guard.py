@@ -150,6 +150,34 @@ def test_try_claim_concurrent_single_winner() -> None:
     assert results.count(False) == 7, results
 
 
+def test_try_claim_after_burst_window_allows_replay_when_idle() -> None:
+    """When mpv is not running and burst window has elapsed, the same hash can be played again."""
+    marker, pid, lock = _claim_files()
+    g1 = DedupGuard(marker_path=marker, mpv_pid_path=pid, lock_path=lock, burst_window_seconds=5.0)
+    assert g1.try_claim(HASH) is True
+
+    # At 2s (within burst window), duplicate is suppressed
+    mtime = marker.stat().st_mtime
+    g_within = DedupGuard(
+        marker_path=marker,
+        mpv_pid_path=pid,
+        lock_path=lock,
+        now=lambda: mtime + 2.0,
+        burst_window_seconds=5.0,
+    )
+    assert g_within.try_claim(HASH) is False
+
+    # At 6s (after burst window) with mpv dead, same hash is permitted
+    g_after = DedupGuard(
+        marker_path=marker,
+        mpv_pid_path=pid,
+        lock_path=lock,
+        now=lambda: mtime + 6.0,
+        burst_window_seconds=5.0,
+    )
+    assert g_after.try_claim(HASH) is True
+
+
 def main() -> int:
     tests = [
         test_marker_absent,
@@ -162,6 +190,7 @@ def main() -> int:
         test_try_claim_first_wins_second_suppressed,
         test_try_claim_different_hash_allowed,
         test_try_claim_history_prevents_reclaiming_prior_turns_within_window,
+        test_try_claim_after_burst_window_allows_replay_when_idle,
         test_try_claim_after_age_cap_allows_replay,
         test_try_claim_concurrent_single_winner,
     ]

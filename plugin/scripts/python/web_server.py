@@ -40,8 +40,10 @@ class TTSExecutor:
 
     def ensure_loaded(self) -> None:
         """Pre-warm the model on the worker thread."""
-        future = self._executor.submit(self._engine._ensure_loaded)
-        future.result()
+        load_fn = getattr(self._engine, "_ensure_loaded", None) or getattr(self._engine, "ensure_loaded", None)
+        if callable(load_fn):
+            future = self._executor.submit(load_fn)
+            future.result()
 
     def submit(self, fn: Callable[..., Any], *args: Any, **kwargs: Any) -> Any:
         return self._executor.submit(fn, *args, **kwargs).result()

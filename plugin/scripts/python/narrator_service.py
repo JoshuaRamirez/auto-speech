@@ -504,14 +504,19 @@ class NarratorService:
             except Exception:
                 hit = None
 
-            if hit is None:
-                return {
-                    "status": "error",
-                    "error_code": "CACHE_MISS",
-                    "message": f"Cache miss for {source_hash}",
-                }
-
-            wav_path, _entry = hit
+            if hit is not None:
+                wav_path, _entry = hit
+            else:
+                entry_dir = self._cache.path_for(source_hash)
+                fallback_wav = entry_dir / "full.wav"
+                if fallback_wav.is_file() and fallback_wav.stat().st_size > 0:
+                    wav_path = fallback_wav
+                else:
+                    return {
+                        "status": "error",
+                        "error_code": "CACHE_MISS",
+                        "message": f"Cache miss for {source_hash}",
+                    }
             priority = int(payload.get("priority", Priority.EXPLICIT_MCP))
             session_id = payload.get("session_id")
             q_item = QueueItem(
@@ -645,8 +650,15 @@ class NarratorService:
                         except OSError:
                             pass
 
-            # Idle shutdown
-            if time.time() - self._last_event_ts > self._idle_shutdown:
+            # Idle shutdown: ensure we only shut down when truly idle (no active audio and empty queue)
+            is_busy = (
+                (hasattr(self, "_sink") and self._sink is not None and getattr(self._sink, "is_playing", False))
+                or (hasattr(self, "_tts_queue") and self._tts_queue.qsize() > 0)
+                or getattr(self, "_engine_state", "IDLE") in ("PLAYING", "SYNTHESIZING")
+            )
+            if is_busy:
+                self._last_event_ts = time.time()
+            elif time.time() - self._last_event_ts > self._idle_shutdown:
                 _log(f"idle for >{self._idle_shutdown}s → shutting down")
                 if self._fsm.can(IDLE_SHUTDOWN):
                     self._fsm.transition(IDLE_SHUTDOWN)
@@ -768,7 +780,7 @@ class NarratorService:
                 continue
 
             if event_type == "Stop":
-                self._classifier.flush()
+                self._classifier.flush(session_id)
                 fully_idle = ev.get("payload", {}).get("fullyIdle", False)
                 if not fully_idle:
                     continue
@@ -981,6 +993,14 @@ class NarratorService:
                             self._sink.play(phase)
                         except Exception as exc:  # noqa: BLE001
                             _log(f"play_cache error: {exc!r}")
+                        finally:
+                            if state_lock:
+                                with state_lock:
+                                    if self._engine_state == "PLAYING":
+                                        self._engine_state = "IDLE"
+                            else:
+                                if getattr(self, "_engine_state", "IDLE") == "PLAYING":
+                                    self._engine_state = "IDLE"
                 elif isinstance(phase, str):
                     s_hash = getattr(item_obj, "source_hash", None)
                     v_id = getattr(item_obj, "voice_id", None)

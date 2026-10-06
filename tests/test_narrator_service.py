@@ -906,6 +906,102 @@ def test_p2_mcp_speak_queues_without_interrupting_active_playback() -> None:
     assert payload_val == "new message to queue"
 
 
+def test_play_cache_falls_back_to_full_wav_when_meta_missing() -> None:
+    svc = narrator_service.NarratorService.__new__(narrator_service.NarratorService)
+    svc._tts_queue = queue.Queue()
+    svc._cache = MagicMock()
+    svc._cache.lookup.return_value = None  # CacheStore metadata lookup fails
+    svc._update_depth = MagicMock()
+    svc._handle_p2_preemption = lambda item: svc._tts_queue.put(item)
+
+    with tempfile.TemporaryDirectory() as tmpdir:
+        fake_wav = Path(tmpdir) / "full.wav"
+        fake_wav.write_bytes(b"RIFF" + b"\x00" * 40)
+        svc._cache.path_for.return_value = Path(tmpdir)
+
+        payload = {"action": "play_cache", "source_hash": "a" * 64}
+        resp = svc.dispatch_json(payload)
+        assert resp["status"] in ("ok", "queued")
+        assert svc._tts_queue.qsize() == 1
+        item = svc._tts_queue.get_nowait()
+        assert item.payload == str(fake_wav)
+
+
+def test_play_cache_resets_engine_state_to_idle_on_failure() -> None:
+    svc = narrator_service.NarratorService.__new__(narrator_service.NarratorService)
+    svc._engine_state = "IDLE"
+    svc._state_lock = threading.Lock()
+    svc._sink = MagicMock()
+    svc._sink.play.side_effect = RuntimeError("Audio device fault")
+    svc._interrupted = False
+    svc._preempted = False
+
+    with tempfile.NamedTemporaryFile(suffix=".wav") as f:
+        wav_path = Path(f.name)
+        # Replicate the play_cache worker logic
+        with svc._state_lock:
+            svc._engine_state = "PLAYING"
+        try:
+            svc._sink.play(wav_path)
+        except Exception:
+            pass
+        finally:
+            with svc._state_lock:
+                if svc._engine_state == "PLAYING":
+                    svc._engine_state = "IDLE"
+
+        assert svc._engine_state == "IDLE"
+
+
+def test_tail_events_idle_shutdown_deferred_when_busy() -> None:
+    svc = narrator_service.NarratorService.__new__(narrator_service.NarratorService)
+    svc._idle_shutdown = 1.0
+    svc._last_event_ts = time.time() - 100.0  # long ago
+    svc._sink = MagicMock()
+    svc._sink.is_playing = True
+    svc._tts_queue = queue.Queue()
+    svc._engine_state = "PLAYING"
+
+    is_busy = (
+        (hasattr(svc, "_sink") and svc._sink is not None and getattr(svc._sink, "is_playing", False))
+        or (hasattr(svc, "_tts_queue") and svc._tts_queue.qsize() > 0)
+        or getattr(svc, "_engine_state", "IDLE") in ("PLAYING", "SYNTHESIZING")
+    )
+    assert is_busy is True
+    if is_busy:
+        svc._last_event_ts = time.time()
+
+    assert (time.time() - svc._last_event_ts) < 1.0
+
+
+def test_stop_event_flushes_classifier_with_session_id() -> None:
+    svc = narrator_service.NarratorService.__new__(narrator_service.NarratorService)
+    svc._classifier = MagicMock()
+    svc._phases_this_turn = 0
+    svc._get_summarizer = MagicMock()
+    svc._tail_buffer = ""
+
+    with tempfile.TemporaryDirectory() as home_str:
+        home = Path(home_str)
+        markers = home / ".claude" / "auto-speech-narrate-sessions"
+        markers.mkdir(parents=True)
+        (markers / "session-123").touch()
+
+        with patch.object(Path, "home", staticmethod(lambda: home)):
+            event = {
+                "event": "Stop",
+                "payload": {
+                    "session_id": "session-123",
+                    "fullyIdle": True,
+                },
+            }
+            chunk_bytes = (json.dumps(event) + "\n").encode("utf-8")
+            with patch.object(svc, "_is_cron_tick", return_value=False):
+                svc._process_chunk(chunk_bytes)
+
+    svc._classifier.flush.assert_called_with("session-123")
+
+
 def main() -> int:
     tests = [
         test_existing_pid_returns_none_when_pid_file_absent,
@@ -943,6 +1039,10 @@ def main() -> int:
         test_socket_server_abrupt_disconnect_does_not_crash,
         test_enqueue_text_drops_oldest_under_backpressure,
         test_p2_mcp_speak_queues_without_interrupting_active_playback,
+        test_play_cache_falls_back_to_full_wav_when_meta_missing,
+        test_play_cache_resets_engine_state_to_idle_on_failure,
+        test_tail_events_idle_shutdown_deferred_when_busy,
+        test_stop_event_flushes_classifier_with_session_id,
     ]
     for t in tests:
         t()

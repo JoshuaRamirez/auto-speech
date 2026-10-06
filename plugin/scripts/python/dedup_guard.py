@@ -26,6 +26,7 @@ from pathlib import Path
 NOW_PLAYING_MARKER = Path("/tmp/auto-speech-now-playing-hash")
 NOW_PLAYING_LOCK = Path("/tmp/auto-speech-now-playing.lock")
 AGE_CAP_SECONDS = 120
+BURST_WINDOW_SECONDS = 5.0
 MPV_PID_PATH = Path("/tmp/auto-speech-mpv.pid")
 
 
@@ -54,11 +55,15 @@ class DedupGuard:
         mpv_pid_path: Path = MPV_PID_PATH,
         lock_path: Path = NOW_PLAYING_LOCK,
         now=time.time,
+        burst_window_seconds: float = BURST_WINDOW_SECONDS,
+        age_cap_seconds: float = AGE_CAP_SECONDS,
     ) -> None:
         self._marker = Path(marker_path)
         self._mpv_pid_path = Path(mpv_pid_path)
         self._lock = Path(lock_path)
         self._now = now
+        self._burst_window_seconds = burst_window_seconds
+        self._age_cap_seconds = age_cap_seconds
         self._history_dir = self._marker.parent / f"{self._marker.name}-history"
 
     def _mpv_alive(self) -> bool:
@@ -87,18 +92,20 @@ class DedupGuard:
         except OSError:
             return False
         age = self._now() - marker_mtime
-        if not age < AGE_CAP_SECONDS:
+        if not age < self._age_cap_seconds:
             return False
         return self._mpv_alive()
 
     def _fresh_same_hash(self, source_hash: str) -> bool:
-        """True iff the marker or history holds `source_hash` younger than the age cap."""
+        """True iff the marker or history holds `source_hash` younger than the window."""
         try:
             current = self._marker.read_text(encoding="utf-8").strip()
             if current == source_hash:
                 marker_mtime = self._marker.stat().st_mtime
-                if (self._now() - marker_mtime) < AGE_CAP_SECONDS:
-                    return True
+                age = self._now() - marker_mtime
+                if age < self._age_cap_seconds:
+                    if self._mpv_alive() or age < self._burst_window_seconds:
+                        return True
         except OSError:
             pass
 
@@ -106,7 +113,7 @@ class DedupGuard:
             hist_file = self._history_dir / source_hash
             if hist_file.is_file():
                 hist_mtime = hist_file.stat().st_mtime
-                if (self._now() - hist_mtime) < AGE_CAP_SECONDS:
+                if (self._now() - hist_mtime) < self._burst_window_seconds:
                     return True
         except OSError:
             pass
@@ -157,7 +164,7 @@ class DedupGuard:
             for p in self._history_dir.iterdir():
                 if p.is_file():
                     try:
-                        if (self._now() - p.stat().st_mtime) >= AGE_CAP_SECONDS:
+                        if (self._now() - p.stat().st_mtime) >= self._age_cap_seconds:
                             p.unlink(missing_ok=True)
                     except OSError:
                         pass

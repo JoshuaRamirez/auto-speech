@@ -501,7 +501,14 @@ class AutoplayWorker:
         self._speak(source_hash, stdin_text=text_to_speak, path_label="after rewrite" if not bypass else "direct as-is")
         return 0
 
-    def _speak(self, source_hash: str, *, stdin_text: str, path_label: str) -> bool:
+    def _speak(
+        self,
+        source_hash: str,
+        *,
+        stdin_text: str,
+        fallback_text: str = "",
+        path_label: str,
+    ) -> bool:
         # The now-playing marker was already stamped atomically by
         # try_claim() before this point (see _play_cache_* paths).
         self._machine.transition(SPEAKING)
@@ -513,6 +520,14 @@ class AutoplayWorker:
                 client = DaemonClient()
                 if not stdin_text.strip():
                     resp = client.play_cache(source_hash, priority=Priority.AUTOPLAY)
+                    if resp.status == "error" and fallback_text.strip():
+                        self._log(f"play_cache error ({resp.message}); falling back to client.speak")
+                        resp = client.speak(
+                            fallback_text,
+                            source_hash=source_hash,
+                            session_id=self._session_id or None,
+                            priority=Priority.AUTOPLAY,
+                        )
                 else:
                     resp = client.speak(
                         stdin_text,
@@ -527,9 +542,13 @@ class AutoplayWorker:
             except (ConnectionError, OSError) as exc:
                 self._log(f"daemon client speak failed, falling back to speak.py: {exc}")
 
+        cmd = [sys.executable, str(SPEAK), "--source-hash", source_hash, "--priority", "3"]
+        if self._session_id:
+            cmd.extend(["--session-id", self._session_id])
+        text_for_speak = stdin_text if stdin_text.strip() else fallback_text
         rc, _ = self._runner(
-            [sys.executable, str(SPEAK), "--source-hash", source_hash],
-            stdin_text=stdin_text,
+            cmd,
+            stdin_text=text_for_speak,
         )
         if rc != 0:
             self._log(f"speak.py exit {rc} ({path_label})")

@@ -27,6 +27,7 @@ def send_speech_request(
     socket_path: Path | str | None = None,
     timeout: float = 5.0,
     source_hash: str | None = None,
+    session_id: str | None = None,
     priority: int = Priority.EXPLICIT_MCP,
 ) -> int:
     """Transmit text payload to the daemon socket.
@@ -41,11 +42,17 @@ def send_speech_request(
     if socket_path is None:
         socket_path = get_socket_path()
 
-    # If source_hash is specified, attempt structured Wire 1 JSON via DaemonClient
-    if source_hash is not None:
+    # If source_hash or session_id is specified, attempt structured Wire 1 JSON via DaemonClient
+    if source_hash is not None or session_id is not None or priority != Priority.EXPLICIT_MCP:
         try:
             client = DaemonClient(socket_path=socket_path, timeout=timeout)
-            resp = client.speak(text, source_hash=source_hash, priority=priority)
+            client_kwargs: dict[str, Any] = {
+                "source_hash": source_hash,
+                "priority": priority,
+            }
+            if session_id is not None:
+                client_kwargs["session_id"] = session_id
+            resp = client.speak(text, **client_kwargs)
             if resp.status in ("ok", "queued"):
                 return 0
         except Exception:
@@ -127,6 +134,18 @@ def main(
         default=None,
         help="override UNIX domain socket path to auto-speech daemon",
     )
+    p.add_argument(
+        "--session-id",
+        type=str,
+        default=None,
+        help="session ID for tracking speech events",
+    )
+    p.add_argument(
+        "--priority",
+        type=int,
+        default=int(Priority.EXPLICIT_MCP),
+        help="queue priority (1=DIRECT_OVERRIDE, 2=EXPLICIT_MCP, 3=AUTOPLAY)",
+    )
     args = p.parse_args(argv)
 
     if args.source_hash is not None:
@@ -152,9 +171,14 @@ def main(
                     except Exception as exc:
                         print(f"speak: cached playback failed: {exc}", file=sys.stderr)
                         return 1
+                cache_kwargs: dict[str, Any] = {}
+                if args.session_id is not None:
+                    cache_kwargs["session_id"] = args.session_id
+                if args.priority != int(Priority.EXPLICIT_MCP):
+                    cache_kwargs["priority"] = args.priority
                 elif client is not None:
                     try:
-                        resp = client.play_cache(args.source_hash)
+                        resp = client.play_cache(args.source_hash, **cache_kwargs)
                         if resp.status in ("ok", "queued"):
                             return 0
                         return 1
@@ -166,7 +190,7 @@ def main(
                     try:
                         c = DaemonClient(socket_path=args.socket_path)
                         c.ensure_daemon_running()
-                        resp = c.play_cache(args.source_hash)
+                        resp = c.play_cache(args.source_hash, **cache_kwargs)
                         if resp.status in ("ok", "queued"):
                             return 0
                         return 1
@@ -175,14 +199,16 @@ def main(
                         return 1
         return 0
 
-    if args.socket_path is not None or args.source_hash is not None:
-        kwargs: dict[str, Any] = {}
-        if args.socket_path is not None:
-            kwargs["socket_path"] = args.socket_path
-        if args.source_hash is not None:
-            kwargs["source_hash"] = args.source_hash
-        return send_speech_request(transcript_text, **kwargs)
-    return send_speech_request(transcript_text)
+    kwargs: dict[str, Any] = {}
+    if args.socket_path is not None:
+        kwargs["socket_path"] = args.socket_path
+    if args.source_hash is not None:
+        kwargs["source_hash"] = args.source_hash
+    if args.session_id is not None:
+        kwargs["session_id"] = args.session_id
+    if args.priority != int(Priority.EXPLICIT_MCP):
+        kwargs["priority"] = args.priority
+    return send_speech_request(transcript_text, **kwargs)
 
 
 if __name__ == "__main__":
