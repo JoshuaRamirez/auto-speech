@@ -30,6 +30,41 @@ mkdir -p "$HOME/.config/auto-speech"
 printf '%s\n' "$PROJECT_ROOT" > "$HOME/.config/auto-speech/root"
 echo "[install-plugin] recorded project root: $PROJECT_ROOT"
 
+# Link CLI dispatcher trampoline to ~/.local/bin/auto-speech
+install_cli_symlink() {
+    local src="$PROJECT_ROOT/bin/auto-speech"
+    local bin_dir="$HOME/.local/bin"
+    local dst="$bin_dir/auto-speech"
+
+    if [[ ! -f "$src" ]]; then
+        echo "error: expected auto-speech trampoline at $src" >&2
+        exit 1
+    fi
+
+    chmod +x "$src"
+    mkdir -p "$bin_dir"
+
+    if [[ -L "$dst" ]]; then
+        local existing
+        existing="$(readlink "$dst")"
+        if [[ "$existing" == "$src" ]]; then
+            echo "[install-plugin] symlink already in place: $dst -> $src"
+            return 0
+        fi
+        echo "[install-plugin] removing stale symlink $dst (-> $existing)"
+        rm "$dst"
+    elif [[ -e "$dst" ]]; then
+        echo "error: $dst exists and is not a symlink. Refusing to overwrite." >&2
+        echo "       Back it up manually, then re-run." >&2
+        exit 1
+    fi
+
+    ln -s "$src" "$dst"
+    echo "[install-plugin] linked $dst -> $src"
+}
+
+install_cli_symlink
+
 WITH_EXTRAS=0
 if [[ "${1:-}" == "--with-extras" ]]; then
     WITH_EXTRAS=1
@@ -153,3 +188,4 @@ if [[ $WITH_EXTRAS -eq 1 ]]; then
 else
     echo "[install-plugin] 13 extra commands available: re-run with --with-extras"
 fi
+echo "[install-plugin] CLI dispatcher available at: $HOME/.local/bin/auto-speech"

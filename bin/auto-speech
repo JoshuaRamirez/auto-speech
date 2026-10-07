@@ -1,0 +1,40 @@
+#!/usr/bin/env bash
+# auto-speech — unified command-line interface dispatcher trampoline.
+# Resolves the true project root across arbitrary symlinks, locates the
+# project virtual environment, and executes plugin/scripts/python/cli.py.
+
+set -euo pipefail
+
+# Resolve true script location across arbitrary symlink chains
+SOURCE="${BASH_SOURCE[0]}"
+HOPS=0
+MAX_HOPS=20
+while [ -L "$SOURCE" ]; do
+    if (( HOPS++ >= MAX_HOPS )); then
+        echo "error: auto-speech: exceeded maximum symlink depth of $MAX_HOPS ($SOURCE)" >&2
+        exit 1
+    fi
+    DIR="$(cd -P "$(dirname "$SOURCE")" && pwd)"
+    SOURCE="$(readlink "$SOURCE")"
+    [[ "$SOURCE" != /* ]] && SOURCE="$DIR/$SOURCE"
+done
+BIN_DIR="$(cd -P "$(dirname "$SOURCE")" && pwd)"
+PROJECT_ROOT="$(cd -P "$BIN_DIR/.." && pwd)"
+
+VENV_PYTHON="$PROJECT_ROOT/.venv/bin/python"
+
+if [[ ! -x "$VENV_PYTHON" ]]; then
+    echo "error: virtual environment python not found at $VENV_PYTHON" >&2
+    echo "       Run $PROJECT_ROOT/setup/install.sh to initialize the virtual environment." >&2
+    exit 1
+fi
+
+CLI_PY="$PROJECT_ROOT/plugin/scripts/python/cli.py"
+
+if [[ ! -f "$CLI_PY" ]]; then
+    echo "error: auto-speech CLI dispatcher not found at $CLI_PY" >&2
+    exit 1
+fi
+
+export PYTHONPATH="$PROJECT_ROOT/plugin/scripts/python${PYTHONPATH:+:$PYTHONPATH}"
+exec "$VENV_PYTHON" "$CLI_PY" "$@"

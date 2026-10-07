@@ -8,7 +8,7 @@ Run this Bash command:
 ```
 PROJECT_ROOT="$(cat "$HOME/.config/auto-speech/root" 2>/dev/null || true)"
 [ -d "$PROJECT_ROOT" ] || { echo "auto-speech: project root not configured — run setup/install-plugin.sh from your clone" >&2; exit 1; }
-"$PROJECT_ROOT/plugin/scripts/shell/run_control.sh" resume
+"$PROJECT_ROOT/bin/auto-speech" resume
 ```
 
 On exit 0 respond with "resumed".
