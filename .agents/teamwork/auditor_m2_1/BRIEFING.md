@@ -1,7 +1,7 @@
-# BRIEFING — 2026-10-03T19:00:00Z
+# BRIEFING — 2026-10-06T22:30:00Z
 
 ## Mission
-Conduct a forensic integrity audit on Milestone M2: verify authentic UNIX domain socket transmission, absence of mocks or shortcuts in production code, and real unlinking on disk.
+Conduct forensic integrity audit on Milestone M2 (Expanded MCP Server Tool Suite) in `/Users/joshua/Developer/auto-speech-worktree`: verify genuine production logic, absence of mock bypasses/facades, test rigor, and error propagation.
 
 ## 🔒 My Identity
 - Archetype: forensic_auditor
@@ -9,6 +9,8 @@ Conduct a forensic integrity audit on Milestone M2: verify authentic UNIX domain
 - Working directory: /Users/joshua/Developer/auto-speech/.agents/teamwork/auditor_m2_1
 - Original parent: c05df6b8-cecd-49ba-9fb8-8fa47f977488
 - Target: Milestone M2 (Thin Client IPC via UNIX Sockets)
+- Current Target: Milestone M2 (Expanded MCP Server Tool Suite in `/Users/joshua/Developer/auto-speech-worktree`)
+- Current Parent: 4db9af0e-498d-49a5-831a-0009fd31326e
 
 ## 🔒 Key Constraints
 - Audit-only — do NOT modify implementation code
@@ -16,54 +18,55 @@ Conduct a forensic integrity audit on Milestone M2: verify authentic UNIX domain
 - Provide empirical evidence and raw tool output for every verdict
 - Block on failure: if ANY check fails, verdict is INTEGRITY VIOLATION
 - Mode from ORIGINAL_REQUEST.md: Development Mode (lenient, but strictly prohibits hardcoded test results, facade implementations, and fabricated verification outputs)
+- User Constraints (2026-10-06T20:47:50Z):
+  - MCP tool parity: speak, autoplay_turn, narrate_event, playback_control, session_configure, doctor
+  - Global mute (~/.claude/auto-speech.disabled) must silence all speech-producing tools
+  - No mock bypasses in production code; genuine subsystem connections
+  - Defensive incompleteness and authentic error propagation
 
 ## Current Parent
-- Conversation ID: c05df6b8-cecd-49ba-9fb8-8fa47f977488
-- Updated: not yet
+- Conversation ID: 4db9af0e-498d-49a5-831a-0009fd31326e
+- Updated: 2026-10-06T22:24:15Z
 
 ## Audit Scope
-- **Work product**: Milestone M2 deliverables:
-  - `plugin/scripts/python/speak.py`
-  - `plugin/scripts/python/narrator_service.py`
-  - `tests/test_speak_client.py`
-  - `tests/test_narrator_service.py`
+- **Work product**: `/Users/joshua/Developer/auto-speech-worktree`
+  - `plugin/scripts/python/mcp_server.py`
+  - `tests/test_mcp_server.py`
 - **Profile loaded**: General Project (Development Mode per ORIGINAL_REQUEST.md)
 - **Audit type**: forensic integrity check
 
 ## Audit Progress
-- **Phase**: reporting
+- **Phase**: reporting (COMPLETE)
 - **Checks completed**:
   - Phase 1: Source code analysis (hardcoded outputs, facade implementations, pre-populated artifacts) — PASSED (CLEAN)
   - Phase 2: Runtime behavioral verification & empirical test execution:
-    - Real OS UNIX domain socket creation (`S_ISSOCK`) in `/tmp` — PASSED
-    - Cross-process transmission from `speak.py` to `narrator_service.py` `_tts_queue` — PASSED
-    - Clean socket file unlinking upon shutdown — PASSED
-    - Stale socket file replacement on daemon boot — PASSED
-    - Graceful error handling (exit code 1, stderr warning) when daemon is down — PASSED
-    - Empty/whitespace input short-circuit (exit code 0) — PASSED
-    - All unit test suites passed (`test_speak_client.py`: 18/18; `test_narrator_service.py`: 26/26) — PASSED
-    - All E2E test suites passed (Tier 1 R2: 6/6; Tier 2 R2: 5/5; Tier 3: 5/5; Tier 4: 3/3) — PASSED
-    - Adversarial stress tests (20 concurrent clients, 500KB Unicode/Emoji payload) — PASSED
+    - Default un-injected `McpServer()` subsystem wiring (Doctor, MpvIpc, CacheStore, DaemonClient, SessionEnrollment, SoloScope) — PASSED
+    - Real OS diagnostics execution (13 probes via Doctor) — PASSED
+    - Real JSONL transcript extraction and SHA-256 caching — PASSED
+    - Mute gating across all 5 speech-producing tools — PASSED
+    - Transport failure detection and error reporting — PASSED
+    - Unit tests (`tests/test_mcp_server.py`: 52/52) — PASSED
+    - Ruff lint check: 0 errors — PASSED
+    - Global test suite (`bash tests/run_all.sh`: 50/50 suites) — PASSED
 - **Checks remaining**: None
-- **Findings so far**: CLEAN — No integrity violations detected.
+- **Findings**: CLEAN — No integrity violations detected.
 
 ## Key Decisions Made
-- Executed independent, isolated empirical tests verifying true POSIX socket inodes (`stat.S_ISSOCK`) and real cross-process IPC outside of any mock fixtures.
-- Validated concurrency and large-payload stress testing to verify absence of hidden buffers or truncation facades.
+- Confirmed un-injected production instantiation connects to real subsystems rather than mock facades.
+- Documented empirical proof of global mute enforcement across all speech-producing tools.
+- Evaluated full test suite (50 suites) with 0 regressions.
 
 ## Artifact Index
-- /Users/joshua/Developer/auto-speech/.agents/teamwork/auditor_m2_1/DISPATCH.md — Audit assignment & incoming messages
+- /Users/joshua/Developer/auto-speech/.agents/teamwork/auditor_m2_1/DISPATCH.md — Dispatch log
 - /Users/joshua/Developer/auto-speech/.agents/teamwork/auditor_m2_1/BRIEFING.md — Situational awareness
-- /Users/joshua/Developer/auto-speech/.agents/teamwork/auditor_m2_1/progress.md — Execution heartbeat and progress tracking
-- /Users/joshua/Developer/auto-speech/.agents/teamwork/auditor_m2_1/handoff.md — Final forensic audit report
+- /Users/joshua/Developer/auto-speech/.agents/teamwork/auditor_m2_1/progress.md — Liveness heartbeat
+- /Users/joshua/Developer/auto-speech/.agents/teamwork/auditor_m2_1/handoff.md — Final audit report (Verdict: CLEAN)
 
 ## Attack Surface
 - **Hypotheses tested**:
-  - Hypothesis 1: Production code might use mock/facade shortcuts for socket handling → DISPROVEN (genuine socketserver & socket.socket calls).
-  - Hypothesis 2: Socket file might not be unlinked on shutdown or stale sockets might block restart → DISPROVEN (unlinked cleanly; stale sockets unlinked in server_bind).
-  - Hypothesis 3: Large payloads or concurrent clients might deadlock or fail silently → DISPROVEN (20 concurrent processes and 500KB payload passed with full fidelity).
+  - H1: Are default collaborators in `McpServer.__init__` instantiated with genuine objects connecting to real subsystems? -> CONFIRMED (real subsystems used).
+  - H2: Does `mcp_server.py` have any mock imports or fake stub returns in production paths? -> DISPROVEN (0 mock/fake matches).
+  - H3: Are tests in `test_mcp_server.py` asserting against real functionality or self-certifying tautologies? -> CONFIRMED (rigorous assertions, 0 tautologies).
+  - H4: Does error propagation correctly handle daemon failure, missing sockets, invalid parameters, and mute gating? -> CONFIRMED (all error paths return isError=True).
 - **Vulnerabilities found**: None.
 - **Untested angles**: All Milestone M2 requirements fully tested.
-
-## Loaded Skills
-- None

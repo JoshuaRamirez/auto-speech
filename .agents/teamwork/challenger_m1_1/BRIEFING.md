@@ -1,62 +1,59 @@
-# BRIEFING — 2026-10-03T18:35:30Z
+# BRIEFING — 2026-10-06T21:40:30Z
 
 ## Mission
-Empirically stress-test NativeAudioSink (rapid calls, concurrent threads, interrupt latency, orphan process leaks, edge cases) and deliver verdict.
+Adversarially challenge CLI argument parsing, input resolution, and error exit codes in `/Users/joshua/Developer/auto-speech-worktree`.
 
 ## 🔒 My Identity
 - Archetype: empirical_challenger
 - Roles: critic, specialist
 - Working directory: /Users/joshua/Developer/auto-speech/.agents/teamwork/challenger_m1_1
-- Original parent: c05df6b8-cecd-49ba-9fb8-8fa47f977488
-- Milestone: M1.1
+- Original parent: 4db9af0e-498d-49a5-831a-0009fd31326e
+- Milestone: milestone_1
 - Instance: 1 of 1
 
 ## 🔒 Key Constraints
-- Review-only — do NOT modify implementation code
-- Empirically stress-test NativeAudioSink by writing and executing tests
-- Zero orphan mpv processes
-- Sub-200ms interrupt latency
-- .agents/teamwork/ holds ONLY metadata (reports, briefings, progress) — no source/tests in .agents/teamwork/
+- Review-only — do NOT modify implementation code in `/Users/joshua/Developer/auto-speech-worktree`
+- Empirical verification mandatory — write and run test commands directly
+- Never trust worker claims or logs without reproduction
+- Record all inputs, commands executed, stdout/stderr, and exit codes in `handoff.md`
+- State verdict: APPROVE or REQUEST_CHANGES
 
 ## Current Parent
-- Conversation ID: c05df6b8-cecd-49ba-9fb8-8fa47f977488
-- Updated: 2026-10-03T18:35:30Z
+- Conversation ID: 4db9af0e-498d-49a5-831a-0009fd31326e
+- Updated: 2026-10-06T21:40:30Z
 
 ## Review Scope
-- **Files to review**: plugin/scripts/python/native_audio_sink.py, tests/test_native_audio_sink.py
-- **Interface contracts**: PROJECT.md, ORIGINAL_REQUEST.md
-- **Review criteria**: FIFO ordering, no overlapping audio, sub-200ms interrupt latency, clean process termination, zero orphan mpv processes, error handling on malformed files
+- **Files to review**: `/Users/joshua/Developer/auto-speech-worktree/bin/auto-speech`, argument parsing, CLI commands, input resolution
+- **Interface contracts**: `/Users/joshua/Developer/auto-speech/PROJECT.md`, `/Users/joshua/Developer/auto-speech/.agents/teamwork/ORIGINAL_REQUEST.md`
+- **Review criteria**: CLI exit codes, stderr error reporting, stdin vs positional precedence, argument validation
+
+## Key Decisions Made
+- Executed all 8 stress tests empirically against `bin/auto-speech` and Python CLI dispatcher.
+- Uncovered Bug 1: `seek` with invalid targets (`foo`, empty, etc.) returns exit code 2 instead of 4 when no playback session is active due to session check preceding target argument validation in `cli.py` (`handle_seek`).
+- Uncovered Bug 2: `speak` without words in an interactive terminal unconditionally blocks on `sys.stdin.read()`, causing `auto-speech speak --source-hash <hash>` to hang waiting for stdin EOF.
+- Verdict: REQUEST_CHANGES.
+
+## Artifact Index
+- `/Users/joshua/Developer/auto-speech/.agents/teamwork/challenger_m1_1/DISPATCH.md` — Initial dispatch message
+- `/Users/joshua/Developer/auto-speech/.agents/teamwork/challenger_m1_1/BRIEFING.md` — Working memory
+- `/Users/joshua/Developer/auto-speech/.agents/teamwork/challenger_m1_1/progress.md` — Liveness and task progress
+- `/Users/joshua/Developer/auto-speech/.agents/teamwork/challenger_m1_1/handoff.md` — Final challenge report and verdict
 
 ## Attack Surface
 - **Hypotheses tested**:
-  - Rapid sequential playback (30 cycles): PASSED (0 crashes, 0 leaks)
-  - Concurrent playback (10 threads, 40 items): PASSED (serialized, max concurrent=1, 0 audio overlap)
-  - FIFO lock sequencing: PASSED (staggered arrivals preserve queue order)
-  - Idle interrupt storm (1,000 calls across 10 threads): PASSED (idempotent, 0 errors)
-  - Active interrupt hammer (20 threads concurrent): PASSED (clean unblock, 0 errors)
-  - Immediate interrupt race upon playback start: PASSED (clean reap, 0 hangs)
-  - Interrupt latency benchmark (20 empirical trials): PASSED (max 1.33ms, avg 1.30ms, <200ms budget)
-  - SIGKILL escalation for uncooperative processes: PASSED (~505ms escalation, reaped)
-  - Malformed inputs (0-byte, text, corrupt WAV header, nonexistent, directory): PASSED (clean exceptions)
-  - Unlinked file while queued: PASSED (clean PlaybackError)
-  - External SIGKILL: PASSED (treated as clean interrupt)
-  - Process table leak audit: PASSED (0 running mpv processes, 0 zombie mpv processes)
-- **Vulnerabilities found**: None in implementation code.
-- **Untested angles**: None within M1 scope.
+  - Unknown subcommand exit code (Pass: exit 2)
+  - `speak` invalid `--source-hash` (Pass: exit 2)
+  - `seek` invalid targets (FAIL: exit 2 instead of 4)
+  - `seek` no playback session active (Pass: exit 2)
+  - `autoplay mode` invalid mode (Pass: exit 2)
+  - `autoplay scope` invalid scope (Pass: exit 2)
+  - `replay` ordinal <= 0 (Pass: exit 2)
+  - Positional args vs stdin precedence (Pass: positional strictly overrides stdin)
+  - Interactive terminal stdin blocking on `speak --source-hash` (Vulnerability: blocks indefinitely on tty)
+- **Vulnerabilities found**:
+  - `cli.py:296-303`: `handle_seek` session check executes before target syntax validation.
+  - `cli.py:112-115`: `handle_speak` calls `sys.stdin.read()` unconditionally when `words` is empty, hanging interactive `speak --source-hash`.
+- **Untested angles**: All 8 targeted scopes tested empirically.
 
 ## Loaded Skills
-- None
-
-## Key Decisions Made
-- Created comprehensive empirical stress suite `tests/test_native_audio_sink_stress.py` (18 tests).
-- All 18 stress tests passed in 40.2s.
-- All 12 unit tests passed in 0.45s.
-- All 21 narrator service unit tests passed.
-- All 6 Tier 1 R1 E2E tests passed in 1.44s.
-- Ruff lint check passed with 0 errors.
-- Decision: APPROVE.
-
-## Artifact Index
-- handoff.md — Final verdict report
-- progress.md — Liveness heartbeat
-- tests/test_native_audio_sink_stress.py — Stress test suite
+None specified in dispatch.

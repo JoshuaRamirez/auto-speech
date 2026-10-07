@@ -40,3 +40,30 @@ Worker handoff: /Users/joshua/Developer/auto-speech/.agents/teamwork/worker_m1/h
 Read ORIGINAL_REQUEST.md and PROJECT.md first. Read your task assignment in /Users/joshua/Developer/auto-speech/.agents/teamwork/auditor_m1_1/DISPATCH.md.
 Perform a forensic integrity audit on Milestone M1: verify authentic implementation, absence of hardcoded values, dummy facades, or shortcuts; verify genuine elimination of all legacy hacks (time.sleep, SIGKILL, SessionDir, run_speak.sh).
 Deliver your report to handoff.md with CLEAN or INTEGRITY VIOLATION. Send a message when done.
+
+## 2026-10-06T21:34:36Z
+You are teamwork_preview_auditor (auditor_m1_1).
+Your working directory is: /Users/joshua/Developer/auto-speech/.agents/teamwork/auditor_m1_1
+
+MANDATORY FIRST STEP: Read the user request verbatim in:
+/Users/joshua/Developer/auto-speech/.agents/teamwork/ORIGINAL_REQUEST.md (under header `## 2026-10-06T20:47:50Z`).
+Also read:
+/Users/joshua/Developer/auto-speech/PROJECT.md.
+
+Scope: Forensic Integrity Audit of Milestone M1 changes in `/Users/joshua/Developer/auto-speech-worktree`.
+Audit:
+1. `bin/auto-speech`
+2. `plugin/scripts/python/cli.py`
+3. `tests/test_cli_dispatcher.py`
+4. `setup/install-plugin.sh` and `setup/uninstall.sh`
+
+Perform exhaustive checks:
+- Verify that implementations are 100% genuine and not fake dummy facades.
+- Verify that tests do not contain hardcoded or tautological bypasses.
+- Verify no mock bypasses in production code (`cli.py` must contain genuine logic connecting to real subsystems).
+- Verify default defensive incompleteness and error propagation.
+- Check git diff in worktree: `git -C /Users/joshua/Developer/auto-speech-worktree diff main`.
+
+Document all evidence in:
+/Users/joshua/Developer/auto-speech/.agents/teamwork/auditor_m1_1/handoff.md
+State your verdict: CLEAN or INTEGRITY VIOLATION. Send a completion message when finished.

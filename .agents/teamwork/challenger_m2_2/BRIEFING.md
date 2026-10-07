@@ -1,56 +1,48 @@
-# BRIEFING — 2026-10-03T19:08:30Z
+# BRIEFING — 2026-10-06T22:28:50Z
 
 ## Mission
-Empirically stress-test the daemon socket server lifecycle and queue dynamics (stale socket recovery, queue backpressure under 200+ burst, simultaneous socket + JSONL events) for M2.
+Empirically stress-test and adversarially challenge playback_control, session_configure, and doctor MCP tools in /Users/joshua/Developer/auto-speech-worktree.
 
 ## 🔒 My Identity
-- Archetype: challenger
+- Archetype: EMPIRICAL CHALLENGER
 - Roles: critic, specialist
 - Working directory: /Users/joshua/Developer/auto-speech/.agents/teamwork/challenger_m2_2
-- Original parent: c05df6b8-cecd-49ba-9fb8-8fa47f977488
-- Milestone: M2
+- Original parent: 4db9af0e-498d-49a5-831a-0009fd31326e
+- Milestone: milestone 2
 - Instance: 2 of 2
 
 ## 🔒 Key Constraints
 - Review-only — do NOT modify implementation code
-- Empirically reproduce and verify all claims with test code executed directly
-- Report must end with explicit APPROVE or REJECT verdict
+- Run verification code empirically (do not trust claims or logs without running tests)
+- Ground evaluations in direct execution and JSON-RPC outputs
 
 ## Current Parent
-- Conversation ID: c05df6b8-cecd-49ba-9fb8-8fa47f977488
-- Updated: 2026-10-03T18:56:03Z
+- Conversation ID: 4db9af0e-498d-49a5-831a-0009fd31326e
+- Updated: 2026-10-06T22:24:15Z
 
 ## Review Scope
-- **Files to review**: Daemon socket server lifecycle, stale socket recovery, queue backpressure under socket flood (200+ requests), simultaneous socket + JSONL events
-- **Interface contracts**: /Users/joshua/Developer/auto-speech/PROJECT.md
-- **Review criteria**: correctness, reliability, crash resilience, concurrency safety
-
-## Key Decisions Made
-- Discovered user is running a live daemon on PID 95252; enforced complete test isolation to protect live daemon.
-- Created `tests/test_socket_server_stress.py` containing 7 empirical stress test cases covering ungraceful crash recovery, repeated crash cycles, corrupted socket file recovery, sequential 250-request flood under backpressure, abrupt client resets, simultaneous socket + JSONL events, and mixed-type drop-oldest shedding.
-- All 7 tests passed cleanly in 4.6s.
-- Empirically confirmed listen backlog defect: `_DaemonSocketServer` defaults to `request_queue_size = 5`, dropping requests under high-frequency / concurrent flood.
-- Decided on verdict: `REJECT` due to listen backlog flood vulnerability dropping valid user speech requests, corroborating peer challenger `challenger_m2_1`.
-
-## Artifact Index
-- DISPATCH.md — Task assignment
-- progress.md — Liveness heartbeat
-- BRIEFING.md — Working memory
-- tests/test_socket_server_stress.py — Standalone empirical stress test suite
-- handoff.md — Final challenge report with verdict
+- **Files to review**: `plugin/scripts/python/mcp_server.py`, `tests/test_mcp_server.py` in `/Users/joshua/Developer/auto-speech-worktree`
+- **Interface contracts**: PROJECT.md, ORIGINAL_REQUEST.md
+- **Review criteria**: Robustness against invalid inputs, error handling without crashing, JSON-RPC compliance, clean diagnostic outputs, regression test pass.
 
 ## Attack Surface
 - **Hypotheses tested**:
-  1. Daemon ungraceful crash recovery (stale socket re-binding without "Address already in use"): CONFIRMED ROBUST.
-  2. Drop-oldest queue cap (32 items) under 250-item flood while playback held: CONFIRMED ENFORCED.
-  3. RSS memory stability during sustained bursts: CONFIRMED STABLE (<2MB delta).
-  4. Concurrent ingestion of socket requests and JSONL tool events: CONFIRMED THREAD-SAFE.
-  5. High-concurrency socket burst against default listen backlog: DEFECT CONFIRMED (backlog=5 causes ConnectionRefusedError).
+  - `playback_control` invalid actions, seek target parsing, socket disconnects, empty cache replay.
+  - `session_configure` parameter validation across both direct style and alternative subsystem/action style.
+  - `doctor` structured JSON vs text report generation and unhealthy status detection.
 - **Vulnerabilities found**:
-  1. Default `request_queue_size = 5` in `_DaemonSocketServer` causes connection drops under burst/concurrency.
-  2. `speak.py` lacks retry loop for transient connection refusal.
-- **Untested angles**:
-  - Live system integration with real MLX Kokoro engine under extreme multi-hour load (tested via deterministic test doubles).
+  - Defect 1: `session_configure` silently ignores invalid `subsystem` and unmapped `action`, falling through to "no args" status summary (`isError=False`) instead of defensively rejecting.
+  - Defect 2: `session_configure` routes `subsystem="autoplay", action="mode"` and `action="scope"` to `args["autoplay"] = action`, tripping subsequent autoplay validator and erroneously rejecting valid documented calls with `"invalid autoplay action: 'mode'"` / `'scope'`.
+- **Untested angles**: Hardware audio output devices (mocked/non-blocking tests used to prevent audio noise).
 
 ## Loaded Skills
 - None
+
+## Key Decisions Made
+- Verdict: REQUEST_CHANGES due to `session_configure` validation defects.
+- All other tests (playback_control, doctor, full 50-suite regression) passed empirically.
+
+## Artifact Index
+- DISPATCH.md — incoming dispatch instructions
+- progress.md — task progress and liveness heartbeat
+- handoff.md — final empirical challenge handoff report

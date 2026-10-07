@@ -1,58 +1,57 @@
-# BRIEFING — 2026-10-03T18:53:55Z
+# BRIEFING — 2026-10-06T22:23:00Z
 
 ## Mission
-Implement Milestone 2: Thin Client IPC via UNIX Sockets (speak.py refactor, narrator_service.py socket server, and comprehensive tests).
+Implement Milestone M2: Expanded MCP Server Tool Suite in auto-speech (mcp_server.py and test_mcp_server.py) in the isolated worktree with 100% test passing and 0 ruff errors.
 
 ## 🔒 My Identity
-- Archetype: worker
+- Archetype: teamwork_preview_worker
 - Roles: implementer, qa, specialist
 - Working directory: /Users/joshua/Developer/auto-speech/.agents/teamwork/worker_m2
-- Original parent: c05df6b8-cecd-49ba-9fb8-8fa47f977488
-- Milestone: M2 (Thin Client IPC via UNIX Sockets)
+- Original parent: 4db9af0e-498d-49a5-831a-0009fd31326e
+- Milestone: M2
 
 ## 🔒 Key Constraints
-- Exclusively own and edit: plugin/scripts/python/speak.py, plugin/scripts/python/narrator_service.py, tests/test_speak_client.py, tests/test_narrator_service.py.
-- Do NOT modify files in tests/e2e/ or any other modules.
-- DO NOT CHEAT: genuine implementations only, no hardcoded test results or facade implementations.
-- No files other than metadata in .agents/teamwork/.
-- speak.py forward stdin to UNIX domain socket /tmp/auto-speech-daemon.sock (or AUTO_SPEECH_DAEMON_SOCK).
-- UNIX domain socket server in narrator_service.py enqueueing to _tts_queue.
+- Code changes and test runs MUST be executed inside /Users/joshua/Developer/auto-speech-worktree
+- DO NOT CHEAT. All implementations must be genuine.
+- Preserve 100% backward compatibility with existing speak tool and test cases.
+- Enforce standard-library-only implementation in mcp_server.py with injectable collaborators in McpServer.__init__ for hermetic testing.
+- Global mute check (AutoplayGate().worker_gated_off()) enforced on all speech-producing operations.
+- All 50+ test suites in `bash tests/run_all.sh` must pass 100% green.
+- Ruff check must return 0 errors.
 
 ## Current Parent
-- Conversation ID: c05df6b8-cecd-49ba-9fb8-8fa47f977488
-- Updated: not yet
+- Conversation ID: 4db9af0e-498d-49a5-831a-0009fd31326e
+- Updated: 2026-10-06T22:23:00Z
 
 ## Task Summary
-- **What to build**: Refactor speak.py into thin CLI client, add UNIX socket server to narrator_service.py, create tests/test_speak_client.py, update tests/test_narrator_service.py.
-- **Success criteria**: All unit and e2e R2 tests pass, ruff passes, clean shutdown and socket lifecycle.
-- **Interface contracts**: /Users/joshua/Developer/auto-speech/PROJECT.md
-- **Code layout**: /Users/joshua/Developer/auto-speech/PROJECT.md
+- **What to build**: Expand auto-speech MCP server to advertise and handle 6 tools: speak, autoplay_turn, narrate_event, playback_control, session_configure, doctor.
+- **Success criteria**: All 6 tools functional with schema compliance, global mute gating, injectable hermetic testing, comprehensive unit tests, all tests passing.
+- **Interface contracts**: PROJECT.md, analysis docs from explorer_m2_1, explorer_m2_2, spec_miner_m2.
+- **Code layout**: /Users/joshua/Developer/auto-speech-worktree/plugin/scripts/python/mcp_server.py, tests/test_mcp_server.py.
 
 ## Key Decisions Made
-- `speak.py`: thin client with argument parsing compatibility (`--ordinal`, `--keep-artifacts`, `--source-hash`), 64-hex hash validation, short-circuit on empty stdin, UTF-8 streaming over UNIX domain stream socket with write shutdown (`SHUT_WR`).
-- `narrator_service.py`: `_DaemonSocketServer(socketserver.ThreadingUnixStreamServer)` with `address_family = socket.AF_UNIX`, `daemon_threads = True`, automatic stale socket unlinking in `server_bind()` and `_start_socket_server()`, safe cleanup in `_stop_socket_server()` and `atexit`.
-- Thread safety: `_queue_lock` in `_enqueue_phase` and `enqueue_text` prevents races between socket client threads and JSONL tail thread.
-- Created `tests/test_speak_client.py` covering mock and live socket transmission, unicode fidelity, 128KB payload streaming, and argument parsing.
-- Added 5 new unit tests to `tests/test_narrator_service.py` verifying daemon socket lifecycle, text enqueueing, empty payload filtering, disconnect resilience, and backpressure.
-
-## Artifact Index
-- /Users/joshua/Developer/auto-speech/.agents/teamwork/worker_m2/DISPATCH.md — Task assignment and dispatch history
-- /Users/joshua/Developer/auto-speech/.agents/teamwork/worker_m2/progress.md — Liveness and status heartbeat
-- /Users/joshua/Developer/auto-speech/.agents/teamwork/worker_m2/handoff.md — Final handoff report
+- Expanded tools/list to advertise all 6 tools with rigorous JSON-RPC 2.0 schemas.
+- Implemented standard-library-only handlers in mcp_server.py for speak, autoplay_turn, narrate_event, playback_control, session_configure, and doctor.
+- Provided injectable collaborators in McpServer.__init__ for completely isolated, hermetic unit tests.
+- Replaced test_tools_list_has_only_speak with test_tools_list_advertises_all_six_tools and added comprehensive test cases covering happy paths, edge cases, error conditions, and fallbacks.
 
 ## Change Tracker
 - **Files modified**:
-  - `plugin/scripts/python/speak.py`: Thin CLI client forwarding stdin to daemon socket
-  - `plugin/scripts/python/narrator_service.py`: Multi-threaded UNIX domain socket server with clean lifecycle and queue backpressure
-  - `tests/test_speak_client.py`: Standalone unit tests for thin client
-  - `tests/test_narrator_service.py`: Unit tests for daemon socket server
-- **Build status**: PASS (all unit and e2e tests passing)
+  * `plugin/scripts/python/mcp_server.py`: Expanded tool definitions, schemas, and handlers for all 6 tools.
+  * `tests/test_mcp_server.py`: Expanded from 17 to 52 unit tests covering all 6 tools hermetically.
+- **Build status**: PASS (all 52/52 unit tests pass; all 50/50 suites in tests/run_all.sh pass)
 - **Pending issues**: None
 
 ## Quality Status
-- **Build/test result**: All passing (18/18 speak_client tests, 26/26 narrator_service tests, 6/6 Tier1 R2 tests, 5/5 Tier2 R2 tests)
-- **Lint status**: 0 violations (ruff check clean)
-- **Tests added/modified**: `tests/test_speak_client.py` (18 tests), `tests/test_narrator_service.py` (5 tests added)
+- **Build/test result**: PASS (50/50 test suites green, 0 failures)
+- **Lint status**: PASS (0 ruff lint errors across mcp_server.py and test_mcp_server.py)
+- **Tests added/modified**: 35 new unit tests added in test_mcp_server.py (total 52 tests)
 
 ## Loaded Skills
-- None
+- None specified in dispatch
+
+## Artifact Index
+- DISPATCH.md — Initial dispatch prompt
+- BRIEFING.md — Situational awareness
+- progress.md — Liveness heartbeat
+- handoff.md — Final handoff report

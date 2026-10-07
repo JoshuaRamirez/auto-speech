@@ -1,44 +1,50 @@
-# BRIEFING — 2026-10-03T18:06:00Z
+# BRIEFING — 2026-10-06T21:15:30Z
 
 ## Mission
-Investigate and specify the exact in-process TTSEngine integration for narrator_service.py on the _tts_worker thread, replacing _speak_script() with ResilientSynthesizer + NativeAudioSink and temporary WAV cleanup.
+Formulate implementation strategy for bin/auto-speech bash trampoline, ~/.local/bin/auto-speech symlink, and installer/uninstaller synchronization for Milestone M1.
 
 ## 🔒 My Identity
 - Archetype: explorer
-- Roles: investigation, synthesis
+- Roles: Teamwork explorer
 - Working directory: /Users/joshua/Developer/auto-speech/.agents/teamwork/explorer_m1_2
-- Original parent: c05df6b8-cecd-49ba-9fb8-8fa47f977488
+- Original parent: 4db9af0e-498d-49a5-831a-0009fd31326e
 - Milestone: M1
 
 ## 🔒 Key Constraints
-- Read-only investigation — do NOT implement code in project source files
-- Write findings only to /Users/joshua/Developer/auto-speech/.agents/teamwork/explorer_m1_2/
-- Specify exact changes: TTSEngine & ResilientSynthesizer initialization on _tts_worker, synthesis in _speak() to temp WAV, NativeAudioSink playback, temp WAV cleanup in finally block, thread error handling
-- Produce analysis.md and handoff.md
+- Read-only investigation — do NOT implement
+- Target worktree is /Users/joshua/Developer/auto-speech-worktree
+- Write analysis only to .agents/teamwork/explorer_m1_2/
+- Keep tests/test_install_plugin.sh green (100%)
 
 ## Current Parent
-- Conversation ID: c05df6b8-cecd-49ba-9fb8-8fa47f977488
+- Conversation ID: 4db9af0e-498d-49a5-831a-0009fd31326e
 - Updated: not yet
 
 ## Investigation State
-- **Explored paths**: ORIGINAL_REQUEST.md, PROJECT.md, DISPATCH.md, narrator_service.py, resilient_synthesizer.py, tts_engine.py, voice_profile.py, voice_profile_store.py, config_constants.py, web_server.py, test_narrator_service.py
+- **Explored paths**:
+  - `bin/auto-speech` design and symlink canonicalization
+  - `/Users/joshua/Developer/auto-speech-worktree/.venv` symlink structure
+  - `setup/install-plugin.sh` and `setup/uninstall.sh`
+  - `tests/test_install_plugin.sh` contract assertions (10/10 green baseline)
+  - PATH discovery and macOS environment (`~/.local/bin` on PATH)
 - **Key findings**:
-  - Apple MLX compute streams are per-thread; TTSEngine must be loaded and used strictly on the `_tts_worker` thread via `_ensure_tts_initialized()`.
-  - `ResilientSynthesizer.synthesize_one()` writes directly to `temp_wav`, automatically splitting on Kokoro generation faults and returning True if audio was generated.
-  - Synchronous `NativeAudioSink.play(temp_wav)` blocks naturally, completely eliminating duration estimation, `time.sleep()`, `SessionDir`, and `SIGKILL`.
-  - Temporary WAV files, partial files (`.partial`), and split fragments (`f"{temp_wav.stem}-*.wav"`) must be unconditionally cleaned up in `finally:`.
-  - Error handling in both `_speak()` and `_tts_worker()` catches exceptions, ensuring `task_done()` is called and the worker thread loop never crashes.
-- **Unexplored areas**: None for M1 in-process TTSEngine integration.
+  - `bin/auto-speech` must resolve its true location across symlinks via POSIX `readlink` loop with a recursion guard (`MAX_HOPS=20`).
+  - `.venv/bin/python` must be resolved relative to `$PROJECT_ROOT` without fallback to `~/.config/auto-speech/root` to prevent silent cross-talk between the worktree and main clone.
+  - Missing venv emits formatted error to stderr and exits 1.
+  - `exec "$VENV_PYTHON" "$CLI_PY" "$@"` replaces the shell process, preserving signals, exit codes, and stdin/stdout streams.
+  - `setup/install-plugin.sh` links `~/.local/bin/auto-speech` portably, respecting `$HOME` for sandbox isolation.
+  - `setup/uninstall.sh` removes the symlink only if it matches `"$PROJECT_ROOT/"*`.
+  - `tests/test_install_plugin.sh` retains all 10 existing assertions green and adds 3 new contract assertions (13/13 passing).
+- **Unexplored areas**: None for M1 trampoline/installer scope. Implementation will be executed by `worker_m1`.
 
 ## Key Decisions Made
-- `NativeAudioSink` instantiated on `NarratorService.__init__` with optional dependency injection, enabling `_sink.interrupt()` from main thread on `UserPromptSubmit` and during shutdown.
-- `TTSEngine` and `ResilientSynthesizer` instantiated and loaded lazily/prewarmed on `_tts_worker` thread to strictly enforce MLX single-thread stream affinity.
-- Complete replacement of `_speak()` with clean `ResilientSynthesizer` + `NativeAudioSink` pipeline and `finally:` file cleanup.
-- Removal of `_speak_script()`, `_wait_mpv_idle()`, duplicate `UserPromptSubmit` blocks, `SessionDir`, `wave.open`, `time.sleep`, and `SIGKILL`.
+- Strict repository-relative venv resolution (no `~/.config/auto-speech/root` fallback in trampoline).
+- Scoped uninstall protection (`case "$target" in "$PROJECT_ROOT/"*)`).
+- Sandbox isolation preserved by using `$HOME/.local/bin`.
 
 ## Artifact Index
-- /Users/joshua/Developer/auto-speech/.agents/teamwork/explorer_m1_2/DISPATCH.md — Task assignment and dispatch log
-- /Users/joshua/Developer/auto-speech/.agents/teamwork/explorer_m1_2/BRIEFING.md — Persistent state and identity
-- /Users/joshua/Developer/auto-speech/.agents/teamwork/explorer_m1_2/progress.md — Heartbeat and step tracking
-- /Users/joshua/Developer/auto-speech/.agents/teamwork/explorer_m1_2/analysis.md — Comprehensive technical analysis
-- /Users/joshua/Developer/auto-speech/.agents/teamwork/explorer_m1_2/handoff.md — 5-component handoff report
+- `DISPATCH.md` — incoming parent dispatch record
+- `BRIEFING.md` — persistent working memory
+- `progress.md` — heartbeat progress log
+- `analysis.md` — comprehensive specification and ready-to-apply diff patches
+- `handoff.md` — 5-component hard handoff report

@@ -1,36 +1,25 @@
-# Task Assignment: Explorer M1.2 (In-Process TTSEngine Integration)
+## 2026-10-06T21:07:32Z
+[Message] timestamp=2026-10-06T21:07:32Z sender=4db9af0e-498d-49a5-831a-0009fd31326e priority=MESSAGE_PRIORITY_HIGH content=You are teamwork_preview_explorer (explorer_m1_2).
+Your working directory is: /Users/joshua/Developer/auto-speech/.agents/teamwork/explorer_m1_2
 
-You are explorer_m1_2 (teamwork_preview_explorer).
-Your working directory: /Users/joshua/Developer/auto-speech/.agents/teamwork/explorer_m1_2
-Project root: /Users/joshua/Developer/auto-speech
-Original request: /Users/joshua/Developer/auto-speech/.agents/teamwork/ORIGINAL_REQUEST.md
-Project specification: /Users/joshua/Developer/auto-speech/PROJECT.md
+MANDATORY FIRST STEP: Read the user request verbatim in:
+/Users/joshua/Developer/auto-speech/.agents/teamwork/ORIGINAL_REQUEST.md (under header `## 2026-10-06T20:47:50Z`).
+Also read:
+/Users/joshua/Developer/auto-speech/PROJECT.md
+and reference:
+/Users/joshua/Developer/auto-speech/.agents/teamwork/explorer_survey_1/analysis.md.
 
-## Objective
-Read ORIGINAL_REQUEST.md and PROJECT.md first.
-You are investigating Milestone M1: In-process `TTSEngine` integration into `narrator_service.py`.
-Specify the exact code changes for `narrator_service.py`:
-1. In-process `TTSEngine` and `ResilientSynthesizer` initialization:
-   - Ensure initialization occurs in `_tts_worker` (or is prewarmed cleanly respecting Apple MLX stream affinity).
-   - Use default `VoiceProfile` (or configured voice profile).
-2. Synthesis in `_speak(self, line: str)`:
-   - Synthesize to a temporary WAV file using `self._synth.synthesize_one(line, profile, temp_wav_path)`.
-   - Call `self._sink.play(temp_wav_path)`.
-   - Ensure temporary WAV file is deleted in a `finally:` block.
-   - Replace the legacy `_speak_script()` execution completely.
-3. Thread and queue safety:
-   - Ensure `_tts_worker` handles errors in synthesis or playback without crashing the thread loop.
+Note: Target worktree is `/Users/joshua/Developer/auto-speech-worktree`.
 
-Write your findings to `/Users/joshua/Developer/auto-speech/.agents/teamwork/explorer_m1_2/analysis.md` and `handoff.md`. Send a message when done.
+Objective:
+Formulate the implementation strategy for the bash trampoline `bin/auto-speech`, symlink linking into `~/.local/bin/auto-speech`, and installer/uninstaller synchronization for Milestone M1.
+Investigate and specify:
+1. `bin/auto-speech` bash trampoline script: resolving true script location across symlinks (using `readlink` loop), finding `$PROJECT_ROOT/.venv/bin/python`, handling missing venv with clear stderr diagnostic, and exec'ing `cli.py "$@"`.
+2. `~/.local/bin/auto-speech` symlink creation and verification.
+3. Updates to `setup/install-plugin.sh` and `setup/uninstall.sh` to ensure `~/.local/bin/auto-speech` is created/removed portably without hardcoded paths.
+4. Ensuring `tests/test_install_plugin.sh` assertions remain 100% green.
 
-
-## 2026-10-03T18:00:30Z
-You are explorer_m1_2.
-Your working directory: /Users/joshua/Developer/auto-speech/.agents/teamwork/explorer_m1_2
-Project root: /Users/joshua/Developer/auto-speech
-Original request: /Users/joshua/Developer/auto-speech/.agents/teamwork/ORIGINAL_REQUEST.md
-Project specification: /Users/joshua/Developer/auto-speech/PROJECT.md
-
-Read ORIGINAL_REQUEST.md and PROJECT.md first. Read your task assignment in /Users/joshua/Developer/auto-speech/.agents/teamwork/explorer_m1_2/DISPATCH.md.
-Specify the exact in-process TTSEngine integration for narrator_service.py on the _tts_worker thread, replacing _speak_script() with ResilientSynthesizer + NativeAudioSink and temporary WAV cleanup.
-Write findings to analysis.md and handoff.md. Send a message when done.
+Do NOT implement any code directly.
+Write your analysis to `/Users/joshua/Developer/auto-speech/.agents/teamwork/explorer_m1_2/analysis.md`
+and handoff report to `/Users/joshua/Developer/auto-speech/.agents/teamwork/explorer_m1_2/handoff.md`.
+Send a completion message back to caller when done.

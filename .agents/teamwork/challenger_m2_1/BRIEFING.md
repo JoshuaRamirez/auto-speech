@@ -1,67 +1,71 @@
-# BRIEFING — 2026-10-03T19:03:00Z
+# BRIEFING — 2026-10-06T22:31:00Z
 
 ## Mission
-Empirically stress-test socket IPC in auto-speech (`narrator_service.py` socket server & `plugin/scripts/python/speak.py` / client IPC): 50+ concurrent clients, 256KB+ multiline payloads, Unicode/emojis, abrupt disconnects (SO_LINGER 0), and latency measurement (<20ms). Provide APPROVE or REJECT verdict.
+Adversarially challenge the `autoplay_turn` and `narrate_event` MCP tools in `/Users/joshua/Developer/auto-speech-worktree/plugin/scripts/python/mcp_server.py`. Conduct empirical stress tests via stdio JSON-RPC and Python test harnesses across 7 specific scenarios: missing transcript, non-existent session_id, global mute, mode="raw" with bypass_llm=True, unenrolled session narration, missing event parameter (-32602), and malformed payload. Document results and deliver an APPROVE or REQUEST_CHANGES verdict.
 
 ## 🔒 My Identity
 - Archetype: challenger
 - Roles: critic, specialist
 - Working directory: /Users/joshua/Developer/auto-speech/.agents/teamwork/challenger_m2_1
-- Original parent: c05df6b8-cecd-49ba-9fb8-8fa47f977488
-- Milestone: M2.1
+- Original parent: 4db9af0e-498d-49a5-831a-0009fd31326e
+- Milestone: M2
 - Instance: 1 of 1
 
 ## 🔒 Key Constraints
-- Review-only — do NOT modify implementation code
-- Empirical testing only: find bugs by writing and running verification code
-- Must not trust worker claims or logs without direct empirical verification
-- Output report in handoff.md with explicit APPROVE or REJECT verdict
+- Review-only — do NOT modify implementation code in the worktree or main repo
+- Empirical testing only: find bugs by writing and executing tests yourself
+- Do not trust worker claims or logs without independent empirical verification
+- Test against `/Users/joshua/Developer/auto-speech-worktree`
+- Output findings and verdict in `handoff.md` and message the parent agent
 
 ## Current Parent
-- Conversation ID: c05df6b8-cecd-49ba-9fb8-8fa47f977488
-- Updated: 2026-10-03T19:03:00Z
+- Conversation ID: 4db9af0e-498d-49a5-831a-0009fd31326e
+- Updated: 2026-10-06T22:31:00Z
 
 ## Review Scope
 - **Files to review**:
-  - `plugin/scripts/python/narrator_service.py`
-  - `plugin/scripts/python/speak.py`
-  - `tests/test_speak_client.py`
-  - `tests/test_narrator_service.py`
-- **Interface contracts**: `PROJECT.md`, `ORIGINAL_REQUEST.md`
-- **Review criteria**: Concurrency (50+ clients), payload limits / boundary cases (256KB+, empty, whitespace, multiline, unicode/emojis), abrupt disconnects (SO_LINGER 0), latency (<20ms).
+  - `/Users/joshua/Developer/auto-speech-worktree/plugin/scripts/python/mcp_server.py`
+  - `/Users/joshua/Developer/auto-speech-worktree/tests/test_mcp_server.py`
+  - Subsystem dependencies: `transcript_locator.py`, `message_selector.py`, `claude_cli_rewriter.py`, `autoplay_gate.py`
+- **Interface contracts**: `PROJECT.md`, `ORIGINAL_REQUEST.md` (2026-10-06T20:47:50Z)
+- **Review criteria**:
+  1. `autoplay_turn` missing transcript -> `isError: True` with clear message
+  2. `autoplay_turn` non-existent session_id -> `isError: True` gracefully
+  3. `autoplay_turn` global mute enabled -> `isError: True` suppressing synthesis
+  4. `autoplay_turn` mode="raw" & bypass_llm=True -> rewriter not called
+  5. `narrate_event` unenrolled session -> `isError: False` clean notice
+  6. `narrate_event` missing event parameter -> JSON-RPC error code -32602
+  7. `narrate_event` malformed payload -> defensive handling without crashing
 
 ## Key Decisions Made
-- Executed full baseline test suites (`test_speak_client.py`, `test_narrator_service.py`, Tier1/Tier2 E2E). All passed.
-- Developed comprehensive empirical stress harness in `tests/test_socket_ipc_stress.py` covering all 5 requested dimensions.
-- Empirically discovered Critical Defect 1: `_DaemonSocketServer` inherits `request_queue_size = 5`, dropping 40-43 out of 50 concurrent client connections with `[Errno 61] Connection refused`.
-- Empirically discovered Defect 2: Abrupt mid-transmission disconnects (`SO_LINGER 0` / RST) cause partial/truncated payloads to be decoded and enqueued into `_tts_queue` rather than discarded.
-- Empirically verified Defect 3: Unbounded thread hang on idle/slow client connections (no socket recv timeout on server).
-- Empirically verified Pass 1: Boundary payloads (256KB+, 1MB, 5MB, Unicode/emojis, empty/whitespace) handled cleanly.
-- Empirically verified Pass 2: Latency for typical utterances is ~0.1ms median, ~1.5ms p99 (<20ms threshold easily passed).
-- Final verdict: **REJECT** due to concurrency failure.
+- Executed `bash tests/run_all.sh` in worktree: 50/50 test suites pass cleanly.
+- Implemented and executed empirical stress test harness `tests/test_challenger_harness.py` testing both direct Python API and full stdio JSON-RPC 2.0 subprocess pipe.
+- Empirically discovered Critical Defect in Scenario 2: When `autoplay_turn` is invoked with a non-existent `session_id`, `TranscriptLocator.locate` falls back to `newest-jsonl` if any `.jsonl` file exists in the project directory, resulting in `isError: False` and synthesizing an unrelated session's assistant response.
+- Empirically discovered Protocol Discrepancy in Scenario 6: Missing `event` parameter returns tool error `isError: True` (`_tool_result("event must be a non-empty string", is_error=True)`) rather than JSON-RPC protocol error `-32602 (INVALID_PARAMS)`.
+- Empirically verified Scenarios 1, 3, 4, 5, 7 pass all invariants under direct API and stdio JSON-RPC.
+- Final Verdict: **REQUEST_CHANGES** due to Scenario 2 failure.
 
 ## Artifact Index
-- `.agents/teamwork/challenger_m2_1/BRIEFING.md` — Agent working memory
+- `.agents/teamwork/challenger_m2_1/BRIEFING.md` — Working memory
+- `.agents/teamwork/challenger_m2_1/DISPATCH.md` — Dispatch logs
 - `.agents/teamwork/challenger_m2_1/progress.md` — Progress heartbeat
-- `.agents/teamwork/challenger_m2_1/DISPATCH.md` — Incoming dispatch logs
-- `tests/test_socket_ipc_stress.py` — Complete empirical stress test suite
-- `.agents/teamwork/challenger_m2_1/handoff.md` — Final empirical challenge report
+- `.agents/teamwork/challenger_m2_1/handoff.md` — Final challenge report
+- `/Users/joshua/Developer/auto-speech-worktree/tests/test_challenger_harness.py` — Empirical test harness
 
 ## Attack Surface
 - **Hypotheses tested**:
-  - H1: 50 concurrent clients simultaneously connecting causes OS listen backlog exhaustion under Python's default `request_queue_size = 5`. (CONFIRMED - 40-43/50 clients fail with ECONNREFUSED)
-  - H2: Abrupt RST disconnect mid-transmission leaks threads or crashes server. (PARTIALLY REFUTED - server threads do not leak, server does not crash)
-  - H3: Abrupt RST disconnect mid-transmission enqueues truncated corrupted audio fragments. (CONFIRMED - partial bytes enqueued to _tts_queue)
-  - H4: Indefinite thread hang under slowloris connection. (CONFIRMED - server thread hangs indefinitely on client recv without timeout)
-  - H5: 256KB+ payload causes buffer overflow or truncation. (REFUTED - 256KB+ and multi-MB stream cleanly)
-  - H6: Client transmission latency exceeds 20ms. (REFUTED - typical latency is 0.05-1.5ms)
+  - H1: `autoplay_turn` with missing transcript returns tool error (`isError: True`). (CONFIRMED)
+  - H2: `autoplay_turn` with non-existent session_id returns tool error gracefully. (REFUTED - fails with `isError: False` when other project session transcripts exist; leaks and speaks unrelated session)
+  - H3: `autoplay_turn` with global mute suppresses audio and returns tool error. (CONFIRMED)
+  - H4: `autoplay_turn` with `mode="raw"` and `bypass_llm=True` bypasses rewriter. (CONFIRMED)
+  - H5: `narrate_event` with unenrolled session returns clean notice (`isError: False`). (CONFIRMED)
+  - H6: `narrate_event` missing event parameter returns protocol error `-32602`. (PARTIALLY REFUTED - returns tool error `isError: True`, reserving -32602 for malformed `arguments` object)
+  - H7: `narrate_event` with malformed payload is defensively handled without crashing. (CONFIRMED)
 - **Vulnerabilities found**:
-  - V1 (Critical): `request_queue_size = 5` in `_DaemonSocketServer` + zero client retry in `speak.py` drops 70-90% of concurrent connections.
-  - V2 (High): `_DaemonRequestHandler` enqueues truncated payloads from aborted connections upon `ConnectionResetError`.
-  - V3 (Medium): `_DaemonRequestHandler` lacks read timeout, allowing hung clients to pin server threads indefinitely.
+  - V1 (High / Defect): Cross-session leakage in `autoplay_turn` when `session_id` does not exist in an existing project workspace.
+  - V2 (Low / Contract): Divergence on `narrate_event` missing `event` parameter between protocol error code -32602 and tool error `isError: True`.
 - **Untested angles**:
-  - Memory exhaustion under sustained 500MB+ inputs.
-  - Multi-user UNIX socket permission boundaries (`chmod` on socket file).
+  - Concurrent invocations of `autoplay_turn` and `narrate_event` under heavy daemon load.
 
 ## Loaded Skills
-- None requested in dispatch.
+- None specified in dispatch.

@@ -109,3 +109,84 @@ Retire obsolete on-disk coordination loops and detached scripts per the RFC inve
 - [ ] Cache misses successfully populate config/cache/<hash_prefix>/full.wav via CacheStore.promote().
 - [ ] All 115 tests pass (41/41 unit/regression suites and 74/74 E2E tests) on the final tree.
 - [ ] .venv/bin/ruff check . returns 0 violations.
+
+
+## 2026-10-06T20:47:50Z
+
+Build a unified `auto-speech` CLI dispatcher and expand the auto-speech MCP server to provide complete feature parity with Claude Code and Antigravity lifecycle hooks, enabling full speech control, turn playback, narration events, session management, and diagnostics via both CLI and MCP. This entire operation must be executed within an isolated Git worktree, verified, bidirectionally merged, documented, and the worktree cleaned up.
+
+Working directory: /Users/joshua/Developer/auto-speech
+Integrity mode: development
+
+## Requirements
+
+### R1. Unified `auto-speech` CLI Dispatcher
+Provide a command-line interface executable directly from the terminal (and linked to `~/.local/bin/auto-speech`) that provides a single, consistent entrypoint for all auto-speech operations:
+- Direct speech synthesis and replay: `speak`, `replay`
+- Playback transport controls: `pause`, `resume`, `stop`, `restart`, `seek`
+- Autoplay lifecycle and configuration: `autoplay on`, `autoplay off`, `autoplay status`, `autoplay mode`, `autoplay scope`
+- Narration subsystem controls: `narrate on`, `narrate off`, `narrate status`, `narrate stop`, `narrate config`
+- Hook simulation and invocation: `hook stop`, `hook narrator`, `hook bootstrap`
+- System diagnostics and maintenance: `doctor`, `update`
+
+### R2. Full Lifecycle Hook Parity via MCP Server
+Extend the `auto-speech` Model Context Protocol (MCP) server so that any action currently driven by shell hooks (`Stop`, `PreToolUse`, `PostToolUse`, `UserPromptSubmit`) or slash commands can be executed programmatically by an AI agent via MCP tool calls:
+- `speak`: queue arbitrary speech verbatim (existing).
+- `autoplay_turn`: process and synthesize the latest turn response for a session or transcript, running the appropriate summarization/rewriting pipeline without requiring OS shell hooks.
+- `narrate_event`: ingest lifecycle activity events (tool calls, prompt submissions, completions) for real-time narration.
+- `playback_control`: manage transport operations (pause, resume, stop, restart, seek, replay).
+- `session_configure`: update session enrollment markers and configure autoplay modes and scoping.
+- `doctor`: run health checks and return structured diagnostic findings.
+
+### R3. Hook Integration & Architecture Coherence
+Reconcile the shell entrypoints (`autoplay_hook.sh`, `narrator_hook.sh`, `agent-event-router`) to delegate cleanly into the unified dispatcher or shared domain logic. Ensure existing Claude Code hooks, Antigravity configurations, and slash commands continue to function seamlessly without regressions or duplicated business logic.
+
+### R4. Isolated Worktree Execution & Bidirectional Merge Reconcile
+All development, test additions, and verification must take place in an isolated Git worktree:
+1. Create a dedicated worktree and feature branch (e.g. `worktree/cli-mcp-parity`).
+2. Run all edits and test suites inside the worktree environment.
+3. Upon test passing, fetch/merge `main` into the worktree branch and verify that `bash tests/run_all.sh` remains 100% green.
+4. Merge the worktree branch back into `main`.
+5. Clean up and remove the worktree (`git worktree remove`) after `main` is successfully updated.
+
+### R5. Comprehensive Artifact Documentation
+Document all useful artifacts created, updated, or verified during the execution, including architectural decisions, CLI usage guides, MCP tool schemas, and verification logs.
+
+## Verification Resources
+
+- Test runner: `bash tests/run_all.sh` (42 tests currently baseline green).
+- Existing unit suites: `tests/test_mcp_server.py`, `tests/test_cli_rewrite.py`, `tests/test_control.py`.
+- Diagnostics CLI: `plugin/scripts/python/doctor.py`.
+
+## Acceptance Criteria
+
+### CLI Dispatcher
+- [ ] `auto-speech` is executable on PATH (via `~/.local/bin/auto-speech`).
+- [ ] Running `auto-speech --help` exits 0 and displays all subcommands and descriptions.
+- [ ] All subcommands (`speak`, `replay`, `pause`, `resume`, `stop`, `restart`, `seek`, `autoplay`, `narrate`, `doctor`, `hook`) dispatch correctly, returning 0 on success and non-zero on failure with clear diagnostics on stderr.
+
+### MCP Server Parity
+- [ ] `tools/list` on the MCP server advertises the expanded tool suite: `speak`, `autoplay_turn`, `narrate_event`, `playback_control`, `session_configure`, and `doctor`.
+- [ ] Calling `autoplay_turn` triggers speech synthesis with the active rewrite mode (verbatim/small/medium/large) for the session/transcript.
+- [ ] Calling `narrate_event` logs structured events to the narrator pipeline and respects narration session enrollment.
+- [ ] All speech-producing MCP tools honor the global mute (`~/.claude/auto-speech.disabled`).
+
+### Regression & Integrity
+- [ ] `bash tests/run_all.sh` passes with 0 failures in the worktree and on `main`.
+- [ ] Dedicated unit and integration tests are added for the CLI dispatcher and the new MCP tools.
+- [ ] Existing slash commands and hook scripts execute without broken imports or altered external behavior.
+
+### Worktree Lifecycle & Documentation
+- [ ] `main` was successfully merged into the worktree branch with all tests passing prior to final integration.
+- [ ] The feature branch was cleanly merged back into `main`.
+- [ ] The worktree was completely removed and cleaned up after integration.
+- [ ] All artifacts, architectural decisions, and verification records are documented.
+
+
+## 2026-10-06T23:24:37Z
+
+The machine experienced a crash/restart, and the user requested to continue. 
+Please resume the teamwork preview project immediately:
+- Check current state in `.agents/teamwork/orchestrator_2/progress.md` and `/Users/joshua/Developer/auto-speech-worktree`.
+- Continue Phase 4: Milestone 3 (Hook Integration & Architecture Coherence), followed by full regression verification, bidirectional merge reconcile (main into worktree, then worktree into main), worktree cleanup, and artifact documentation.
+- Restart any background monitoring/cron loops as necessary and drive the project to completion.

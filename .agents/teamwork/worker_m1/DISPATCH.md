@@ -62,3 +62,56 @@ Implement:
 2. Refactor narrator_service.py for in-process TTSEngine, NativeAudioSink, line 237 bug fix, and complete removal of time.sleep/SIGKILL hacks.
 3. Tests in tests/test_native_audio_sink.py and tests/test_narrator_service.py.
 4. Execute tests and report all passing results in handoff.md. Send a message when done.
+
+## 2026-10-06T21:16:27Z
+[Message] timestamp=2026-10-06T21:16:27Z sender=4db9af0e-498d-49a5-831a-0009fd31326e priority=MESSAGE_PRIORITY_HIGH content=You are teamwork_preview_worker (worker_m1).
+Your dedicated working directory is: /Users/joshua/Developer/auto-speech/.agents/teamwork/worker_m1
+
+MANDATORY FIRST STEP: Read the user request verbatim in:
+/Users/joshua/Developer/auto-speech/.agents/teamwork/ORIGINAL_REQUEST.md (under header `## 2026-10-06T20:47:50Z`).
+
+MANDATORY INTEGRITY WARNING:
+DO NOT CHEAT. All implementations must be genuine. DO NOT hardcode test results, create dummy/facade implementations, or circumvent the intended task. A teamwork_preview_auditor will independently verify your work. Integrity violations WILL be detected and your work WILL be rejected.
+
+CRITICAL WORKTREE LOCATION:
+All code changes and tests MUST be executed inside the isolated git worktree:
+/Users/joshua/Developer/auto-speech-worktree
+
+Reference Material to Read First:
+1. /Users/joshua/Developer/auto-speech/PROJECT.md
+2. /Users/joshua/Developer/auto-speech/.agents/teamwork/explorer_m1_1/analysis.md (Architecture of cli.py)
+3. /Users/joshua/Developer/auto-speech/.agents/teamwork/explorer_m1_2/analysis.md (Architecture of bin/auto-speech and installer symlink)
+4. /Users/joshua/Developer/auto-speech/.agents/teamwork/spec_miner_m1/analysis.md (Exhaustive test specifications for test_cli_dispatcher.py)
+
+Task Scope: Implement Milestone M1 (Unified auto-speech CLI Dispatcher).
+1. Create `bin/auto-speech` inside `/Users/joshua/Developer/auto-speech-worktree/bin/auto-speech`:
+   - Executable bash trampoline resolving true project root across symlinks with recursion guard.
+   - Discovers `$PROJECT_ROOT/.venv/bin/python`.
+   - Emits clear diagnostic to stderr if venv is missing and exits 1.
+   - Execs `$VENV_PYTHON $PROJECT_ROOT/plugin/scripts/python/cli.py "$@"`.
+   - Set permissions: `chmod +x /Users/joshua/Developer/auto-speech-worktree/bin/auto-speech`.
+2. Implement `plugin/scripts/python/cli.py` inside `/Users/joshua/Developer/auto-speech-worktree/plugin/scripts/python/cli.py`:
+   - Top-level `argparse` parser with `--help`, `--version`.
+   - All 12 subcommands: `speak`, `replay`, `pause`, `resume`, `stop`, `restart`, `seek`, `autoplay`, `narrate`, `hook`, `doctor`, `update`.
+   - Handle stdin vs CLI args per spec (piped stdin, TTY checks, `--source-hash` cache lookup).
+   - Global mute check (`~/.claude/auto-speech.disabled`).
+   - Transport controls: mpv IPC socket `/tmp/auto-speech-mpv.sock` and `DaemonClient.interrupt()`. Return exit code 2 when no active session, 4 on invalid seek target.
+   - Standardized exit codes: 0 (OK/clean mute), 1 (general fail/doctor FAIL), 2 (no session/invalid input), 3 (IPC fail), 4 (bad arg), 6 (playback fail), 130 (interrupted).
+3. Update `setup/install-plugin.sh` and `setup/uninstall.sh` inside the worktree:
+   - Add `install_cli_symlink` to create `~/.local/bin/auto-speech -> $PROJECT_ROOT/bin/auto-speech` portably.
+   - Remove symlink in `uninstall.sh` if it points to `$PROJECT_ROOT/*`.
+   - Create the symlink `~/.local/bin/auto-speech` on the user system.
+4. Implement comprehensive unit tests in `/Users/joshua/Developer/auto-speech-worktree/tests/test_cli_dispatcher.py`:
+   - Implement the test suites derived by `spec_miner_m1` covering all 12 subcommands, help outputs, exit codes, stdin piping, global mute, and mocks for daemon/audio sinks so tests run hermetically.
+5. Update `tests/test_install_plugin.sh` to include assertions for the CLI symlink.
+6. Verification inside `/Users/joshua/Developer/auto-speech-worktree`:
+   - Run: `.venv/bin/python -m unittest tests/test_cli_dispatcher.py`
+   - Run: `bash tests/test_install_plugin.sh`
+   - Run: `bash tests/run_all.sh` (ALL 50+ suites must pass!)
+   - Run: `.venv/bin/ruff check plugin/scripts/python/cli.py tests/test_cli_dispatcher.py` (0 errors)
+   - Test CLI directly: `bin/auto-speech --help` and `~/.local/bin/auto-speech --help` (exit 0).
+
+Output:
+Write full handoff report documenting all changes, files created, and test execution results to:
+/Users/joshua/Developer/auto-speech/.agents/teamwork/worker_m1/handoff.md
+Send a completion message when finished.

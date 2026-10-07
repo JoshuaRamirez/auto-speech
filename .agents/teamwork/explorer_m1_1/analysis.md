@@ -1,583 +1,679 @@
-# Architectural Investigation & Design: NativeAudioSink
+# Concrete Implementation Strategy: Unified Core CLI Dispatcher (`cli.py`) for Milestone M1
 
-**Author**: `explorer_m1_1` (NativeAudioSink Specialist)  
-**Date**: 2026-10-03  
-**Target Module**: `plugin/scripts/python/native_audio_sink.py`  
-**Test Suite**: `tests/test_native_audio_sink.py`  
-**Milestone**: M1 (In-Process TTSEngine & NativeAudioSink)
-
----
-
-## 1. Executive Summary
-
-This document presents the detailed architectural design, technical specification, and verification strategy for `NativeAudioSink`.
-
-The `auto-speech` system is transitioning to a **Unified Daemon Server** architecture (PROJECT.md). Under this model, the daemon acts as the single authoritative hardware owner for audio output. `NativeAudioSink` replaces legacy detached background playback sessions, `/tmp` session metadata files, IPC polling, brittle `time.sleep(duration)` calculations, and indiscriminate system-wide `pkill -9 mpv` hacks with a clean, synchronous, thread-safe audio sink.
-
-Key conclusions:
-1. **Synchronous Popen Lifecycle**: `NativeAudioSink` uses `subprocess.Popen` combined with `proc.communicate()` to provide blocking, synchronous playback while maintaining an active process handle for immediate interruption.
-2. **Targeted Interrupt Mechanism**: `interrupt()` terminates only the specific `mpv` process spawned by the sink using `SIGTERM` with bounded escalation to `SIGKILL` (0.5s grace period). It completely eliminates `pkill -9 mpv`.
-3. **Deadlock-Free Dual-Lock Architecture**: A `_playback_lock` serializes sequential playback requests (guaranteeing FIFO playback and preventing overlapping audio), while a micro-duration `_state_lock` guards the process handle. `interrupt()` never contends for `_playback_lock`, guaranteeing immediate unblocking.
-4. **Clean Error Contract**: Interrupted playback returns cleanly (`None`) to prevent polluting daemon error logs on routine user events (`UserPromptSubmit`). Missing binaries raise `MpvNotInstalledError`, missing files raise `FileNotFoundError`, and abnormal non-zero exits raise `PlaybackError`.
+**Author:** `explorer_m1_1` (Teamwork Explorer)  
+**Timestamp:** 2026-10-06T21:12:00Z  
+**Target:** Milestone M1 — Core Python CLI Dispatcher (`plugin/scripts/python/cli.py`) & Bash Trampoline (`bin/auto-speech`)  
+**Workspace:** Isolated Git Worktree `/Users/joshua/Developer/auto-speech-worktree` (`worktree/cli-mcp-parity`)  
 
 ---
 
-## 2. Analysis of Existing Code & Pathologies
+## 1. Executive Summary & Objective
 
-### 2.1 The Legacy Detached Architecture (`mpv_controller.py`)
-In the legacy codebase, playback was managed by `MpvController`:
-- Spawned `mpv` detached with `start_new_session=True` and `--input-ipc-server=<socket_path>`.
-- Wrote process metadata (`pid`, `wav_path`, `started_at`) into `/tmp/auto-speech/`.
-- Synchronized multiple callers using filesystem file locks (`/tmp/auto-speech-mpv-start.lock` via `fcntl.flock`).
-- Polled Unix domain sockets every 50ms for readiness (`MpvIpc.send(["get_property", "pid"])`).
-- Had complex cap expiration logic (`_PRIOR_PLAYBACK_WAIT_SECONDS = 15.0`) to avoid wedging on stalled playback.
+The objective of Milestone M1 is to establish the unified command-line entrypoint `auto-speech` for the entire `auto-speech` subsystem. Currently, user and hook operations are fragmented across standalone scripts (`speak.py`, `replay.py`, `control.py`, `doctor.py`, `self_update.py`, shell scripts, and 21 slash commands).
 
-**Pathology**: High complexity, filesystem socket churn, race conditions between independent processes, and frequent orphan processes if a caller died before cleanup.
+Milestone M1 unifies these operations under a two-tier dispatch architecture:
+1. **Executable Trampoline (`bin/auto-speech`)**: A robust bash trampoline that resolves symlinks, locates the virtual environment python interpreter (`.venv/bin/python`), and delegates to the core Python dispatcher.
+2. **Core Python Dispatcher (`plugin/scripts/python/cli.py`)**: A pure-Python CLI router using `argparse` implementing top-level options (`--help`, `--version`) and **12 authoritative subcommands** (`speak`, `replay`, `pause`, `resume`, `stop`, `restart`, `seek`, `autoplay`, `narrate`, `hook`, `doctor`, `update`).
 
-### 2.2 Brittle Playback in `narrator_service.py`
-In `narrator_service.py`:
-- **Duration guessing & sleep hacks** (lines 541–560):
-  ```python
-  with wave.open(wav_path, "r") as f:
-      duration = f.getnframes() / float(f.getframerate())
-  time.sleep(duration + 0.5)  # slight buffer
-  pid = SessionDir.read_pid()
-  if pid:
-      os.kill(pid, signal.SIGKILL)
-  ```
-  This calculated audio duration from WAV headers, slept for that duration plus an arbitrary 0.5-second buffer, and then forcibly sent `SIGKILL` to `mpv`!
-- **System-wide `pkill -9 mpv` on User Prompt** (lines 318, 334):
-  ```python
-  if event_type == "UserPromptSubmit":
-      subprocess.run(["pkill", "-9", "mpv"], capture_output=True)
-  ```
-  Whenever the user submitted a prompt, the daemon ran `pkill -9 mpv`. If the user had any personal instance of `mpv` open (watching a tutorial, listening to music), it was abruptly terminated! Furthermore, sending `SIGKILL` (-9) bypassed mpv's audio driver cleanup, causing audio interface pops and driver instability.
+This document provides the complete, concrete implementation blueprint for `cli.py`, detailing the argument parser hierarchy, input resolution, collaborator integration, exact exit codes, error diagnostics, and testing strategy.
 
 ---
 
-## 3. NativeAudioSink Architecture & Technical Design
+## 2. Argument Parsing Architecture (`argparse`)
 
-### 3.1 Subprocess Management: Why `subprocess.Popen` over `subprocess.run`
-The project requirement specifies synchronous playback via:
-`mpv --really-quiet --no-video --keep-open=no --idle=no <wav_path>`
-
-While `subprocess.run(...)` is synchronous, its `Popen` instance is strictly local to the function frame. If a worker thread blocks inside `subprocess.run()`, another thread (e.g. event listener on `UserPromptSubmit`) cannot access the underlying `process` object to send `SIGTERM`.
-
-`NativeAudioSink` therefore uses `subprocess.Popen` internally:
-- `play(wav_path)` creates the `subprocess.Popen` instance and assigns it to `self._proc`.
-- It executes `proc.communicate(timeout=timeout)`.
-- `proc.communicate()` blocks synchronously until playback finishes, while streaming and buffering `stderr` safely to prevent pipe deadlocks.
-- When `interrupt()` is called from another thread, it immediately signals `self._proc`, unblocking `communicate()` within milliseconds.
-
-### 3.2 mpv Command-Line Arguments Rationale
-`["mpv", "--really-quiet", "--no-video", "--keep-open=no", "--idle=no", str(wav_path)]`
-
-| Flag | Purpose & Rationale |
-|---|---|
-| `--really-quiet` | Suppresses all terminal/console output, status lines, and progress bars. Prevents terminal pollution in daemon logs. |
-| `--no-video` | Disables video rendering subsystems. Guarantees no Cocoa/OpenGL window or macOS Dock icon flashes on screen, even if the audio file contains album art. |
-| `--keep-open=no` | Forces mpv to exit immediately when playback reaches EOF, overriding any user `mpv.conf` setting (`keep-open=yes`) that would pause at the end. |
-| `--idle=no` | Prevents mpv from idling when no file is playing or playback finishes. |
-| `str(wav_path)` | Path to the target audio file, normalized via `.resolve()`. |
-
-### 3.3 Concurrency & Lock Hierarchy
-`NativeAudioSink` employs a **Dual-Lock Architecture**:
-
-```
-Thread A: play()                           Thread B: interrupt()
-────────────────                           ─────────────────────
-acquire(_playback_lock)
-  │
-  acquire(_state_lock)
-    _proc = Popen(...)
-  release(_state_lock)
-  │
-  proc.communicate()  ◄───────────────────── acquire(_state_lock)
-  (blocks on audio)                           proc = _proc
-                                              _interrupted = True
-                                            release(_state_lock)
-                                            proc.terminate()
-                                            proc.wait(timeout=0.5)
-  (unblocks immediately: rc=-15)
-  │
-  acquire(_state_lock)
-    _proc = None
-  release(_state_lock)
-  │
-release(_playback_lock)
-```
-
-1. **`_playback_lock` (Sequential Playback Guard)**:
-   - Acquired during the full duration of `play()`.
-   - Serializes concurrent callers so audio files are played sequentially (FIFO) without overlapping.
-   - Prevents race conditions where multiple threads spawn simultaneous processes and overwrite `_proc`.
-2. **`_state_lock` (Atomic Process State Guard)**:
-   - Acquired only for microseconds during process pointer assignment, pointer clearance, and `interrupt()` signaling.
-   - `interrupt()` **NEVER** attempts to acquire `_playback_lock`.
-   - Because `_playback_lock` is never acquired while holding `_state_lock`, deadlock is mathematically impossible.
-
-### 3.4 Clean Interrupt Protocol
-The `interrupt()` implementation:
-1. Atomically checks if `self._proc` is active (`_proc is not None and _proc.poll() is None`).
-2. Marks `self._interrupted = True`.
-3. Calls `proc.terminate()` (`SIGTERM`), allowing mpv to close macOS CoreAudio hardware cleanly.
-4. Waits up to `_TERMINATE_TIMEOUT` (0.5s) for the process to exit.
-5. If the process does not exit within 0.5s (e.g. hung audio hardware), escalates to `proc.kill()` (`SIGKILL`) with a secondary 0.5s grace period.
-6. Catches `ProcessLookupError` safely if the process already terminated.
-7. Ensures child processes are reaped to prevent zombie processes.
-8. Benchmarked interrupt latency on macOS: **< 60 milliseconds**.
-
-### 3.5 Error Handling Contract
-The error contract is strictly categorized:
-- **`FileNotFoundError`**: Raised immediately if `wav_path` does not exist or is not a file, before spawning any subprocess.
-- **`MpvNotInstalledError(AudioSinkError, RuntimeError)`**: Raised if `mpv` is not found on `PATH`. Provides the remediation command (`brew install mpv`).
-- **Interruption Handling**: If the process exited due to `interrupt()` or received `SIGTERM`/`SIGKILL` (`retcode in (-signal.SIGTERM, -signal.SIGKILL, 143, 137)` or `_interrupted is True`), `play()` logs an info message and returns `None`. **No exception is raised.** This is critical: `UserPromptSubmit` is normal user behavior, not an error.
-- **`PlaybackError(AudioSinkError, RuntimeError)`**: Raised if `mpv` exits with a non-zero exit code (e.g. 2 for corrupt audio format or missing audio device) when not interrupted. Stderr is captured and included in the exception message for diagnostics.
-- **Unhandled Exceptions / Timeout**: If `communicate()` times out or encounters an unexpected exception, `self.interrupt()` is automatically invoked in a `finally`/`except` block to ensure no orphaned processes are left running.
-
----
-
-## 4. Proposed Specification for `native_audio_sink.py`
-
-Below is the complete proposed implementation for `plugin/scripts/python/native_audio_sink.py`:
+### 2.1 Top-Level Parser Configuration
 
 ```python
-"""NativeAudioSink: Synchronous, blocking audio sink using mpv with clean interrupt handling."""
-from __future__ import annotations
-
-import logging
-import os
-import shutil
-import signal
-import subprocess
-import threading
-from pathlib import Path
-
-logger = logging.getLogger(__name__)
-
-
-class AudioSinkError(RuntimeError):
-    """Base exception for all NativeAudioSink errors."""
-
-
-class MpvNotInstalledError(AudioSinkError):
-    """Raised when the mpv binary is not found on PATH."""
-
-
-class PlaybackError(AudioSinkError):
-    """Raised when mpv exits with a non-zero exit code during playback."""
-
-
-class NativeAudioSink:
-    """Synchronous audio sink playing WAV files via mpv with interrupt support.
-
-    Playback is blocking and sequential. An active playback can be interrupted
-    immediately from another thread via interrupt().
-    """
-
-    _TERMINATE_TIMEOUT = 0.5  # Seconds to wait for SIGTERM before escalating to SIGKILL
-    _KILL_TIMEOUT = 0.5       # Seconds to wait after SIGKILL
-
-    def __init__(self, mpv_path: str | Path | None = None) -> None:
-        """Initialize NativeAudioSink.
-
-        Args:
-            mpv_path: Optional custom path to mpv binary. If None, resolved via PATH.
-        """
-        self._custom_mpv_path = str(mpv_path) if mpv_path is not None else None
-        self._playback_lock = threading.Lock()
-        self._state_lock = threading.Lock()
-        self._proc: subprocess.Popen | None = None
-        self._interrupted: bool = False
-
-    def _resolve_mpv(self) -> str:
-        """Resolve mpv binary path, raising MpvNotInstalledError if not found."""
-        if self._custom_mpv_path:
-            return self._custom_mpv_path
-        binary = shutil.which("mpv")
-        if not binary:
-            raise MpvNotInstalledError(
-                "mpv not found on PATH. Install with: brew install mpv"
-            )
-        return binary
-
-    def play(self, wav_path: Path | str, timeout: float | None = None) -> None:
-        """Plays wav file synchronously via mpv, blocking until playback finishes.
-
-        Args:
-            wav_path: Path to the WAV file to play.
-            timeout: Optional maximum duration in seconds for playback.
-
-        Raises:
-            FileNotFoundError: If the WAV file does not exist.
-            MpvNotInstalledError: If mpv is not installed.
-            PlaybackError: If mpv terminates with a non-zero exit code and was not interrupted.
-        """
-        path = Path(wav_path).resolve()
-        if not path.is_file():
-            raise FileNotFoundError(f"Audio file not found: {path}")
-
-        mpv_bin = self._resolve_mpv()
-
-        # Serializes playback across threads: only one file plays at a time.
-        with self._playback_lock:
-            with self._state_lock:
-                self._interrupted = False
-                proc = subprocess.Popen(
-                    [
-                        mpv_bin,
-                        "--really-quiet",
-                        "--no-video",
-                        "--keep-open=no",
-                        "--idle=no",
-                        str(path),
-                    ],
-                    stdout=subprocess.DEVNULL,
-                    stderr=subprocess.PIPE,
-                )
-                self._proc = proc
-
-            try:
-                stdout, stderr = proc.communicate(timeout=timeout)
-                retcode = proc.returncode
-            except subprocess.TimeoutExpired:
-                self.interrupt()
-                raise PlaybackError(f"Playback timed out after {timeout}s: {path}")
-            except Exception:
-                self.interrupt()
-                raise
-            finally:
-                with self._state_lock:
-                    interrupted = self._interrupted
-                    if self._proc is proc:
-                        self._proc = None
-
-            # If interrupted, return cleanly without error.
-            if interrupted or retcode in (-signal.SIGTERM, -signal.SIGKILL, 143, 137):
-                logger.info("Playback interrupted for %s", path)
-                return
-
-            if retcode != 0:
-                err_msg = stderr.decode("utf-8", errors="replace").strip() if stderr else ""
-                raise PlaybackError(
-                    f"mpv exited with code {retcode} for {path}: {err_msg}"
-                )
-
-    def interrupt(self) -> None:
-        """Terminates any currently active mpv playback process immediately.
-
-        Safe to call from any thread and idempotent if no playback is active.
-        """
-        with self._state_lock:
-            proc = self._proc
-            if proc is None or proc.poll() is not None:
-                return
-            self._interrupted = True
-
-        # Signal process outside state lock so other inspections don't block
-        try:
-            proc.terminate()
-            try:
-                proc.wait(timeout=self._TERMINATE_TIMEOUT)
-            except subprocess.TimeoutExpired:
-                proc.kill()
-                try:
-                    proc.wait(timeout=self._KILL_TIMEOUT)
-                except (subprocess.TimeoutExpired, ProcessLookupError):
-                    pass
-        except ProcessLookupError:
-            pass
-
-    @property
-    def is_playing(self) -> bool:
-        """Returns True if playback is currently active."""
-        with self._state_lock:
-            return self._proc is not None and self._proc.poll() is None
-
-    @property
-    def was_interrupted(self) -> bool:
-        """Returns True if the most recent playback was interrupted."""
-        with self._state_lock:
-            return self._interrupted
-```
-
----
-
-## 5. Integration into `narrator_service.py` (M1 Blueprint)
-
-In Milestone M1, `NativeAudioSink` integrates into `narrator_service.py` as follows:
-
-1. **Initialization**:
-   ```python
-   from native_audio_sink import NativeAudioSink
-
-   class NarratorDaemon:
-       def __init__(self, ...):
-           ...
-           self._audio_sink = NativeAudioSink()
-   ```
-
-2. **Clean Interrupt on `UserPromptSubmit`**:
-   In `_process_chunk()`:
-   ```python
-   if event_type == "UserPromptSubmit":
-       if self._is_cron_tick(...):
-           continue
-
-       # Interrupt active playback cleanly without killing system-wide mpv
-       self._audio_sink.interrupt()
-
-       # Clear any pending items from the queue
-       while not self._tts_queue.empty():
-           try:
-               self._tts_queue.get_nowait()
-               self._tts_queue.task_done()
-           except queue.Empty:
-               break
-       ...
-   ```
-
-3. **Replacing `_speak()`**:
-   The entire legacy `_speak()` function (lines 501–561) with `SessionDir`, `_wait_mpv_idle`, `wave.open`, `time.sleep`, and `os.kill` is replaced with:
-   ```python
-   def _speak(self, line: str) -> None:
-       """Synthesize line in-process and play synchronously via NativeAudioSink."""
-       _log(f"speak: {line}")
-       out_wav = self._synthesize_to_wav(line)  # via in-process ResilientSynthesizer
-       if out_wav and out_wav.is_file():
-           self._audio_sink.play(out_wav)
-   ```
-
-4. **Shutdown Cleanup**:
-   In `stop()` or on daemon exit:
-   ```python
-   self._audio_sink.interrupt()
-   ```
-
----
-
-## 6. Unit Testing Strategy (`tests/test_native_audio_sink.py`)
-
-The test suite must cover both mocked subprocess execution (for fast, deterministic CI verification of all states and edge cases) and real macOS subprocess execution (smoke testing with real mpv).
-
-### 6.1 Test Matrix
-
-| Test Case | Type | Condition | Expected Behavior |
-|---|---|---|---|
-| `test_missing_file_raises_filenotfound` | Unit | Path does not exist | `FileNotFoundError` before spawning process |
-| `test_missing_mpv_raises_mpvnotinstalled` | Unit | `shutil.which` returns None | `MpvNotInstalledError` with installation message |
-| `test_play_successful_invokes_mpv` | Mock | Mock Popen returns code 0 | Exact arguments verified; `proc.communicate()` called |
-| `test_play_non_zero_exit_raises_playback_error` | Mock | Mock Popen returns code 2 | `PlaybackError` raised containing exit code & stderr |
-| `test_interrupt_active_playback` | Mock | Thread calls `interrupt()` during `communicate()` | `proc.terminate()` called; `was_interrupted` True; returns cleanly |
-| `test_interrupt_escalates_to_sigkill` | Mock | `proc.wait` raises `TimeoutExpired` | `proc.kill()` called; reaped |
-| `test_interrupt_when_idle_is_noop` | Unit | `proc` is None | Safe no-op, no exceptions |
-| `test_is_playing_transitions` | Mock | Poll returns None then 0 | `is_playing` transitions True -> False |
-| `test_custom_mpv_path_override` | Mock | `NativeAudioSink(mpv_path="/bin/custom_mpv")` | Uses custom binary path |
-| `test_concurrent_playback_serialized` | Threading | 2 threads call `play()` | `_playback_lock` serializes sequential execution |
-| `test_real_playback_smoke` | Integration | Real 0.2s silent WAV + real `mpv` | Plays to completion in ~0.2s with code 0 |
-| `test_real_interrupt_smoke` | Integration | Real 2.0s silent WAV + interrupt at 50ms | Exits cleanly in < 150ms with return code -15 |
-
-### 6.2 Proposed Test Suite Code
-
-```python
-"""Unit tests for NativeAudioSink."""
-from __future__ import annotations
-
-import shutil
-import signal
-import subprocess
-import tempfile
-import threading
-import time
-import wave
-from pathlib import Path
-from unittest import mock
-
-import pytest
-
-from native_audio_sink import (
-    AudioSinkError,
-    MpvNotInstalledError,
-    NativeAudioSink,
-    PlaybackError,
+parser = argparse.ArgumentParser(
+    prog="auto-speech",
+    description="Unified CLI dispatcher for auto-speech: speech synthesis, playback transport, session management, and diagnostics.",
+    formatter_class=argparse.RawDescriptionHelpFormatter,
 )
+parser.add_argument(
+    "--version",
+    action="version",
+    version="auto-speech 0.2.0",
+)
+subparsers = parser.add_subparsers(
+    dest="subcommand",
+    metavar="<subcommand>",
+    help="Subcommand to execute. Run 'auto-speech <subcommand> --help' for details.",
+)
+```
 
+**Top-Level Invocation Semantics**:
+- `auto-speech --help` or `auto-speech -h`: Exits `0`, prints formatted help listing all 12 subcommands.
+- `auto-speech --version`: Exits `0`, prints version string.
+- `auto-speech` (no arguments): Prints help to `sys.stderr` and exits `2` (`EXIT_INVALID_INPUT`).
+- `auto-speech <unknown_subcommand>`: `argparse` prints error to `sys.stderr` and exits `2`.
 
-def _make_silent_wav(duration_s: float = 0.1, framerate: int = 24000) -> Path:
-    tmp = tempfile.NamedTemporaryFile(suffix=".wav", delete=False)
-    wav_path = Path(tmp.name)
-    n_frames = int(framerate * duration_s)
-    with wave.open(str(wav_path), "wb") as w:
-        w.setnchannels(1)
-        w.setsampwidth(2)
-        w.setframerate(framerate)
-        w.writeframes(b"\x00" * (n_frames * 2))
-    return wav_path
+---
 
+### 2.2 The 12 Subcommands Specification
 
-def test_missing_wav_file_raises_filenotfound() -> None:
-    sink = NativeAudioSink()
-    non_existent = Path("/tmp/does_not_exist_auto_speech_123.wav")
-    with pytest.raises(FileNotFoundError, match="Audio file not found"):
-        sink.play(non_existent)
-
-
-def test_missing_mpv_raises_mpv_not_installed(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr(shutil, "which", lambda cmd: None)
-    wav_path = _make_silent_wav(0.05)
-    try:
-        sink = NativeAudioSink()
-        with pytest.raises(MpvNotInstalledError, match="mpv not found on PATH"):
-            sink.play(wav_path)
-    finally:
-        wav_path.unlink()
-
-
-def test_play_successful_invokes_mpv(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr(shutil, "which", lambda cmd: "/opt/homebrew/bin/mpv")
-    wav_path = _make_silent_wav(0.05)
-    mock_proc = mock.MagicMock()
-    mock_proc.communicate.return_value = (b"", b"")
-    mock_proc.returncode = 0
-    mock_proc.poll.return_value = None
-
-    with mock.patch("subprocess.Popen", return_value=mock_proc) as mock_popen:
-        try:
-            sink = NativeAudioSink()
-            sink.play(wav_path)
-
-            mock_popen.assert_called_once_with(
-                [
-                    "/opt/homebrew/bin/mpv",
-                    "--really-quiet",
-                    "--no-video",
-                    "--keep-open=no",
-                    "--idle=no",
-                    str(wav_path.resolve()),
-                ],
-                stdout=subprocess.DEVNULL,
-                stderr=subprocess.PIPE,
-            )
-            mock_proc.communicate.assert_called_once()
-            assert not sink.was_interrupted
-        finally:
-            wav_path.unlink()
-
-
-def test_play_non_zero_exit_raises_playback_error(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr(shutil, "which", lambda cmd: "/usr/bin/mpv")
-    wav_path = _make_silent_wav(0.05)
-    mock_proc = mock.MagicMock()
-    mock_proc.communicate.return_value = (b"", b"Audio device error")
-    mock_proc.returncode = 2
-    mock_proc.poll.return_value = None
-
-    with mock.patch("subprocess.Popen", return_value=mock_proc):
-        try:
-            sink = NativeAudioSink()
-            with pytest.raises(PlaybackError, match="mpv exited with code 2"):
-                sink.play(wav_path)
-        finally:
-            wav_path.unlink()
-
-
-def test_interrupt_active_playback(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr(shutil, "which", lambda cmd: "/usr/bin/mpv")
-    wav_path = _make_silent_wav(0.05)
-    mock_proc = mock.MagicMock()
-    mock_proc.returncode = -signal.SIGTERM
-    mock_proc.poll.return_value = None
-
-    def fake_communicate(*args, **kwargs):
-        mock_proc.poll.return_value = -15
-        return (b"", b"")
-
-    mock_proc.communicate.side_effect = fake_communicate
-
-    with mock.patch("subprocess.Popen", return_value=mock_proc):
-        try:
-            sink = NativeAudioSink()
-
-            def do_interrupt():
-                time.sleep(0.01)
-                sink.interrupt()
-
-            t = threading.Thread(target=do_interrupt)
-            t.start()
-            sink.play(wav_path)
-            t.join()
-
-            assert sink.was_interrupted
-            mock_proc.terminate.assert_called_once()
-        finally:
-            wav_path.unlink()
-
-
-def test_interrupt_escalates_to_kill(monkeypatch: pytest.MonkeyPatch) -> None:
-    mock_proc = mock.MagicMock()
-    mock_proc.poll.return_value = None
-    mock_proc.wait.side_effect = [subprocess.TimeoutExpired(cmd="mpv", timeout=0.5), None]
-
-    sink = NativeAudioSink()
-    sink._proc = mock_proc
-
-    sink.interrupt()
-
-    mock_proc.terminate.assert_called_once()
-    mock_proc.kill.assert_called_once()
-
-
-def test_interrupt_when_idle_is_noop() -> None:
-    sink = NativeAudioSink()
-    sink.interrupt()  # Must not raise
-    assert not sink.is_playing
-
-
-@pytest.mark.skipif(not shutil.which("mpv"), reason="mpv binary required for integration smoke test")
-def test_real_playback_smoke() -> None:
-    sink = NativeAudioSink()
-    wav_path = _make_silent_wav(0.1)
-    try:
-        t0 = time.time()
-        sink.play(wav_path)
-        elapsed = time.time() - t0
-        assert elapsed >= 0.05
-        assert not sink.was_interrupted
-    finally:
-        wav_path.unlink()
-
-
-@pytest.mark.skipif(not shutil.which("mpv"), reason="mpv binary required for integration smoke test")
-def test_real_interrupt_smoke() -> None:
-    sink = NativeAudioSink()
-    wav_path = _make_silent_wav(2.0)
-    try:
-        def interrupter():
-            time.sleep(0.05)
-            sink.interrupt()
-
-        t = threading.Thread(target=interrupter)
-        t0 = time.time()
-        t.start()
-        sink.play(wav_path)
-        t.join()
-        elapsed = time.time() - t0
-
-        assert sink.was_interrupted
-        assert elapsed < 0.6, f"Interrupt was too slow: {elapsed:.2f}s"
-    finally:
-        wav_path.unlink()
+```
+auto-speech
+├── speak       [words ...] [--source-hash H] [--session-id ID] [--priority P] [--voice V] [--speed S] [--socket-path PATH] [--ordinal N]
+├── replay      [--ordinal N] [--keep-artifacts]
+├── pause
+├── resume
+├── restart
+├── stop
+├── seek        TARGET
+├── autoplay    {on, off, status, mode, scope}
+│   ├── on      [--session-id ID]
+│   ├── off     [--session-id ID]
+│   ├── status  [--session-id ID]
+│   ├── mode    [MODE]
+│   └── scope   [SCOPE] [--session-id ID]
+├── narrate     {on, off, status, stop, config}
+│   ├── on      [--session-id ID]
+│   ├── off     [--session-id ID]
+│   ├── status  [--session-id ID]
+│   ├── stop
+│   └── config  [ACTION]
+├── hook        {stop, narrator, bootstrap}
+│   ├── stop
+│   ├── narrator
+│   └── bootstrap [--force]
+├── doctor      [--json]
+└── update      [--force]
 ```
 
 ---
 
-## 7. Verification & Implementation Recommendations
+### 2.3 Subcommand Specifications & Handlers
 
-1. **Implementer Instructions**:
-   - Create `plugin/scripts/python/native_audio_sink.py` using the exact code from Section 4.
-   - Create `tests/test_native_audio_sink.py` using the code from Section 6.2.
-   - Run `pytest tests/test_native_audio_sink.py -v`.
-2. **Dependent Milestone Tasks**:
-   - `narrator_service.py` builder should import `NativeAudioSink` from `native_audio_sink.py`.
-   - In `narrator_service.py`, eliminate lines 318 and 334 (`subprocess.run(["pkill", "-9", "mpv"])`) and replace with `self._audio_sink.interrupt()`.
-   - Eliminate lines 541–560 (`SessionDir`, `time.sleep`, `SIGKILL`) in `_speak()`, directing output to `self._audio_sink.play(out_wav)`.
+#### 1. `speak`
+*Synthesize words or piped text into audio speech, or play pre-cached audio by hash.*
+
+- **Parser Configuration**:
+  ```python
+  p_speak = subparsers.add_parser("speak", help="Synthesize and play speech.")
+  p_speak.add_argument("words", nargs="*", default=[], help="Words to speak.")
+  p_speak.add_argument("--source-hash", type=str, default=None, help="64-hex SHA-256 hash for cache lookup/promotion.")
+  p_speak.add_argument("--session-id", type=str, default=None, help="Session ID for tracking speech events.")
+  p_speak.add_argument("--priority", type=int, default=2, help="Priority (1=USER_INTERRUPT, 2=EXPLICIT_MCP, 3=AUTOPLAY, 4=TOOL_NARRATION; default 2).")
+  p_speak.add_argument("--voice", type=str, default="system", help="Voice identifier (default: system).")
+  p_speak.add_argument("--speed", type=float, default=1.0, help="Speech speed multiplier (default: 1.0).")
+  p_speak.add_argument("--socket-path", type=str, default=None, help="Override path to auto-speech daemon UNIX socket.")
+  p_speak.add_argument("--ordinal", type=int, default=1, help="1-indexed ordinal position (compatibility flag).")
+  p_speak.add_argument("--keep-artifacts", action="store_true", help="Preserve temporary audio files (compatibility flag).")
+  ```
+
+- **Execution Flow**:
+  1. **Global Mute Check**: Instantiate `AutoplayGate()`. If `gate.worker_gated_off()` is `True` (`~/.claude/auto-speech.disabled` exists):
+     - Print notice to `sys.stderr`: `auto-speech: globally muted (~/.claude/auto-speech.disabled present); speech suppressed.`
+     - Return `0` (`EXIT_OK`).
+  2. **Hash Validation**: If `--source-hash` is provided:
+     - Normalize: `sh = args.source_hash.strip().lower()`.
+     - If `len(sh) != 64` or contains non-hex characters:
+       - Print error to `sys.stderr`: `auto-speech speak: --source-hash must be 64 hex chars, got {args.source_hash!r}`.
+       - Return `2` (`EXIT_INVALID_INPUT`).
+  3. **Input Resolution (Positional vs. Stdin)**:
+     - If `args.words` is non-empty: `text = " ".join(args.words)`.
+     - Else:
+       - If `not getattr(sys.stdin, "isatty", lambda: False)()` (piped or redirected stdin):
+         `text = sys.stdin.read()`.
+       - Else (interactive TTY):
+         - If `args.source_hash`: `text = ""` (cached playback mode).
+         - Else:
+           - Print error to `sys.stderr`: `auto-speech speak: no text provided on command line or stdin`.
+           - Return `2` (`EXIT_INVALID_INPUT`).
+  4. **Cached Audio Playback Branch** (`not text.strip()` and `args.source_hash`):
+     - Attempt `DaemonClient(socket_path=args.socket_path).play_cache(sh, priority=Priority(args.priority), session_id=args.session_id)`.
+     - If daemon returns `status in ("ok", "queued")`: return `0`.
+     - If daemon offline or call fails: check local cache store `config/cache/<hash_prefix>/full.wav`.
+       - If file exists: play via `NativeAudioSink().play(wav_path)`. Return `0`.
+       - If playback fails: print error to `sys.stderr`, return `1`.
+  5. **Speech Synthesis Branch** (`text.strip()` non-empty):
+     - Call `client = DaemonClient(socket_path=args.socket_path)`.
+     - Call `client.ensure_daemon_running()`.
+     - Call `resp = client.speak(text, priority=Priority(args.priority), source_hash=args.source_hash, session_id=args.session_id, voice_id=args.voice, speed=args.speed)`.
+     - If `resp.status in ("ok", "queued")`: return `0`.
+     - If `ConnectionError` or failure:
+       - Fallback to legacy `send_speech_request` or direct synthesis.
+       - If unrecoverable: print `auto-speech speak: speech request failed: {exc}` to `sys.stderr`, return `1`.
+     - Catch `KeyboardInterrupt`: return `130`.
+
+---
+
+#### 2. `replay`
+*Replay cached audio from recent speech synthesis runs by recency ordinal.*
+
+- **Parser Configuration**:
+  ```python
+  p_replay = subparsers.add_parser("replay", help="Replay recent cached speech.")
+  p_replay.add_argument("--ordinal", type=int, default=1, help="1-indexed recency ordinal (1 = newest, default: 1).")
+  p_replay.add_argument("--keep-artifacts", action="store_true", help="Preserve artifacts (compatibility flag).")
+  ```
+
+- **Execution Flow**:
+  1. **Ordinal Range Check**: If `args.ordinal < 1`:
+     - Print error to `sys.stderr`: `auto-speech replay: --ordinal must be >= 1, got {args.ordinal}`.
+     - Return `2` (`EXIT_INVALID_INPUT`).
+  2. **Query CacheStore**: Initialize `store = CacheStore(cache_root)`. Fetch `entries = store.list_by_recency()`.
+     - If `not entries`:
+       - Print error to `sys.stderr`: `auto-speech replay: no cache entries found. Run speak at least once first.`.
+       - Return `2` (`EXIT_NO_CACHE_ENTRY`).
+     - If `args.ordinal > len(entries)`:
+       - Print error to `sys.stderr`: `auto-speech replay: only {len(entries)} cache entries; you asked for #{args.ordinal}`.
+       - Return `2` (`EXIT_NO_CACHE_ENTRY`).
+  3. **Locate Target**: `wav_path, entry = entries[args.ordinal - 1]`.
+     - Print metadata to `sys.stderr`: `[replay] ordinal={args.ordinal} voice={entry.voice_id} dur={entry.duration_seconds:.1f}s created={entry.created_at} path={wav_path}`.
+  4. **Global Mute Check**: If `AutoplayGate().worker_gated_off()`:
+     - Print notice to `sys.stderr`: `auto-speech: globally muted (~/.claude/auto-speech.disabled present); replay suppressed.`.
+     - Return `0` (`EXIT_OK`).
+  5. **Playback Execution**:
+     - If daemon socket `/tmp/auto-speech-daemon.sock` is active:
+       - Route via `DaemonClient.play_cache(entry.source_hash)`.
+       - If `status in ("ok", "queued")`: return `0`.
+     - Fallback to synchronous playback via `NativeAudioSink().play(wav_path)`:
+       - Catch `AudioSinkError` / `PlaybackError`: print error to `sys.stderr`, return `6` (`EXIT_PLAYBACK_FAIL`).
+       - Catch `KeyboardInterrupt`: call `sink.interrupt()`, return `130` (`EXIT_INTERRUPTED`).
+     - Return `0` (`EXIT_OK`).
+
+---
+
+#### 3. `pause`, 4. `resume`, 5. `restart`
+*Transport controls communicating with mpv over `/tmp/auto-speech-mpv.sock`.*
+
+- **Parser Configuration**:
+  ```python
+  subparsers.add_parser("pause", help="Pause active mpv audio playback.")
+  subparsers.add_parser("resume", help="Resume paused mpv audio playback.")
+  subparsers.add_parser("restart", help="Restart active mpv audio playback from start.")
+  ```
+
+- **Shared IPC Helper**:
+  ```python
+  MPV_SOCK_PATH = Path("/tmp/auto-speech-mpv.sock")
+
+  def _send_mpv_command(cmd: list) -> tuple[int, str]:
+      if not MPV_SOCK_PATH.is_socket():
+          return 2, "control: no active playback session (unified daemon uses synchronous audio)."
+      try:
+          reply = MpvIpc.send(cmd, MPV_SOCK_PATH)
+      except MpvIpcError as exc:
+          return 3, f"control: IPC failure: {exc}"
+      if reply.get("error") != "success":
+          return 3, f"control: mpv command returned error: {reply.get('error')}"
+      return 0, ""
+  ```
+
+- **Execution Flows**:
+  - `pause`: Call `_send_mpv_command(["set_property", "pause", True])`.
+    - If `code != 0`: print error to `sys.stderr`, return `code`.
+    - Else: print `paused` to `sys.stdout`, return `0`.
+  - `resume`: Call `_send_mpv_command(["set_property", "pause", False])`.
+    - If `code != 0`: print error to `sys.stderr`, return `code`.
+    - Else: print `resumed` to `sys.stdout`, return `0`.
+  - `restart`: Call `_send_mpv_command(["seek", 0, "absolute"])`.
+    - If `code != 0`: print error to `sys.stderr`, return `code`.
+    - Else: print `restarted` to `sys.stdout`, return `0`.
+
+---
+
+#### 6. `stop`
+*Immediately stop active playback and purge pending audio items.*
+
+- **Parser Configuration**:
+  ```python
+  subparsers.add_parser("stop", help="Stop playback immediately and purge pending queue.")
+  ```
+
+- **Execution Flow**:
+  1. Call `DaemonClient().interrupt()`. This tells the daemon's `NativeAudioSink` to terminate active `mpv` and purge in-memory P3/P4 queue items.
+  2. Also inspect `/tmp/auto-speech-mpv.pid`. If file exists and contains a live PID:
+     - Signal `SIGTERM` to the process.
+     - Wait up to 0.3s; escalate to `SIGKILL` if still alive.
+     - Remove PID file.
+  3. Print `stopped` to `sys.stdout`.
+  4. Return `0` (`EXIT_OK`).
+
+---
+
+#### 7. `seek`
+*Seek to a relative or absolute timestamp within the active audio playback.*
+
+- **Parser Configuration**:
+  ```python
+  p_seek = subparsers.add_parser("seek", help="Seek active playback (+N, -N, N, or 'end').")
+  p_seek.add_argument("target", type=str, help="Target offset: '+N', '-N', absolute seconds 'N', or 'end'.")
+  ```
+
+- **Target Parsing & Validation**:
+  - Target must be non-empty.
+  - Parse `target.strip()`:
+    - `"end"`: `cmd = ["seek", 999999, "absolute"]`
+    - Starts with `+`:
+      ```python
+      try:
+          val = float(target[1:])
+          cmd = ["seek", val, "relative"]
+      except ValueError:
+          print(f"control: seek requires a target (+N, -N, N, or 'end')", file=sys.stderr)
+          return 4
+      ```
+    - Starts with `-`:
+      ```python
+      try:
+          val = float(target)
+          cmd = ["seek", val, "relative"]
+      except ValueError:
+          print(f"control: seek requires a target (+N, -N, N, or 'end')", file=sys.stderr)
+          return 4
+      ```
+    - Pure number:
+      ```python
+      try:
+          val = float(target)
+          cmd = ["seek", val, "absolute"]
+      except ValueError:
+          print(f"control: seek requires a target (+N, -N, N, or 'end')", file=sys.stderr)
+          return 4
+      ```
+  - If validation fails: return `4` (`EXIT_BAD_ARG`).
+  - If `/tmp/auto-speech-mpv.sock` is absent:
+    - Print `control: no active playback session (unified daemon uses synchronous audio).` to `sys.stderr`.
+    - Return `2` (`EXIT_NO_SESSION`).
+  - Send command via `MpvIpc.send(cmd, MPV_SOCK_PATH)`:
+    - On IPC error: print error to `sys.stderr`, return `3` (`EXIT_IPC_FAIL`).
+    - On success: print `seek ok` to `sys.stdout`, return `0` (`EXIT_OK`).
+
+---
+
+#### 8. `autoplay`
+*Manage end-of-turn autoplay enrollment markers, solo scopes, and rewrite modes.*
+
+- **Parser Configuration**:
+  ```python
+  p_autoplay = subparsers.add_parser("autoplay", help="Autoplay subsystem controls.")
+  sub_autoplay = p_autoplay.add_subparsers(dest="autoplay_action", metavar="<action>")
+
+  # on
+  p_ap_on = sub_autoplay.add_parser("on", help="Enable autoplay for this session.")
+  p_ap_on.add_argument("--session-id", type=str, default=None, help="Session ID to enroll.")
+
+  # off
+  p_ap_off = sub_autoplay.add_parser("off", help="Disable autoplay for this session (or globally).")
+  p_ap_off.add_argument("--session-id", type=str, default=None, help="Session ID to withdraw.")
+
+  # status
+  p_ap_status = sub_autoplay.add_parser("status", help="Show autoplay enrollment, scope, and log status.")
+  p_ap_status.add_argument("--session-id", type=str, default=None, help="Session ID to inspect.")
+
+  # mode
+  p_ap_mode = sub_autoplay.add_parser("mode", help="Show or set autoplay rewrite mode.")
+  p_ap_mode.add_argument("mode", nargs="?", default=None, help="Mode: raw | verbatim | small | medium | large.")
+
+  # scope
+  p_ap_scope = sub_autoplay.add_parser("scope", help="Show or set autoplay solo scope.")
+  p_ap_scope.add_argument("scope", nargs="?", default=None, help="Scope: all | solo.")
+  p_ap_scope.add_argument("--session-id", type=str, default=None, help="Session ID for solo scope.")
+  ```
+
+- **Action Handlers**:
+  - `autoplay on`:
+    - Resolve session ID: `args.session_id or os.environ.get("CLAUDE_CODE_SESSION_ID") or None`.
+    - Clear global mute `~/.claude/auto-speech.disabled` if present.
+    - If session ID present:
+      - Call `SessionEnrollment().enroll(session_id)`.
+      - Print `autoplay enabled for session {session_id}`.
+    - Else:
+      - Print `global mute cleared, but CLAUDE_CODE_SESSION_ID not set — autoplay is opt-in per session`.
+    - Return `0`.
+  - `autoplay off`:
+    - Resolve session ID.
+    - If session ID present:
+      - Call `SessionEnrollment().withdraw(session_id)`.
+      - Print `autoplay disabled for session {session_id}`.
+    - Else:
+      - Touch `~/.claude/auto-speech.disabled`.
+      - Print `no session id — set global mute marker instead (~/.claude/auto-speech.disabled)`.
+    - Return `0`.
+  - `autoplay status`:
+    - Resolve session ID.
+    - Print multi-line diagnostic report: session ID, enrollment status, enroll dir count, global disable state, solo scope state, mpv pid liveness, and log tail.
+    - Return `0`.
+  - `autoplay mode [MODE]`:
+    - If `mode` argument is omitted:
+      - Load config via `autoplay_config.load_config()`.
+      - Print JSON or structured summary: mode, summary_size, bypass_llm, prompt_path, config_path.
+      - Return `0`.
+    - If `mode` argument provided:
+      - Normalize: `m = args.mode.strip().lower()`.
+      - If `m in ("raw", "bypass")`: `mode_val = "raw"`; `size_val = "small"`
+      - Elif `m == "verbatim"`: `mode_val = "verbatim"`; `size_val = "small"`
+      - Elif `m == "small"`: `mode_val = "summary"`; `size_val = "small"`
+      - Elif `m == "medium"`: `mode_val = "summary"`; `size_val = "medium"`
+      - Elif `m == "large"`: `mode_val = "summary"`; `size_val = "large"`
+      - Else:
+        - Print `autoplay mode: unknown value {args.mode} (expected raw | verbatim | small | medium | large)` to `sys.stderr`.
+        - Return `4` (`EXIT_BAD_ARG`).
+      - Write to `~/.config/auto-speech/autoplay.toml` under `[autoplay]`.
+      - Print `wrote ~/.config/auto-speech/autoplay.toml: mode={mode_val} summary_size={size_val}`.
+      - Return `0`.
+  - `autoplay scope [SCOPE]`:
+    - Scope model: `scope = SoloScope()`.
+    - Resolve session ID.
+    - If `scope` argument omitted:
+      - Print `format_status(scope, session_id)` to `sys.stdout`.
+      - Return `0`.
+    - `s = args.scope.strip().lower()`.
+    - If `s == "all"`:
+      - `scope.clear()`.
+      - Print `autoplay scope: ALL — every enrolled session reads (default)`.
+      - Return `0`.
+    - Elif `s in ("solo", "this", "one", "only")`:
+      - If not session ID:
+        - Print `autoplay scope solo: requires a session id (pass --session-id or set CLAUDE_CODE_SESSION_ID)` to `sys.stderr`.
+        - Return `2` (`EXIT_INVALID_INPUT`).
+      - `scope.set_solo(session_id)`.
+      - `SessionEnrollment().enroll(session_id)`.
+      - Print `autoplay scope: SOLO — only THIS session reads (spotlight={session_id})`.
+      - Return `0`.
+    - Else:
+      - Print `autoplay scope: unknown scope {args.scope} (expected all | solo)` to `sys.stderr`.
+      - Return `4` (`EXIT_BAD_ARG`).
+
+---
+
+#### 9. `narrate`
+*Control real-time tool narration session markers, daemon process, and configuration.*
+
+- **Parser Configuration**:
+  ```python
+  p_narrate = subparsers.add_parser("narrate", help="Narration subsystem controls.")
+  sub_narrate = p_narrate.add_subparsers(dest="narrate_action", metavar="<action>")
+
+  # on
+  p_nr_on = sub_narrate.add_parser("on", help="Enable narration for this session.")
+  p_nr_on.add_argument("--session-id", type=str, default=None, help="Session ID to enroll.")
+
+  # off
+  p_nr_off = sub_narrate.add_parser("off", help="Disable narration for this session.")
+  p_nr_off.add_argument("--session-id", type=str, default=None, help="Session ID to withdraw.")
+
+  # status
+  p_nr_status = sub_narrate.add_parser("status", help="Show narration daemon and marker status.")
+  p_nr_status.add_argument("--session-id", type=str, default=None, help="Session ID to inspect.")
+
+  # stop
+  sub_narrate.add_parser("stop", help="Stop the narrator daemon process.")
+
+  # config
+  p_nr_cfg = sub_narrate.add_parser("config", help="Show, edit, or print narrator config path.")
+  p_nr_cfg.add_argument("action", nargs="?", default="show", choices=["show", "path", "edit"], help="Config action (default: show).")
+  ```
+
+- **Action Handlers**:
+  - `narrate on`:
+    - Resolve session ID. If absent:
+      - Print `narrate on: requires session ID (pass --session-id or set CLAUDE_CODE_SESSION_ID)` to `sys.stderr`.
+      - Return `2` (`EXIT_INVALID_INPUT`).
+    - Touch marker: `~/.claude/auto-speech-narrate-sessions/<session_id>`.
+    - Clean legacy marker `<cwd>/.claude/narrate.enabled` if present.
+    - Call `DaemonClient().ensure_daemon_running()`.
+    - Print `narrate on — session {session_id}, daemon running`.
+    - Return `0`.
+  - `narrate off`:
+    - Resolve session ID.
+    - If present, unlink `~/.claude/auto-speech-narrate-sessions/<session_id>`.
+    - Unlink legacy `<cwd>/.claude/narrate.enabled` if present.
+    - Print `narrate off — session {session_id or '<none>'}`.
+    - Return `0`.
+  - `narrate status`:
+    - Resolve session ID.
+    - Output formatted status: session ID, marker state, legacy marker presence, other enrolled sessions count, daemon liveness (pid, running/stale/absent), queue depth, and log tail.
+    - Return `0`.
+  - `narrate stop`:
+    - Read `/tmp/auto-speech-narrator-daemon.pid`.
+    - If absent: print `narrator daemon: not running`, return `0`.
+    - If PID exists and `_pid_is_our_daemon(pid)`:
+      - Send `SIGTERM`, wait up to 3s.
+      - If still alive, send `SIGKILL`.
+      - Unlink PID file.
+      - Print `narrator daemon: stopped (pid={pid})`.
+    - Else: unlink PID file, print `narrator daemon: stale pid file cleaned up`.
+    - Return `0`.
+  - `narrate config [ACTION]`:
+    - `action = args.action.strip().lower()`.
+    - Load config via `narrator_config.load_config()`. `cfg_path = conf.get("config_path")`.
+    - If `action == "path"`:
+      - If `cfg_path`: print `cfg_path`.
+      - Else: print `no narrator config file loaded (using shipped defaults)`.
+      - Return `0`.
+    - Elif `action == "show"`:
+      - If `cfg_path` and `Path(cfg_path).is_file()`: print file contents.
+      - Else: print JSON dump of `conf`.
+      - Return `0`.
+    - Elif `action == "edit"`:
+      - If `not cfg_path`: create `~/.config/auto-speech/narrator.toml` from example.
+      - Editor: `os.environ.get("EDITOR") or os.environ.get("VISUAL") or "open -t"`.
+      - Run editor subprocess. Print `opened {cfg_path} in {editor}`.
+      - Return `0`.
+    - Else:
+      - Print `narrate config: unknown action {args.action} (expected show | path | edit)` to `sys.stderr`.
+      - Return `4` (`EXIT_BAD_ARG`).
+
+---
+
+#### 10. `hook`
+*Simulate and execute Claude Code and Antigravity lifecycle hooks.*
+
+- **Parser Configuration**:
+  ```python
+  p_hook = subparsers.add_parser("hook", help="Lifecycle hook execution.")
+  sub_hook = p_hook.add_subparsers(dest="hook_action", metavar="<action>")
+
+  # stop
+  sub_hook.add_parser("stop", help="Handle Stop hook (end-of-turn autoplay).")
+
+  # narrator
+  sub_hook.add_parser("narrator", help="Handle narrator tool activity events.")
+
+  # bootstrap
+  p_hk_boot = sub_hook.add_parser("bootstrap", help="Handle SessionStart bootstrap hook.")
+  p_hk_boot.add_argument("--force", action="store_true", help="Force dependency synchronization.")
+  ```
+
+- **Action Handlers**:
+  - `hook stop`:
+    - Ingest JSON payload from `sys.stdin`.
+    - Parse JSON: extract `session_id` (`.session_id // .conversationId`), `transcript_path` (`.transcript_path // .transcriptPath`).
+    - Gate 1: `AUTO_SPEECH_SUPPRESS_HOOKS == 1` -> exit `0`.
+    - Gate 2: `AutoplayGate().worker_gated_off()` -> exit `0`.
+    - Gate 3: `SoloScope().session_allowed(session_id)` is False -> exit `0`.
+    - Gate 4: `SessionEnrollment().is_enrolled(session_id)` is False -> exit `0`.
+    - Ensure daemon is running: `DaemonClient().ensure_daemon_running()`.
+    - Touch beacon `/tmp/auto-speech-last-stop.{session_id}`, capture `beacon_mtime`.
+    - Launch detached worker `autoplay_worker.sh` (or in-process runner) via double-fork / daemon thread.
+    - Return `0`.
+  - `hook narrator`:
+    - Ingest JSON payload from `sys.stdin`.
+    - Parse JSON: extract `session_id`, `hook_event_name`.
+    - Gate 1: `AUTO_SPEECH_SUPPRESS_HOOKS == 1` -> exit `0`.
+    - Gate 2: Check marker `~/.claude/auto-speech-narrate-sessions/<session_id>`. If absent, exit `0`.
+    - Ensure daemon running: `DaemonClient().ensure_daemon_running()`.
+    - Build JSONL record: `{"ts": int(time.time()), "cwd": os.getcwd(), "pid": os.getpid(), "event": payload.get("hook_event_name", "unknown"), "payload": payload}`.
+    - Append to `/tmp/auto-speech-narrator-events.jsonl`.
+    - Return `0`.
+  - `hook bootstrap`:
+    - Check if `uv.lock` changed via `needs_sync(uv_lock, stamp_path)`.
+    - If `args.force` or sync needed:
+      - Call `setup/bootstrap.sh` (`--force` if specified).
+    - Return `0`.
+
+---
+
+#### 11. `doctor`
+*Execute 10-probe system diagnostic health inspection.*
+
+- **Parser Configuration**:
+  ```python
+  p_doctor = subparsers.add_parser("doctor", help="System diagnostic health check.")
+  p_doctor.add_argument("--json", action="store_true", help="Output health report in structured JSON format.")
+  ```
+
+- **Execution Flow**:
+  1. Retrieve `max_queue_depth` from `narrator_config.load_config()` (default 32).
+  2. Instantiate `doc = Doctor(max_queue_depth=max_q)`.
+  3. Execute `report = doc.run()`.
+  4. If `args.json`: print `report.to_json()` to `sys.stdout`.
+  5. Else: print `report.to_text()` to `sys.stdout`.
+  6. Return `report.exit_code`:
+     - `0` if all checks are `OK` or `WARN`.
+     - `1` if any check is `FAIL`.
+
+---
+
+#### 12. `update`
+*Synchronize virtual environment dependencies against committed `uv.lock`.*
+
+- **Parser Configuration**:
+  ```python
+  p_update = subparsers.add_parser("update", help="Update and synchronize virtual environment dependencies.")
+  p_update.add_argument("--force", action="store_true", help="Force sync regardless of lockfile stamp.")
+  ```
+
+- **Execution Flow**:
+  1. Locate `bootstrap.sh` at `<project_root>/setup/bootstrap.sh`.
+  2. Construct command: `["bash", str(bootstrap_script)]`.
+  3. If `args.force`: append `"--force"`.
+  4. Run subprocess synchronously:
+     `res = subprocess.run(cmd, check=False)`.
+  5. If `res.returncode == 0`:
+     - Print `auto-speech: dependencies updated and in sync.` to `sys.stdout`.
+     - Return `0` (`EXIT_OK`).
+  6. Else:
+     - Print `auto-speech: update failed (exit code {res.returncode}). See /tmp/auto-speech-sync.log.` to `sys.stderr`.
+     - Return `1` (`EXIT_FAILURE`).
+
+---
+
+## 3. Standardized Exit Code Matrix
+
+The CLI dispatcher implements the strict exit code contract defined in `PROJECT.md` and inherited from `control.py`, `replay.py`, `speak.py`, and `doctor.py`:
+
+| Exit Code | Constant | Meaning | Typical Trigger | Output Channel |
+| :---: | :--- | :--- | :--- | :--- |
+| **`0`** | `EXIT_OK` | Success / cleanly muted | Normal completion; global mute silencing speech; empty text. | `sys.stdout` / silent |
+| **`1`** | `EXIT_FAILURE` | General failure | Daemon communication failure; `doctor` check `FAIL`; `update` failure. | `sys.stderr` |
+| **`2`** | `EXIT_NO_SESSION` / `EXIT_INVALID_INPUT` | Target resource absent / invalid input | No active playback session for `pause`/`resume`/`restart`/`seek`; `--source-hash` invalid length/hex; replay cache empty or ordinal out of range; required session ID missing; missing subcommand. | `sys.stderr` |
+| **`3`** | `EXIT_IPC_FAIL` | mpv IPC failure | Socket exists but `MpvIpc.send()` times out, raises error, or mpv returns command error. | `sys.stderr` |
+| **`4`** | `EXIT_BAD_ARG` | Bad argument syntax | `seek` target not valid `+N`, `-N`, `N`, or `'end'`; `autoplay mode` invalid mode name; `autoplay scope` invalid scope name. | `sys.stderr` |
+| **`6`** | `EXIT_PLAYBACK_FAIL` | Audio playback error | `NativeAudioSink` raises `AudioSinkError` or `PlaybackError` during replay. | `sys.stderr` |
+| **`130`** | `EXIT_INTERRUPTED` | Interrupted (SIGINT) | User pressed Ctrl+C (`KeyboardInterrupt`). | `sys.stderr` |
+
+---
+
+## 4. Error Handling & Diagnostic Principles
+
+1. **Clear Diagnostic Prefix**:
+   All diagnostic errors emitted to `sys.stderr` follow the format:
+   `auto-speech <subcommand>: <explanatory message>` or `control: <explanatory message>`.
+2. **Standard Stream Separation**:
+   - Machine data and positive confirmations (`paused`, `resumed`, `stopped`, JSON reports) go exclusively to `sys.stdout`.
+   - Informational diagnostics (e.g. replay cache entry metadata `[replay] ordinal=...`, global mute suppression notices, errors) go exclusively to `sys.stderr`.
+3. **No Silent Failures**:
+   Per the *Defensive Incompleteness* and *Anti-Ungrounded Logic* rules, no failed operation will return a synthetic exit 0. If a command cannot complete, it must emit a descriptive error to `sys.stderr` and exit with its designated non-zero code.
+4. **Hermetic Standard Library Isolation**:
+   `cli.py` will not import heavy non-standard packages (`mlx`, `torch`) directly. All third-party interactions occur via the isolated daemon process or standard library socket/subprocess bridges.
+
+---
+
+## 5. Trampoline Integration (`bin/auto-speech`)
+
+The executable trampoline `bin/auto-speech` ensures that invocation from any shell environment correctly resolves `.venv/bin/python`:
+
+```bash
+#!/usr/bin/env bash
+# auto-speech — unified CLI dispatcher trampoline
+set -euo pipefail
+
+# Resolve symlinks to locate the true project root
+SOURCE="${BASH_SOURCE[0]}"
+while [ -L "$SOURCE" ]; do
+  DIR="$(cd -P "$(dirname "$SOURCE")" && pwd)"
+  SOURCE="$(readlink "$SOURCE")"
+  [[ $SOURCE != /* ]] && SOURCE="$DIR/$SOURCE"
+done
+PROJECT_ROOT="$(cd -P "$(dirname "$SOURCE")/.." && pwd)"
+
+VENV_PYTHON="$PROJECT_ROOT/.venv/bin/python"
+if [ ! -x "$VENV_PYTHON" ]; then
+  # Fallback: check recorded project root from ~/.config/auto-speech/root
+  RECORDED_ROOT="$(cat "$HOME/.config/auto-speech/root" 2>/dev/null || true)"
+  if [ -n "$RECORDED_ROOT" ] && [ -x "$RECORDED_ROOT/.venv/bin/python" ]; then
+    VENV_PYTHON="$RECORDED_ROOT/.venv/bin/python"
+    PROJECT_ROOT="$RECORDED_ROOT"
+  else
+    echo "auto-speech: virtual environment not found at $VENV_PYTHON. Run setup/install.sh first." >&2
+    exit 1
+  fi
+fi
+
+exec "$VENV_PYTHON" "$PROJECT_ROOT/plugin/scripts/python/cli.py" "$@"
+```
+
+- Linked into `~/.local/bin/auto-speech -> <PROJECT_ROOT>/bin/auto-speech`.
+- Permissions: `chmod +x bin/auto-speech`.
+
+---
+
+## 6. Comprehensive Verification Plan (`tests/test_cli_dispatcher.py`)
+
+A dedicated unit and integration test suite `tests/test_cli_dispatcher.py` will be created to verify all 12 subcommands and boundary cases:
+
+### 6.1 Test Suites Matrix
+
+1. **Parser & Help Integrity**:
+   - `test_cli_help`: `cli.main(["--help"])` exits `0`, stdout includes all 12 subcommands.
+   - `test_cli_version`: `cli.main(["--version"])` exits `0`, stdout includes version.
+   - `test_cli_no_args`: `cli.main([])` exits `2`, stderr includes usage.
+   - `test_cli_subcommand_help`: Each subcommand with `["<cmd>", "--help"]` exits `0`.
+2. **`speak` Tests**:
+   - `test_speak_positional_words`: Mocks `DaemonClient.speak`, verifies text concatenation and exit `0`.
+   - `test_speak_piped_stdin`: Patches `sys.stdin`, verifies text read and dispatched.
+   - `test_speak_global_mute`: Creates `~/.claude/auto-speech.disabled`, verifies immediate exit `0` with stderr note.
+   - `test_speak_bad_hash`: Passes `--source-hash invalid`, verifies exit `2` and stderr diagnostic.
+   - `test_speak_cached_playback`: Positional words empty, valid `--source-hash`, calls `DaemonClient.play_cache`.
+3. **`replay` Tests**:
+   - `test_replay_bad_ordinal`: `--ordinal 0` exits `2`.
+   - `test_replay_empty_cache`: Empty cache directory exits `2`.
+   - `test_replay_out_of_bounds`: Ordinal exceeds cache size exits `2`.
+   - `test_replay_playback`: Valid ordinal plays audio via daemon/sink, exits `0`.
+4. **Transport Control Tests**:
+   - `test_control_no_session`: When socket absent, `pause`, `resume`, `restart`, `seek` exit `2` with `no active playback session`.
+   - `test_control_seek_bad_arg`: `seek` with `invalid` or empty target exits `4`.
+   - `test_control_seek_parsing`: Tests `+10`, `-5`, `15.0`, `end` format parsing and dispatch.
+   - `test_control_stop`: `stop` calls `DaemonClient.interrupt()` and exits `0`.
+5. **`autoplay` Tests**:
+   - `test_autoplay_on_off`: `autoplay on` creates session marker; `autoplay off` removes it.
+   - `test_autoplay_status`: Exits `0`, prints formatted status.
+   - `test_autoplay_mode_show_and_set`: `mode small` writes TOML; invalid mode exits `4`.
+   - `test_autoplay_scope`: `scope all` clears solo marker; `scope solo` sets marker; invalid scope exits `4`.
+6. **`narrate` Tests**:
+   - `test_narrate_on_off`: `narrate on` creates session marker; `narrate off` removes it.
+   - `test_narrate_status`: Exits `0`.
+   - `test_narrate_stop`: Signals daemon PID and unlinks PID file.
+   - `test_narrate_config`: Handles `show`, `path`, `edit`.
+7. **`hook` Tests**:
+   - `test_hook_stop`: Consumes JSON payload, enforces gates, touches beacon.
+   - `test_hook_narrator`: Consumes JSON payload, appends event to `/tmp/auto-speech-narrator-events.jsonl`.
+   - `test_hook_bootstrap`: Handles lock comparison.
+8. **`doctor` & `update` Tests**:
+   - `test_doctor_text_and_json`: `doctor` and `doctor --json` return correct exit code (`0` or `1`).
+   - `test_update_force`: Passes `--force` to bootstrap script.
+
+---
+
+## 7. Next Implementation Steps for Milestone M1
+
+1. Implement bash trampoline `bin/auto-speech` with executable permissions in worktree.
+2. Implement `plugin/scripts/python/cli.py` implementing top-level parser and 12 subcommand handlers.
+3. Implement test suite `tests/test_cli_dispatcher.py` covering all parser configurations and exit codes.
+4. Verify tests pass via `bash tests/run_all.sh` (must be 50/50 green).
+5. Verify `ruff check .` returns 0 violations.
+6. Link `~/.local/bin/auto-speech -> bin/auto-speech`.

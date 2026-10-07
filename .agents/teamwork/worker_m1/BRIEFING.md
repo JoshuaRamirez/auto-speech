@@ -1,7 +1,7 @@
-# BRIEFING — 2026-10-03T18:22:00Z
+# BRIEFING — 2026-10-06T21:33:00Z
 
 ## Mission
-Implement NativeAudioSink in plugin/scripts/python/native_audio_sink.py, refactor narrator_service.py for in-process TTSEngine and NativeAudioSink (fixing line 237 bug and eliminating time.sleep/SIGKILL hacks), add unit tests, and verify all tests pass.
+Implement Milestone M1 (Unified auto-speech CLI Dispatcher): bin/auto-speech bash trampoline, plugin/scripts/python/cli.py top-level router and 12 subcommands, installer symlink integration, and exhaustive unit tests.
 
 ## 🔒 My Identity
 - Archetype: teamwork_preview_worker
@@ -9,6 +9,11 @@ Implement NativeAudioSink in plugin/scripts/python/native_audio_sink.py, refacto
 - Working directory: /Users/joshua/Developer/auto-speech/.agents/teamwork/worker_m1
 - Original parent: c05df6b8-cecd-49ba-9fb8-8fa47f977488
 - Milestone: M1 (In-Process TTSEngine & NativeAudioSink)
+- Archetype: teamwork_preview_worker (worker_m1)
+- Roles: implementer, qa, specialist
+- Working directory: /Users/joshua/Developer/auto-speech/.agents/teamwork/worker_m1
+- Original parent: 4db9af0e-498d-49a5-831a-0009fd31326e
+- Milestone: M1 (Unified auto-speech CLI Dispatcher)
 
 ## 🔒 Key Constraints
 - File ownership: Exclusively own and edit:
@@ -20,28 +25,37 @@ Implement NativeAudioSink in plugin/scripts/python/native_audio_sink.py, refacto
 - MANDATORY INTEGRITY WARNING: DO NOT CHEAT. All implementations must be genuine. No hardcoded test results, no dummy/facade implementations.
 - Apple MLX stream affinity: Single-thread compute streams; instantiate/load TTSEngine on the `_tts_worker` thread.
 - Zero legacy hacks: Remove run_speak.sh, MpvController, SessionDir, wave duration calculation, time.sleep(), SIGKILL/pkill.
+- All code changes and tests MUST be executed inside the isolated git worktree: `/Users/joshua/Developer/auto-speech-worktree`.
+- Implement `bin/auto-speech` with recursion guard, `.venv` discovery, stderr diagnostic on missing venv (exit 1), execs `cli.py`. Permissions `chmod +x`.
+- Implement `plugin/scripts/python/cli.py` with top-level `argparse` and all 12 subcommands: `speak`, `replay`, `pause`, `resume`, `stop`, `restart`, `seek`, `autoplay`, `narrate`, `hook`, `doctor`, `update`.
+- Standardized exit codes: 0 (OK/clean mute), 1 (general fail/doctor FAIL), 2 (no session/invalid input), 3 (IPC fail), 4 (bad arg), 6 (playback fail), 130 (interrupted).
+- Update `setup/install-plugin.sh` and `setup/uninstall.sh` for `~/.local/bin/auto-speech` symlink.
+- Implement comprehensive unit tests in `tests/test_cli_dispatcher.py` and update `tests/test_install_plugin.sh`.
 
 ## Current Parent
-- Conversation ID: c05df6b8-cecd-49ba-9fb8-8fa47f977488
-- Updated: 2026-10-03T18:22:00Z
+- Conversation ID: 4db9af0e-498d-49a5-831a-0009fd31326e
+- Updated: 2026-10-06T21:33:00Z
 
 ## Task Summary
 - **What was built**:
-  1. `NativeAudioSink` in `plugin/scripts/python/native_audio_sink.py` implementing synchronous, blocking playback via `mpv --really-quiet --no-video --keep-open=no --idle=no`, dual-lock synchronization (`_playback_lock`, `_state_lock`), clean `interrupt()` with SIGTERM -> SIGKILL escalation, and clean error contract.
-  2. Refactored `plugin/scripts/python/narrator_service.py` with in-process TTSEngine and ResilientSynthesizer initialized on `_tts_worker`, NativeAudioSink playback, line 237 `_classifier` bug fix, `UserPromptSubmit` clean interruption, leak-proof temp WAV cleanup, and complete removal of `run_speak.sh`, `time.sleep()`, `SIGKILL`, `pkill`, `SessionDir`, and `_wait_mpv_idle()`.
-  3. Comprehensive unit test suite in `tests/test_native_audio_sink.py` (12 tests) and added 6 in-process integration tests in `tests/test_narrator_service.py` (21 tests total).
+  1. `bin/auto-speech` bash trampoline in `/Users/joshua/Developer/auto-speech-worktree/bin/auto-speech` resolving project root across symlinks with recursion guard, verifying `.venv`, and execing `cli.py "$@"`.
+  2. `plugin/scripts/python/cli.py` implementing top-level parser and all 12 subcommands (`speak`, `replay`, `pause`, `resume`, `stop`, `restart`, `seek`, `autoplay`, `narrate`, `hook`, `doctor`, `update`).
+  3. `setup/install-plugin.sh` and `setup/uninstall.sh` managing `~/.local/bin/auto-speech` symlink portably.
+  4. User symlink `~/.local/bin/auto-speech` created and tested.
+  5. `tests/test_cli_dispatcher.py` with 74 tests covering all 12 subcommands and edge cases.
+  6. `tests/test_install_plugin.sh` expanded with symlink and portability assertions (12/12 passed).
+  7. Registered `test_cli_dispatcher.py` in `tests/run_all.sh` (50/50 test suites passed).
 - **Success criteria**:
-  - `tests/test_native_audio_sink.py`: 12/12 tests PASS.
-  - `tests/test_narrator_service.py`: 21/21 tests PASS.
-  - `TestTier1R1InProcessAudioSink`: 6/6 tests PASS.
-  - Linter (`ruff check`): 0 errors.
+  - `bin/auto-speech --help` and `~/.local/bin/auto-speech --help` exit 0 (VERIFIED).
+  - `.venv/bin/python -m unittest tests/test_cli_dispatcher.py` passes 74/74 (VERIFIED).
+  - `bash tests/test_install_plugin.sh` passes 12/12 (VERIFIED).
+  - `bash tests/run_all.sh` passes 50/50 suites (VERIFIED).
+  - `.venv/bin/ruff check plugin/scripts/python/cli.py tests/test_cli_dispatcher.py` reports 0 errors (VERIFIED).
 
 ## Key Decisions Made
-- Dual-lock design in NativeAudioSink prevents deadlock while enabling instant interruption from any thread.
-- TTSEngine and ResilientSynthesizer initialized on `_tts_worker` thread to maintain Apple MLX single-thread stream affinity.
-- Interrupted playback returns cleanly (`None`) rather than raising an error, preventing spurious log noise on normal user prompt actions.
-- Used `getattr(self, "_classifier", None)` in `_tail_events` to fix line 237 bug when constructed via `__new__`.
-- Preserved `str(wav_path)` without symlink resolution to prevent `/var` vs `/private/var` mismatch on macOS.
+- Strict local root resolution in `bin/auto-speech`: no fallback to `~/.config/auto-speech/root` for python discovery to prevent worktree cross-talk.
+- Pure standard library implementation in `cli.py` with lightweight delegates.
+- Standardized exit code contract: 0 (OK/clean mute), 1 (general fail/doctor FAIL), 2 (no session/invalid input), 3 (IPC fail), 4 (bad arg), 6 (playback fail), 130 (interrupted).
 
 ## Artifact Index
 - `.agents/teamwork/worker_m1/DISPATCH.md` — Assignment and requirements
@@ -49,18 +63,22 @@ Implement NativeAudioSink in plugin/scripts/python/native_audio_sink.py, refacto
 - `.agents/teamwork/worker_m1/handoff.md` — Final 5-component handoff report
 
 ## Change Tracker
-- **Files modified**:
-  - `plugin/scripts/python/native_audio_sink.py` — New module implementing NativeAudioSink
-  - `plugin/scripts/python/narrator_service.py` — Refactored daemon with in-process TTS, NativeAudioSink, line 237 fix, zero hacks
-  - `tests/test_native_audio_sink.py` — New unit test suite (12 tests)
-  - `tests/test_narrator_service.py` — Added 6 in-process TTS/audio sink tests (21 tests total)
-- **Build status**: Pass (100% test pass on all targets)
-- **Pending issues**: None
+- **Files modified / created**:
+  - `bin/auto-speech` — New executable bash trampoline
+  - `plugin/scripts/python/cli.py` — New unified CLI dispatcher
+  - `setup/install-plugin.sh` — Added install_cli_symlink
+  - `setup/uninstall.sh` — Added CLI symlink removal
+  - `tests/test_cli_dispatcher.py` — New comprehensive unit test suite (74 tests)
+  - `tests/test_install_plugin.sh` — Added symlink assertions
+  - `tests/run_all.sh` — Registered test_cli_dispatcher.py
+  - `~/.local/bin/auto-speech` — Created symlink on user system
+- **Build status**: Pass (100% test pass on all targets, 50/50 suites).
+- **Pending issues**: None.
 
 ## Quality Status
-- **Build/test result**: All 12 NativeAudioSink tests, all 21 NarratorService tests, and all 6 Tier 1 R1 E2E tests pass.
-- **Lint status**: 0 violations (`ruff check` clean on all 4 files).
-- **Tests added/modified**: 12 new tests in `test_native_audio_sink.py`, 6 new tests in `test_narrator_service.py`.
+- **Build/test result**: 50/50 test suites pass cleanly.
+- **Lint status**: 0 violations on all new/modified files (`ruff check`).
+- **Tests added/modified**: 74 new tests in `test_cli_dispatcher.py`, 2 new assertions in `test_install_plugin.sh`.
 
 ## Loaded Skills
 - None

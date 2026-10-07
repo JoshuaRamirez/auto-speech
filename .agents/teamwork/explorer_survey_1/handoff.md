@@ -1,141 +1,116 @@
-# Handoff Report: `narrator_service.py` Architecture, Process Lifecycle, and `NativeAudioSink` Integration
+# Handoff Report: R1 Unified `auto-speech` CLI Dispatcher Survey & Specification
 
-**Agent**: `explorer_survey_1`  
-**Working Directory**: `/Users/joshua/Developer/auto-speech/.agents/teamwork/explorer_survey_1`  
-**Handoff Type**: Hard (Investigation complete)
+**Date:** 2026-10-06T21:03:00Z  
+**From:** `explorer_survey_1` (Teamwork Explorer)  
+**To:** `parent` (`4db9af0e-498d-49a5-831a-0009fd31326e`)  
+**Status:** Complete (Hard Handoff)  
+**Artifacts Produced:**
+- `analysis.md`: `/Users/joshua/Developer/auto-speech/.agents/teamwork/explorer_survey_1/analysis.md`
+- `handoff.md`: `/Users/joshua/Developer/auto-speech/.agents/teamwork/explorer_survey_1/handoff.md`
 
 ---
 
 ## 1. Observation
 
-### Obs 1. Current Architecture of `narrator_service.py`
-- **File**: `plugin/scripts/python/narrator_service.py` (643 lines)
-- **Lifecycle & Process Management**:
-  - PID file: `/tmp/auto-speech-narrator-daemon.pid` (line 41).
-  - Liveness verification: `_existing_pid()` (line 94) delegates to `_pid_is_our_daemon(pid)` (line 78), which checks `os.kill(pid, 0)` and executes `ps -p <pid> -o command=` to confirm `"/narrator_service.py"` in command line (line 91).
-  - State machine: `NarratorStateMachine` (`narrator_state.py`) tracking `NOT_RUNNING -> STARTING -> RUNNING -> {IDLE_SHUTDOWN, SIGNAL_SHUTDOWN} -> NOT_RUNNING` (lines 30–37, 134, 138, 140, 183, 190, 233).
-  - Signals: Catches `SIGTERM` and `SIGINT` via `_on_signal` (lines 141–142, 187–192), sets `self._stop = threading.Event()`.
-  - Auto-shutdown: Shuts down after `idle_shutdown_seconds` (default 600s) if no events are received (lines 130, 230–234).
-  - External control scripts: `plugin/scripts/shell/narrator_service_start.sh` (detaches via Python double-fork to `.out` log), `narrator_service_status.sh`, and `narrator_service_stop.sh` (sends `SIGTERM`, waits, escalates to `SIGKILL`).
-  - Auto-launch hook: `plugin/scripts/shell/narrator_hook.sh` (lines 56–71) auto-starts the daemon if opted in and daemon is not alive.
-
-### Obs 2. Threading Model and Queue (`_tts_queue`)
-- **Main Thread (`_tail_events`)**:
-  - Tails `/tmp/auto-speech-narrator-events.jsonl` from offset stored in `/tmp/auto-speech-narrator-daemon.watermark` (lines 193–244).
-  - Polls every `0.25`s (`POLL_INTERVAL_S`), parses complete lines, calls `_process_chunk` (lines 214–227).
-  - Filters events by session marker in `~/.claude/auto-speech-narrate-sessions/<session_id>` (lines 293–304).
-  - Feeds events to `PhaseClassifier(silence_seconds=0.5, max_events_per_phase=1)` (line 116).
-  - Also flushes phases based on wall-clock silence (lines 237–243).
-- **TTS Worker Thread (`_tts_worker`)**:
-  - Dedicated background daemon thread `threading.Thread(target=self._tts_worker, daemon=True)` (line 152).
-  - Consumes items from `self._tts_queue` in FIFO order (lines 463–500).
-  - Supported item types:
-    1. `str`: Direct text, calls `self._speak(phase)` (lines 468–469).
-    2. `dict`: If `type == "Stop"`, calls `summarizer.generate_conversational(history, "Stop", ...)` and speaks output (lines 470–487).
-    3. `Phase`: Summarizes closed phase via `summarizer.summarize(phase)` and speaks output (lines 488–495).
-    4. `None`: Sentinel to exit thread on shutdown (lines 167, 465–466).
-  - Backpressure: `_enqueue_phase()` caps queue at `max_queue_depth` (default 32) and drops oldest item on overflow (`self._tts_queue.get_nowait()`) with log tracking (lines 398–434).
-  - Mirrored depth: Writes `_tts_queue.qsize()` to `/tmp/auto-speech-narration-depth` (lines 436–440) for autoplay synchronization.
-
-### Obs 3. Playback Implementation & Hacks
-- **`run_speak.sh` Sprawl**:
-  - Line 110: `_speak_script()` points to `plugin/scripts/shell/run_speak.sh`.
-  - Lines 530–536: `_speak()` runs `subprocess.run([str(speak), "--keep-artifacts"], input=line.encode("utf-8"), ...)` which spins up a new Python interpreter running `speak.py` and `PipelineOrchestrator` for every phrase.
-- **Detached `mpv` Process**:
-  - `speak.py` calls `MpvController().start(wav_path)`, which launches `mpv` in background with `start_new_session=True` and `--input-ipc-server=/tmp/auto-speech/control.sock`, writing PID to `/tmp/auto-speech/mpv.pid` (lines 104–125 in `mpv_controller.py`).
-- **`time.sleep` Duration Calculation**:
-  - Lines 542–550 of `narrator_service.py`:
-    ```python
-    wav_path = SessionDir.wav_path_path().read_text().strip()
-    with wave.open(wav_path, "r") as f:
-        duration = f.getnframes() / float(f.getframerate())
-    _log(f"sleeping for wav duration: {duration:.2f}s")
-    time.sleep(duration + 0.5)  # slight buffer
-    ```
-- **`SIGKILL` & `pkill` Hacks**:
-  - Lines 552–557: Daemon reads `SessionDir.read_pid()` and runs `os.kill(pid, _signal.SIGKILL)` immediately after `time.sleep` expires.
-  - Lines 591–596: `os.kill(pid, signal.SIGKILL)` in `_wait_mpv_idle()` timeout.
-  - Lines 318 & 334: `subprocess.run(["pkill", "-9", "mpv"], capture_output=True)` executed on `UserPromptSubmit`.
-- **Duplicate Dead Code**:
-  - Lines 317–331 and 334–349 contain identical duplicate code blocks on `UserPromptSubmit`. Due to `continue` at line 331, lines 334–349 are unreachable.
-
-### Obs 4. Test Failure in `tests/test_narrator_service.py`
-- Command: `.venv/bin/python tests/test_narrator_service.py`
-- Result: Exited with code 1.
-- Error Traceback:
-  ```
-  File "tests/test_narrator_service.py", line 306, in test_tail_resumes_a_line_split_across_two_reads
-    svc._tail_events()
-  File "plugin/scripts/python/narrator_service.py", line 237, in _tail_events
-    if hasattr(self._classifier, "_current") and self._classifier._current:
-  AttributeError: 'NarratorService' object has no attribute '_classifier'
-  ```
-- Line 237 was added without safe attribute lookup (`getattr(self, "_classifier", None)`), causing unit tests that instantiate `NarratorService` via `__new__` to crash.
+1. **Test Suite Baseline**:
+   - Command `bash tests/run_all.sh` executed against `/Users/joshua/Developer/auto-speech`.
+   - Result: 49 test suites executed (35 cheap unit tests, 8 shell script tests, 1 web test, 5 heavy audio tests). All 49 suites passed cleanly (`ran: 49, failed: 0, all tests passed`).
+2. **Current Entrypoints & Dispatch Fragmentation**:
+   - `speak.py` (`plugin/scripts/python/speak.py:114-212`): reads transcript from `sys.stdin.read()`, resolves daemon socket via `DEFAULT_SOCKET_PATH` or `AUTO_SPEECH_DAEMON_SOCK`, and dispatches via `DaemonClient` or fallback socket byte stream.
+   - `replay.py` (`plugin/scripts/python/replay.py:31-118`): accepts `--ordinal` (1-indexed), queries `CacheStore.list_by_recency()`, and sends `play_cache` to `DaemonClient` or fallback `NativeAudioSink`. Exits `2` when no entries found.
+   - `control.py` (`plugin/scripts/python/control.py:8-62`): implements subcommands `pause`, `resume`, `restart`, `end`, and `seek TARGET`. Exit codes defined: `EXIT_OK = 0`, `EXIT_NO_SESSION = 2`, `EXIT_IPC_FAIL = 3`, `EXIT_BAD_ARG = 4`. `_ensure_session()` emits `"control: no active playback session (unified daemon uses synchronous audio)."` to stderr and returns exit code 2.
+   - Verified contract in `tests/test_replay_control.py:25-57`: explicitly asserts that `control.main(["pause"])`, `["resume"]`, `["restart"]`, `["end"]`, and `["seek", "+15"]` return `EXIT_NO_SESSION = 2`.
+   - `doctor.py` (`plugin/scripts/python/doctor.py:60-287`): defines class `Doctor` with probes for binaries (`mpv`, `uv`, `jq`), venv, disk space, log sizes, daemon PID, queue depth, scope, MCP registration, configs, and updates. Supports `--json`. Returns `report.exit_code` (0 on OK/WARN, 1 on FAIL).
+   - `self_update.py` (`plugin/scripts/python/self_update.py:44-55`) and `setup/bootstrap.sh:1-72`: handles dependency sync checking between `uv.lock` and `setup/.synced`. `bootstrap.sh --force` runs synchronous `uv sync`.
+3. **Autoplay & Narration Gating Markers**:
+   - Autoplay enrollment marker (`autoplay_enrollment.py:33-52`): `~/.claude/auto-speech-autoplay-enabled/<session_id>`.
+   - Autoplay spotlight solo marker (`autoplay_scope.py:26-47`): `~/.claude/auto-speech-autoplay-solo`.
+   - Global mute marker (`autoplay_gate.py`): `~/.claude/auto-speech.disabled`.
+   - Narrator session marker (`narrator_hook.sh:46-49`): `~/.claude/auto-speech-narrate-sessions/<session_id>`.
+   - Autoplay mode config (`autoplay_config.py:48-52`): `~/.config/auto-speech/autoplay.toml`.
+   - Narrator config (`narrator_config.py`): `~/.config/auto-speech/narrator.toml`.
+4. **Lifecycle Hooks & External Dispatching**:
+   - `autoplay_hook.sh` (`plugin/scripts/shell/autoplay_hook.sh:34-165`): processes Stop hook payload from stdin, extracts session ID and transcript path, checks gating, touches per-session beacon, and detaches `autoplay_worker.sh`.
+   - `agent-event-router` (`/Users/joshua/.local/bin/agent-event-router:89-92`): contains `Stop) if [ "$ACTION" == "autoplay" ]; then run_hook "~/Developer/auto-speech/plugin/scripts/shell/autoplay_hook.sh"`.
+5. **Path & Symlink Conventions**:
+   - User PATH includes `~/.local/bin` (verified active symlinks: `itg`, `svc`, `sysobs`, `systemone`).
+   - `setup/install-plugin.sh` (`setup/install-plugin.sh:29-32`) records clone path into `~/.config/auto-speech/root` and symlinks 8 curated commands to `~/.claude/commands/`.
+   - `tests/test_install_plugin.sh:98-100` strictly asserts: `grep -rq "/Users/joshua" "$PROJECT_ROOT/plugin/commands" ...` must not find hardcoded user paths.
 
 ---
 
 ## 2. Logic Chain
 
-1. **Elimination of Process Sprawl**:
-   - (Obs 3) shows that `_speak` currently executes `subprocess.run([str(run_speak.sh), "--keep-artifacts"])`, triggering a cascade of shell script → python interpreter → `PipelineOrchestrator` → `ShortPathStrategy` → `MpvController` → detached `mpv`.
-   - By importing `TTSEngine` directly into `narrator_service.py`, synthesis can occur in-process in the `_tts_worker` thread.
-2. **Elimination of Detached `mpv`, `time.sleep`, and `SIGKILL`**:
-   - (Obs 3) shows that detached `mpv` forced `narrator_service.py` into guessing duration via `wave.open` and sleeping (`time.sleep(duration + 0.5)`), followed by force-killing mpv (`SIGKILL`).
-   - If `NativeAudioSink` runs `mpv` synchronously using `subprocess.run(["mpv", "--really-quiet", "--no-video", "--keep-open=no", "--idle=no", str(wav_path)])`, `subprocess.run` blocks until playback finishes.
-   - The thread naturally unblocks precisely when audio finishes, rendering `wave.open`, `time.sleep`, `SessionDir`, and `SIGKILL` completely obsolete.
-3. **Thread Safety & MLX Stream Affinity**:
-   - `web_server.py` documents that MLX compute streams are per-thread.
-   - (Obs 2) shows that `_tts_worker` is already a dedicated single-consumer thread for `_tts_queue`.
-   - Performing all `TTSEngine.synthesize` and `NativeAudioSink.play` calls on the `_tts_worker` thread guarantees thread affinity and sequential FIFO audio output with zero concurrency conflicts.
-4. **UNIX Socket IPC Integration**:
-   - (Obs 2) shows `_tts_worker` already accepts raw `str` items in `_tts_queue` and speaks them.
-   - Adding a `socketserver.ThreadingUnixStreamServer` listening on `/tmp/auto-speech-daemon.sock` allows external clients (like `speak.py`) to connect and send text directly into `self._tts_queue.put(text)`.
-   - This turns `speak.py` into a thin CLI client that sends stdin over the socket and exits cleanly.
+1. **Environment Isolation & Interpreter Guarantees**:
+   - From Observation 1 & 5: Auto-speech depends on Python 3.12+ and packages in `.venv` (`mlx-audio`, `flask`, `misaki`, `tomllib`). System Python on macOS defaults to Python 3.9 in `/usr/bin/python3`.
+   - Therefore, a direct Python shebang in `auto-speech` (`#!/usr/bin/env python3`) is unsafe and causes `ModuleNotFoundError` when invoked from bare shells or launchd.
+   - Reasoning: The dispatcher executable must be a bash trampoline (`bin/auto-speech`) that dynamically resolves `PROJECT_ROOT` (traversing symlinks via `readlink` loop) and invokes `$PROJECT_ROOT/.venv/bin/python "$PROJECT_ROOT/plugin/scripts/python/cli.py" "$@"`.
+2. **Subcommand Routing & Contract Compatibility**:
+   - From Observation 2: Existing callers expect specific exit codes and stderr diagnostics. Specifically, transport commands (`pause`, `resume`, `stop`, `restart`, `seek`) must return 0 on successful action, 2 (`EXIT_NO_SESSION`) when no playback session is active, and 4 (`EXIT_BAD_ARG`) on malformed seek targets.
+   - For `speak`: Callers may provide text as CLI positional arguments (`auto-speech speak "hello"`) or pipe it via stdin (`echo "hello" | auto-speech speak`). When positional arguments exist, they take precedence; when absent and stdin is piped, stdin is read.
+   - For `replay`: Must delegate to `CacheStore` recency lookup, returning 0 on playback or 2 when out of bounds, matching `test_replay_control.py`.
+3. **Transport Mechanism**:
+   - From Observation 2: `NativeAudioSink` plays synchronously via `mpv`. To support live transport operations (`pause`, `resume`, `restart`, `seek`) without reintroducing detached process sprawl, `NativeAudioSink` should start `mpv` with `--input-ipc-server=/tmp/auto-speech-mpv.sock`. `MpvIpc.send()` can then issue commands directly while playback is active. If the socket is absent, it cleanly returns `EXIT_NO_SESSION = 2`.
+   - For `stop`: Dispatches `DaemonClient.interrupt()`, which immediately terminates `mpv` and purges queued items, returning 0.
+4. **Subsystem Unification**:
+   - From Observation 3 & 4: All autoplay and narrator configuration commands currently run inline bash in markdown files. Unifying them into `auto-speech autoplay {on|off|status|mode|scope}` and `auto-speech narrate {on|off|status|stop|config}` collapses fragmented logic into testable Python code while retaining identical file markers and behavioral semantics.
+   - Hook commands (`auto-speech hook {stop|narrator|bootstrap}`) allow both programmatic invocation and clean delegation from `agent-event-router` and Claude Code hooks.
+5. **Zero-Hardcoded-Path Invariant**:
+   - From Observation 5: All code and generated symlinks must use `$PROJECT_ROOT` or `~/.config/auto-speech/root`, maintaining complete portability across machines without hardcoding `/Users/joshua`.
 
 ---
 
 ## 3. Caveats
 
-1. **Temporary WAV Retention**: `TTSEngine` writes to a filesystem path. When synthesizing in-process, temporary WAV files should be created via `tempfile.NamedTemporaryFile` and deleted in a `finally` block once `NativeAudioSink.play()` returns, ensuring no disk leak in `/tmp`.
-2. **Interruption Handling**: On `UserPromptSubmit`, `narrator_service.py` currently executes `pkill -9 mpv`. To completely eliminate `SIGKILL`/`pkill`, `NativeAudioSink` can track its active child process (`self._current_proc`) and expose an `interrupt()` method that terminates only its own process.
-3. **Autoplay Worker Dependency**: `autoplay_worker.py` currently invokes `run_speak.sh --source-hash ...`. When `run_speak.sh` is deleted and `speak.py` is refactored into a thin client, `autoplay_worker.py` or its callers will need to invoke `speak.py` directly or through the socket. (This falls under Milestone 2/3 coordination).
+1. **Active Playback IPC Socket**:
+   - Implementing interactive `pause`/`resume`/`restart`/`seek` on active playback requires `NativeAudioSink` to pass `--input-ipc-server=/tmp/auto-speech-mpv.sock`. If `mpv` is run without this socket, transport operations will continue to return `EXIT_NO_SESSION = 2` (which passes current unit tests, but doesn't pause active audio). The implementer should ensure `NativeAudioSink` adds this socket parameter.
+2. **Standard Input Blocking**:
+   - If `auto-speech speak` is invoked without arguments from an interactive TTY, it must not hang indefinitely waiting for stdin. The dispatcher should check `sys.stdin.isatty()`: if interactive and no `--source-hash` is provided, it must output an error and exit 2 immediately.
+3. **Worktree Isolation**:
+   - Per requirements, implementation of code changes must take place in an isolated Git worktree branch (`worktree/cli-mcp-parity`), verified, bidirectionally merged, and cleaned up. This survey produced zero modifications to tracked production code.
 
 ---
 
 ## 4. Conclusion
 
-1. `narrator_service.py` possesses a well-structured daemon lifecycle and queue architecture (`_tts_queue`, drop-oldest backpressure, depth mirroring, FSM states), but its playback subsystem is crippled by external process spawns, duration guessing, and `SIGKILL` hacks.
-2. Integrating `TTSEngine` and `NativeAudioSink` directly into `narrator_service.py` will:
-   - Provide instant, zero-latency streaming synthesis without secondary Python interpreters.
-   - Replace detached background `mpv` with clean, synchronous blocking playback.
-   - Eliminate `run_speak.sh`, `time.sleep()`, `SessionDir`, and all `SIGKILL`/`pkill` hacks.
-3. The UNIX domain socket listener can be attached cleanly to `NarratorService` to ingest raw speech requests into `_tts_queue`.
-4. The existing unit test crash on line 237 (`_classifier` attribute error) must be resolved by using `getattr(self, "_classifier", None)`.
+1. **Feasibility**: Full architectural consolidation into a single `auto-speech` CLI dispatcher (linked to `~/.local/bin/auto-speech`) is straightforward and completely backwards-compatible with all existing tests.
+2. **Architecture**:
+   - Shell trampoline: `/Users/joshua/Developer/auto-speech/bin/auto-speech` (executable `rwxr-xr-x`, resolving virtualenv).
+   - Python core dispatcher: `plugin/scripts/python/cli.py` (structured with `argparse`).
+   - Symlink: `~/.local/bin/auto-speech -> /Users/joshua/Developer/auto-speech/bin/auto-speech`.
+3. **Command Surface**:
+   - `speak`, `replay`, `pause`, `resume`, `stop`, `restart`, `seek`
+   - `autoplay`: `on`, `off`, `status`, `mode`, `scope`
+   - `narrate`: `on`, `off`, `status`, `stop`, `config`
+   - `hook`: `stop`, `narrator`, `bootstrap`
+   - `doctor`, `update`
+4. **Complete Specification Delivered**:
+   - The full, granular specification with parameter schemas, exit codes, and implementation blueprints is documented in:
+     `/Users/joshua/Developer/auto-speech/.agents/teamwork/explorer_survey_1/analysis.md`
 
 ---
 
 ## 5. Verification Method
 
-### 1. Test Reproduction
-Run the unit test for `narrator_service.py`:
-```bash
-.venv/bin/python tests/test_narrator_service.py
-```
-*Current state*: Fails at line 237 with `AttributeError`.  
-*After fix*: Passes all 15 unit tests.
+To independently verify the survey findings:
 
-### 2. Full Suite Verification
-Run the hermetic and standard test suites:
-```bash
-bash tests/run_all.sh --hermetic
-```
-
-### 3. File Inspection
-Inspect the following locations for code changes and verification:
-- `plugin/scripts/python/narrator_service.py`: Verify removal of `_speak_script`, `time.sleep`, `SessionDir`, and `SIGKILL`/`pkill`.
-- `plugin/scripts/python/native_audio_sink.py`: Verify implementation of `NativeAudioSink` using blocking `subprocess.run` / `Popen`.
-- `plugin/scripts/python/speak.py`: Verify thin client socket forwarder.
-
-### Invalidation Conditions
-- If MLX model loading fails when called from within the `_tts_worker` thread.
-- If `subprocess.run(["mpv", "--really-quiet", ...])` leaves zombie processes or fails to block until audio completion.
+1. **Verify Baseline Test Suite**:
+   ```bash
+   bash tests/run_all.sh
+   ```
+   *Expected outcome*: 49 suites pass cleanly with 0 failures.
+2. **Verify Control Subsystem Exit Code Contract**:
+   ```bash
+   .venv/bin/python tests/test_replay_control.py
+   ```
+   *Expected outcome*: All tests pass, confirming exit code 2 for absent session.
+3. **Verify Portability & Symlink Invariants**:
+   ```bash
+   bash tests/test_install_plugin.sh
+   ```
+   *Expected outcome*: 10/10 tests pass, confirming no hardcoded absolute paths.
+4. **Verify User PATH & Local Bin**:
+   ```bash
+   ls -la ~/.local/bin
+   ```
+   *Expected outcome*: Confirms `~/.local/bin` exists and contains user developer tools.

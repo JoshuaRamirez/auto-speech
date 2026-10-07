@@ -1,47 +1,48 @@
-# BRIEFING — 2026-10-03T18:43:30Z
+# BRIEFING — 2026-10-06T22:11:00Z
 
 ## Mission
-Investigate UNIX domain socket server integration into narrator_service.py on /tmp/auto-speech-daemon.sock, stale cleanup, unlinking on exit, and enqueueing to _tts_queue.
+Formulate concrete implementation strategy for autoplay_turn and narrate_event MCP tools in plugin/scripts/python/mcp_server.py for Milestone M2.
 
 ## 🔒 My Identity
 - Archetype: explorer
 - Roles: explorer, synthesizer
 - Working directory: /Users/joshua/Developer/auto-speech/.agents/teamwork/explorer_m2_1
-- Original parent: c05df6b8-cecd-49ba-9fb8-8fa47f977488
-- Milestone: M2 (Daemon Socket Server Specialist)
+- Original parent: 4db9af0e-498d-49a5-831a-0009fd31326e
+- Milestone: M2
 
 ## 🔒 Key Constraints
 - Read-only investigation — do NOT implement
-- Write only to your folder (/Users/joshua/Developer/auto-speech/.agents/teamwork/explorer_m2_1/)
-- Never place source code, tests, or data files in .agents/teamwork/
-- .agents/teamwork/ must contain only metadata
+- Write only to /Users/joshua/Developer/auto-speech/.agents/teamwork/explorer_m2_1/
+- Standard-library-only for mcp_server.py
+- Deliver concrete, detailed implementation strategy for autoplay_turn and narrate_event tools
 
 ## Current Parent
-- Conversation ID: c05df6b8-cecd-49ba-9fb8-8fa47f977488
+- Conversation ID: 4db9af0e-498d-49a5-831a-0009fd31326e
 - Updated: not yet
 
 ## Investigation State
-- **Explored paths**: DISPATCH.md, ORIGINAL_REQUEST.md, PROJECT.md, plugin/scripts/python/narrator_service.py, tests/test_narrator_service.py, tests/e2e/harness.py, tests/e2e/test_tier1_features.py, tests/e2e/test_tier2_boundaries.py, tests/e2e/test_tier3_combinations.py, tests/e2e/test_tier4_scenarios.py, tests/e2e/test_unified_daemon_e2e.py, shell start/stop scripts.
+- **Explored paths**:
+  * `plugin/scripts/python/mcp_server.py`: examined JSON-RPC transport, dispatch loop, existing `speak` tool.
+  * `tests/test_mcp_server.py`: examined mock server setup and assertion patterns.
+  * `plugin/scripts/python/autoplay_worker.py`: inspected transcript extraction, SHA-256 hash calculation, prompt resolution, `ClaudeCliRewriter` invocation, and daemon dispatch.
+  * `plugin/scripts/python/transcript_locator.py` & `message_selector.py`: verified Claude Code & Antigravity turn extraction mechanics.
+  * `plugin/scripts/python/daemon_client.py`: confirmed priority tiers (`Priority.AUTOPLAY`, `Priority.TOOL_NARRATION`), `ensure_daemon_running()`, `speak()`.
+  * `plugin/scripts/shell/narrator_hook.sh` & `narrator_service.py`: verified per-session marker path (`~/.claude/auto-speech-narrate-sessions/<session_id>`) and `/tmp/auto-speech-narrator-events.jsonl` record schema.
+  * `auto-speech-worktree`: verified worktree test suite passes (50/50 tests green).
 - **Key findings**:
-  1. Server class MUST be `socketserver.ThreadingUnixStreamServer` with `daemon_threads = True` to support 10 concurrent clients (Tier 3) without blocking accept loop or hanging process shutdown.
-  2. Socket path defaults to `/tmp/auto-speech-daemon.sock`, configurable via `AUTO_SPEECH_DAEMON_SOCK` env var and constructor arg `socket_path`.
-  3. Safe unlinking before binding is mandatory to avoid `EADDRINUSE` after crashes or stale files (`path.unlink(missing_ok=True)`).
-  4. Clean unlinking occurs during shutdown in `NarratorService.run()` `finally:` block (and `atexit` fallback) before `_tts_worker` is terminated.
-  5. Chunked stream reading loop until EOF (`b""`), UTF-8 decode with `errors="replace"`, whitespace stripping, and drop-oldest enqueueing into `_tts_queue` using `_queue_lock`.
-  6. Incoming requests update `_last_event_ts = time.time()` to prevent premature idle shutdown.
-  7. Defensive `getattr(self, "_queue_lock", None)` preserves 100% compatibility with unit tests using `_bare_service`.
-- **Unexplored areas**: None. Investigation complete and fully documented.
+  * `autoplay_turn` requires SHA-256 computation over the *raw* turn text prior to rewriting, matching RFC §4.2 and `compute_hash.sh`.
+  * `narrate_event` requires clean notice return (`isError=False`) when session is unenrolled, preventing swarm aborts on unconfigured sessions.
+  * All collaborators are 100% standard-library-compliant. Injectable collaborators in `McpServer.__init__` allow comprehensive unit tests without external side-effects.
+- **Unexplored areas**: None; technical analysis and specification complete in `analysis.md`.
 
 ## Key Decisions Made
-- Specified `ThreadingUnixStreamServer` over `UnixStreamServer`.
-- Established 3-tier path resolution (constructor > env var > default).
-- Defined precise shutdown order (stop socket server -> drain queue -> join worker -> unlink pid -> transition state).
-- Designed drop-oldest queue concurrency lock compatible with uninitialized test instances.
-- Completed technical analysis report in `analysis.md` and 5-component handoff in `handoff.md`.
+- Specified exact input schemas for `autoplay_turn` and `narrate_event`.
+- Specified error handling semantics: global mute produces `isError=True`; unenrolled session for `narrate_event` produces `isError=False` with clean notice.
+- Formulated injectable collaborator pattern for `McpServer` to guarantee 100% hermetic unit testing.
 
 ## Artifact Index
-- DISPATCH.md — Task assignment and instructions
-- BRIEFING.md — Persistent situational awareness and state
-- progress.md — Liveness heartbeat and milestone tracking
-- analysis.md — Detailed technical investigation and implementation blueprint
-- handoff.md — 5-component handoff report for implementer
+- DISPATCH.md — Incoming dispatch message record
+- BRIEFING.md — Situational awareness and working memory
+- progress.md — Liveness heartbeat
+- analysis.md — Comprehensive technical analysis and specification
+- handoff.md — 5-component handoff report

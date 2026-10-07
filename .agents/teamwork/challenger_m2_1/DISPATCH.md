@@ -1,31 +1,23 @@
-# Task Assignment: Challenger M2.1
+## 2026-10-06T22:24:15Z
 
-You are challenger_m2_1 (teamwork_preview_challenger).
-Your working directory: /Users/joshua/Developer/auto-speech/.agents/teamwork/challenger_m2_1
-Project root: /Users/joshua/Developer/auto-speech
-Original request: /Users/joshua/Developer/auto-speech/.agents/teamwork/ORIGINAL_REQUEST.md
-Project specification: /Users/joshua/Developer/auto-speech/PROJECT.md
-Worker handoff: /Users/joshua/Developer/auto-speech/.agents/teamwork/worker_m2/handoff.md
+You are teamwork_preview_challenger (challenger_m2_1).
+Your dedicated working directory is: /Users/joshua/Developer/auto-speech/.agents/teamwork/challenger_m2_1
 
-## Objective
-Read ORIGINAL_REQUEST.md, PROJECT.md, and worker_m2 handoff.
-Empirically stress-test the socket IPC implementation (`plugin/scripts/python/speak.py` and `narrator_service.py` socket server):
-1. Stress test high concurrency: spawn 50+ concurrent client connections sending text simultaneously. Verify all valid text is enqueued, no deadlocks occur, and all client sockets close cleanly.
-2. Stress test boundary payloads: send 256KB+ large multiline text, complex Unicode/emojis, empty payloads, and whitespace-only payloads.
-3. Stress test abrupt disconnections: simulate client closing connection mid-transmission (`SO_LINGER 0`). Verify server does not crash or leak threads/sockets.
-4. Measure latency: verify client transmission and return takes < 20ms for typical utterances.
+MANDATORY FIRST STEP: Read the user request verbatim in:
+/Users/joshua/Developer/auto-speech/.agents/teamwork/ORIGINAL_REQUEST.md (under header `## 2026-10-06T20:47:50Z`).
+Also read:
+/Users/joshua/Developer/auto-speech/PROJECT.md.
 
-Output:
-Write your stress-test report to `/Users/joshua/Developer/auto-speech/.agents/teamwork/challenger_m2_1/handoff.md` with explicit verdict `APPROVE` or `REJECT`. Send a message when done.
+Scope: Adversarially challenge the `autoplay_turn` and `narrate_event` MCP tools in `/Users/joshua/Developer/auto-speech-worktree`.
+Conduct empirical stress tests against `plugin/scripts/python/mcp_server.py` (via stdio JSON-RPC or direct Python harness):
+1. `autoplay_turn` when transcript does not exist -> verify returns tool error (`isError: True`) with clear message.
+2. `autoplay_turn` with non-existent session_id -> verify returns tool error gracefully.
+3. `autoplay_turn` with global mute enabled (`~/.claude/auto-speech.disabled` in isolated home) -> verify returns tool error suppressing synthesis.
+4. `autoplay_turn` with `mode="raw"` and `bypass_llm=True` -> verify rewriter is not called.
+5. `narrate_event` when session is unenrolled -> verify returns clean notice without error (`isError: False`).
+6. `narrate_event` missing `event` parameter -> verify returns protocol error code -32602.
+7. `narrate_event` with malformed payload (non-dict or empty) -> verify defensive handling without crashing.
 
-## 2026-10-03T18:56:03Z
-You are challenger_m2_1.
-Your working directory: /Users/joshua/Developer/auto-speech/.agents/teamwork/challenger_m2_1
-Project root: /Users/joshua/Developer/auto-speech
-Original request: /Users/joshua/Developer/auto-speech/.agents/teamwork/ORIGINAL_REQUEST.md
-Project specification: /Users/joshua/Developer/auto-speech/PROJECT.md
-Worker handoff: /Users/joshua/Developer/auto-speech/.agents/teamwork/worker_m2/handoff.md
-
-Read ORIGINAL_REQUEST.md and PROJECT.md first. Read your task assignment in /Users/joshua/Developer/auto-speech/.agents/teamwork/challenger_m2_1/DISPATCH.md.
-Empirically stress-test socket IPC: test 50+ concurrent clients, large multiline payloads (256KB+), Unicode/emojis, abrupt socket disconnects, and latency measurement (<20ms).
-Deliver your report to handoff.md with APPROVE or REJECT. Send a message when done.
+Document all inputs, JSON-RPC requests/responses, and findings in:
+/Users/joshua/Developer/auto-speech/.agents/teamwork/challenger_m2_1/handoff.md
+Clearly state your verdict: APPROVE or REQUEST_CHANGES. Send a completion message when finished.

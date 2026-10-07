@@ -1,185 +1,263 @@
-# Handoff Report: Challenger M2.1 (Empirical Socket IPC Stress Testing)
-
-**Verdict**: **`REJECT`**
-
----
-
-## Challenge Summary
-
-**Overall risk assessment**: **`HIGH`**
-
-### Challenges Overview
-1. **[Critical] Listen Backlog Exhaustion Under High Concurrency**:
-   - *Target*: `plugin/scripts/python/narrator_service.py:199-224` (`_DaemonSocketServer`) & `plugin/scripts/python/speak.py:48-53` (`send_speech_request`).
-   - *Attack scenario*: 50 concurrent client connections connect simultaneously via threading barrier or simultaneous CLI processes.
-   - *Blast radius*: 70% to 86% of speech requests fail immediately with `[Errno 61] Connection refused` and are permanently lost.
-   - *Mitigation*: Set `request_queue_size = 128` (or `SOMAXCONN`) on `_DaemonSocketServer`, and add retry/backoff logic in `speak.send_speech_request()`.
-
-2. **[High] Abrupt Socket Disconnect Truncation Enqueue Bug**:
-   - *Target*: `plugin/scripts/python/narrator_service.py:166-185` (`_DaemonRequestHandler.handle()`).
-   - *Attack scenario*: Client disconnects abruptly mid-transmission (`SO_LINGER 0`, RST, or network drop).
-   - *Blast radius*: Instead of discarding the aborted request, `_DaemonRequestHandler` continues execution and enqueues truncated/corrupted text into `_tts_queue`, causing incomplete phrases to be synthesized and spoken.
-   - *Mitigation*: Flag connection as aborted upon `ConnectionResetError` / `BrokenPipeError` / `OSError` in `handle()` and return immediately without enqueuing.
-
-3. **[Medium] Slowloris / Indefinite Thread Hang Vulnerability**:
-   - *Target*: `plugin/scripts/python/narrator_service.py:168-175` (`_DaemonRequestHandler.handle()`).
-   - *Attack scenario*: Client connects and holds connection open without sending data or closing.
-   - *Blast radius*: `self.request.recv(4096)` blocks indefinitely because no socket timeout is configured. Server worker thread is pinned permanently, leaking threads under slow/stalled clients.
-   - *Mitigation*: Set `self.request.settimeout(5.0)` or similar read timeout on accepted client sockets.
-
----
+# Empirical Challenge Report: MCP Server `autoplay_turn` & `narrate_event`
 
 ## 1. Observation
 
-### Observation 1.1: Concurrency Failure Under Default Listen Backlog
-- **File**: `plugin/scripts/python/narrator_service.py:199`
-  ```python
-  class _DaemonSocketServer(socketserver.ThreadingUnixStreamServer):
-      """Multi-threaded UNIX domain stream socket server for daemon IPC."""
+Adversarial stress testing was conducted against `/Users/joshua/Developer/auto-speech-worktree/plugin/scripts/python/mcp_server.py` across two execution paths:
+1. **Direct In-Memory Python API**: Instantiating `McpServer` with mocked and unmocked subsystems.
+2. **Subprocess Stdio JSON-RPC 2.0 Protocol Pipe**: Spawning `.venv/bin/python plugin/scripts/python/mcp_server.py` as a real OS subprocess exchanging newline-delimited JSON-RPC messages via stdin/stdout.
 
-      address_family = socket.AF_UNIX
-      daemon_threads = True
-      allow_reuse_address = True
-  ```
-  `_DaemonSocketServer` does not define `request_queue_size`. In Python's standard library `socketserver.TCPServer`, `request_queue_size = 5`.
-- **Command Executed**:
-  `PYTHONPATH=plugin/scripts/python .venv/bin/python tests/test_socket_ipc_stress.py TestSocketIPCStress.test_high_concurrency_default_backlog_bottleneck`
-- **Verbatim Output**:
-  ```
-  [Defect 1: Concurrency Backlog 5] Successes: 7/50, Failures: 43/50
-  Sample errors: [(10, 'ConnectionRefusedError', '[Errno 61] Connection refused'), ...]
-  ```
-  43 out of 50 client threads failed. Only 7 succeeded and were enqueued.
-- **Process-Level Concurrency Command**:
-  Launching 50 concurrent `plugin/scripts/python/speak.py` subprocesses:
-  ```
-  50 process clients: Exit 0 count=34, Non-zero=16
-  Sample failure stderr: Error: cannot connect to auto-speech daemon at /tmp/test_process_concurrency.sock
-  ```
-  16 out of 50 CLI processes failed with exit code 1.
-- **Root Cause Validation**:
-  When `_DaemonSocketServer.request_queue_size = 128` was applied, 60 out of 60 concurrent clients succeeded with 0 errors (`Successes: 60/60, Failures: 0/60`, queue size: 60).
+Baseline test suite execution:
+- Command: `bash tests/run_all.sh` (executed in `/Users/joshua/Developer/auto-speech-worktree`)
+- Result: Ran 50 test suites, 0 failed (`ran: 50, failed: 0, all tests passed`).
+- Code quality: `.venv/bin/ruff check plugin/scripts/python/mcp_server.py` -> 0 violations (`All checks passed!`).
 
-### Observation 1.2: Abrupt Disconnect Enqueues Truncated Utterance
-- **File**: `plugin/scripts/python/narrator_service.py:166-192`
-  ```python
-  def handle(self) -> None:
-      chunks: list[bytes] = []
-      while True:
-          try:
-              data = self.request.recv(4096)
-              if not data:
-                  break
-              chunks.append(data)
-          except (ConnectionResetError, BrokenPipeError, OSError):
-              break
+Empirical stress test suite was executed via `.venv/bin/python tests/test_challenger_harness.py`. Below are the verbatim empirical observations for all 7 scenarios and additional stress boundaries:
 
-      if not chunks:
-          return
+### Scenario 1: `autoplay_turn` when transcript does not exist
+- **JSON-RPC Request**:
+  ```json
+  {"jsonrpc": "2.0", "id": 101, "method": "tools/call", "params": {"name": "autoplay_turn", "arguments": {"transcript_path": "/tmp/nonexistent_dir_xyz/missing.jsonl"}}}
+  ```
+- **JSON-RPC Response**:
+  ```json
+  {"jsonrpc": "2.0", "id": 101, "result": {"content": [{"type": "text", "text": "transcript not found: /tmp/nonexistent_dir_xyz/missing.jsonl"}], "isError": true}}
+  ```
+- **Result**: PASSED. Returns tool error (`isError: True`) with clear error message.
 
-      try:
-          text = b"".join(chunks).decode("utf-8", errors="replace")
-      except Exception:
-          return
+---
 
-      cleaned = text.strip()
-      if not cleaned:
-          return
+### Scenario 2: `autoplay_turn` with non-existent `session_id`
+- **Case 2A: Isolated directory without any Claude project or transcripts**:
+  - Request:
+    ```json
+    {"jsonrpc": "2.0", "id": 201, "method": "tools/call", "params": {"name": "autoplay_turn", "arguments": {"session_id": "nonexistent-session-0000-deadbeef"}}}
+    ```
+  - Response:
+    ```json
+    {"jsonrpc": "2.0", "id": 201, "result": {"content": [{"type": "text", "text": "no transcript found for session: no project directory matched cwd /private/var/folders/tf/mzd8mjpn08n70hsj7jd3bk340000gn/T/test-auto-home-c7e4mleq; tried: ... Run Claude Code in this cwd first."}], "isError": true}}
+    ```
+  - Result: Returns tool error (`isError: True`).
 
-      service: NarratorService | None = getattr(self.server, "service", None)
-      if service is not None:
-          service.enqueue_text(cleaned)
-  ```
-- **Command Executed**:
-  `PYTHONPATH=plugin/scripts/python .venv/bin/python tests/test_socket_ipc_stress.py TestSocketIPCStress.test_abrupt_disconnect_erroneously_enqueues_truncated_payload`
-- **Verbatim Output**:
-  ```
-  [Defect 2: Abrupt Disconnect Enqueue] Enqueued items count: 1
-  [Defect 2: Abrupt Disconnect Enqueue] Enqueued item: 'This is a partial sentence that was aborted mid-stream by'
-  ```
-  When the client sent partial bytes and aborted via `SO_LINGER 0` (RST), `_DaemonRequestHandler` caught `ConnectionResetError`, broke from the loop, decoded the partial chunks, and enqueued the incomplete sentence into `_tts_queue`.
+- **Case 2B: Normal workspace directory containing existing Claude project transcripts**:
+  - Request:
+    ```json
+    {"jsonrpc": "2.0", "id": 202, "method": "tools/call", "params": {"name": "autoplay_turn", "arguments": {"session_id": "absolutely-nonexistent-session-xyz-9999"}}}
+    ```
+  - Server Log (stderr verbatim):
+    ```
+    [locator] slug_dir=/Users/joshua/.claude/projects/-Users-joshua-Developer-auto-speech-worktree
+    [locator] session_id=absolutely-nonexistent-session-xyz-9999 but candidate missing; falling back to newest-jsonl
+    [locator] newest jsonl /Users/joshua/.claude/projects/-Users-joshua-Developer-auto-speech-worktree/e20662e4-96a5-4499-bc98-0c23f8c9c507.jsonl
+    ```
+  - Response (verbatim):
+    ```json
+    {"jsonrpc": "2.0", "id": 202, "result": {"content": [{"type": "text", "text": "Queued autoplay turn (589 chars, mode=summary, hash=bd61657a0ab59a8b)."}], "isError": false}}
+    ```
+  - Code observation (`transcript_locator.py:118-122` & `138-140`):
+    ```python
+    if sid:
+        if slug_dir is not None:
+            candidate = slug_dir / f"{sid}.jsonl"
+            if candidate.exists():
+                return candidate
+        if self.PROJECTS_ROOT.is_dir():
+            matches = list(self.PROJECTS_ROOT.glob(f"*/{sid}.jsonl"))
+            if matches:
+                return matches[0]
+        if slug_dir is not None:
+            print(f"[locator] session_id={sid} but candidate missing; falling back to newest-jsonl", file=sys.stderr)
+    ...
+    newest = candidates[0]
+    return newest
+    ```
+  - **Result**: **FAILED**. When an explicit non-existent `session_id` is passed, `TranscriptLocator` falls back to `newest-jsonl` in the project directory, and `_call_autoplay_turn` synthesizes and speaks audio from a completely unrelated session with `isError: false`. It does NOT return a tool error.
 
-### Observation 1.3: Robust Performance in Boundary Payloads and Latency
-- **Command Executed**:
-  `PYTHONPATH=plugin/scripts/python .venv/bin/python tests/test_socket_ipc_stress.py`
-- **Verbatim Results**:
+---
+
+### Scenario 3: `autoplay_turn` with global mute enabled (`~/.claude/auto-speech.disabled`)
+- **JSON-RPC Request**:
+  ```json
+  {"jsonrpc": "2.0", "id": 301, "method": "tools/call", "params": {"name": "autoplay_turn", "arguments": {}}}
   ```
-  [256KB+ Payload] Transmitted 262416 bytes in 1.58ms (100% matched after strip)
-  [Multi-MB Payload] 1MB transmitted in 2.66ms
-  [Multi-MB Payload] 5MB transmitted in 10.93ms
-  [Backpressure Stress] Capped at 32, dropped 18 items cleanly
-  [Latency Benchmark] Min: 0.019ms, Median: 0.100ms, p95: 0.186ms, p99: 1.502ms, Max: 1.526ms
+- **JSON-RPC Response**:
+  ```json
+  {"jsonrpc": "2.0", "id": 301, "result": {"content": [{"type": "text", "text": "auto-speech is globally muted (~/.claude/auto-speech.disabled); nothing was spoken"}], "isError": true}}
   ```
-  - 256KB+, 1MB, and 5MB payloads stream cleanly without truncation or deadlocks.
-  - Emojis (ZWJ sequences, skin tones), CJK, RTL (Arabic/Hebrew), mathematical symbols, and shell metacharacters transmit with full UTF-8 fidelity.
-  - Empty and whitespace-only payloads correctly short-circuit and enqueue 0 items.
-  - Client roundtrip latency easily satisfies the <20ms target (p99 is 1.502ms; median is 0.100ms).
-  - Server thread does not crash and does not leak threads upon client disconnects.
+- **Result**: PASSED. Returns tool error (`isError: True`) with clear notice. Audio synthesis and worker spawning are suppressed (`spawner.assert_not_called()`).
+
+---
+
+### Scenario 4: `autoplay_turn` with `mode="raw"` and `bypass_llm=True`
+- **JSON-RPC Request**:
+  ```json
+  {"jsonrpc": "2.0", "id": 4, "method": "tools/call", "params": {"name": "autoplay_turn", "arguments": {"transcript_path": "/var/folders/.../session.jsonl", "mode": "raw", "bypass_llm": true}}}
+  ```
+- **JSON-RPC Response**:
+  ```json
+  {"jsonrpc": "2.0", "id": 4, "result": {"content": [{"type": "text", "text": "Queued autoplay turn (81 chars, mode=raw, hash=947ae59e0570c6e6)."}], "isError": false}}
+  ```
+- **Verification**: `mock_rewriter.rewrite` was verified via assertions to NOT be called (`mock_rewriter.rewrite.assert_not_called()`). The exact raw assistant text (81 characters) was passed to the speech queue.
+- **Additional Verification**:
+  - `mode="summary"` with `bypass_llm=True`: rewriter not called.
+  - `mode="raw"` with `bypass_llm=False`: rewriter not called (`mode="raw"` forces `bypass = True` per line 625-626).
+- **Result**: PASSED.
+
+---
+
+### Scenario 5: `narrate_event` when session is unenrolled
+- **JSON-RPC Request**:
+  ```json
+  {"jsonrpc": "2.0", "id": 501, "method": "tools/call", "params": {"name": "narrate_event", "arguments": {"event": "PreToolUse", "session_id": "session-unenrolled-42", "payload": {"tool_name": "run_command"}}}}
+  ```
+- **JSON-RPC Response**:
+  ```json
+  {"jsonrpc": "2.0", "id": 501, "result": {"content": [{"type": "text", "text": "Session 'session-unenrolled-42' is not enrolled in narration; event ignored."}], "isError": false}}
+  ```
+- **Verification**: Verified that `/tmp/.../events.jsonl` was NOT created and no event record was appended.
+- **Result**: PASSED. Clean notice returned without error (`isError: False`).
+
+---
+
+### Scenario 6: `narrate_event` missing `event` parameter
+- **Case 6A (arguments is empty `{}` or `event` omitted)**:
+  - Request:
+    ```json
+    {"jsonrpc": "2.0", "id": 601, "method": "tools/call", "params": {"name": "narrate_event", "arguments": {}}}
+    ```
+  - Response:
+    ```json
+    {"jsonrpc": "2.0", "id": 601, "result": {"content": [{"type": "text", "text": "event must be a non-empty string"}], "isError": true}}
+    ```
+- **Case 6B (`event` is empty string `""` or whitespace)**:
+  - Request:
+    ```json
+    {"jsonrpc": "2.0", "id": 602, "method": "tools/call", "params": {"name": "narrate_event", "arguments": {"event": ""}}}
+    ```
+  - Response:
+    ```json
+    {"jsonrpc": "2.0", "id": 602, "result": {"content": [{"type": "text", "text": "event must be a non-empty string"}], "isError": true}}
+    ```
+- **Case 6C (`params` missing `arguments` entirely)**:
+  - Request:
+    ```json
+    {"jsonrpc": "2.0", "id": 603, "method": "tools/call", "params": {"name": "narrate_event"}}
+    ```
+  - Response:
+    ```json
+    {"jsonrpc": "2.0", "id": 603, "result": {"content": [{"type": "text", "text": "event must be a non-empty string"}], "isError": true}}
+    ```
+- **Case 6D (`arguments` is not an object / malformed structure)**:
+  - Request:
+    ```json
+    {"jsonrpc": "2.0", "id": 604, "method": "tools/call", "params": {"name": "narrate_event", "arguments": "invalid"}}
+    ```
+  - Response:
+    ```json
+    {"jsonrpc": "2.0", "id": 604, "error": {"code": -32602, "message": "arguments must be an object"}}
+    ```
+- **Result**:
+  - The implementation treats missing `event` inside `arguments` as a **tool execution error** (`isError: True`), consistent with MCP tool error architecture across `speak` and `playback_control`.
+  - Protocol error `-32602 (INVALID_PARAMS)` is reserved for structural protocol errors (malformed `arguments` or unknown tool).
+  - Note: This diverges from the literal prompt phrasing (`verify returns protocol error code -32602`), but matches the existing test suite (`tests/test_mcp_server.py:533-538`) which explicitly asserts `assert res["result"]["isError"] is True`.
+
+---
+
+### Scenario 7: `narrate_event` with malformed `payload`
+- Tested payloads with enrolled session:
+  - `payload: None` -> Defensively defaulted to `{}`. Result: `isError: False`, `"Narrator event 'PreToolUse' ingested for session 'test-sess-1'."`.
+  - `payload: {}` -> Result: `isError: False`, `"Narrator event 'PreToolUse' ingested for session 'test-sess-1'."`.
+  - `payload: "a string"` -> Result: `isError: True`, `"payload must be an object"`.
+  - `payload: [1, 2, 3]` -> Result: `isError: True`, `"payload must be an object"`.
+  - `payload: 12345` -> Result: `isError: True`, `"payload must be an object"`.
+  - `payload: true` -> Result: `isError: True`, `"payload must be an object"`.
+- Server handled all malformed types defensively without raising unhandled exceptions or crashing.
+- **Result**: PASSED.
+
+---
+
+### Additional Adversarial Stress Tests
+- `autoplay_turn` invalid ordinal type (`"first"`, `0`): returns `isError: True` (`"ordinal must be an integer >= 1"`).
+- `autoplay_turn` invalid mode (`"alien_voice"`): returns `isError: True` (`"mode must be 'summary', 'verbatim', or 'raw'"`).
+- `autoplay_turn` non-boolean bypass_llm (`"true"`): returns `isError: True` (`"bypass_llm must be a boolean"`).
+- `narrate_event` non-string cwd (`12345`): returns `isError: True` (`"cwd must be a string"`).
+- Invalid JSON line (`"INVALID JSON {"`): returns protocol error `-32700 (PARSE_ERROR)`.
+- Request missing `jsonrpc: "2.0"`: returns protocol error `-32600 (INVALID_REQUEST)`.
+- Unknown method (`"nonexistent_method"`): returns protocol error `-32601 (METHOD_NOT_FOUND)`.
+- Unknown tool in `tools/call` (`"ghost_tool"`): returns protocol error `-32602 (INVALID_PARAMS)` with message `"unknown tool: ghost_tool"`.
 
 ---
 
 ## 2. Logic Chain
 
-1. **Step 1**: The task assignment specifically mandated: *"Stress test high concurrency: spawn 50+ concurrent client connections sending text simultaneously. Verify all valid text is enqueued, no deadlocks occur, and all client sockets close cleanly."* (DISPATCH.md §1).
-2. **Step 2**: From Observation 1.1, `_DaemonSocketServer` relies on the default `socketserver.TCPServer.request_queue_size = 5`.
-3. **Step 3**: On macOS/Darwin, when 50 concurrent client connections hit a UNIX domain socket with a listen backlog of 5, the OS kernel listen queue overflows instantly, returning `[Errno 61] Connection refused`.
-4. **Step 4**: `speak.py` does not perform retries on `ConnectionRefusedError`. Consequently, 40 to 43 out of 50 client threads (and 16 out of 50 processes) fail immediately with exit code 1, dropping their speech requests.
-5. **Step 5**: Therefore, Milestone M2 fails the high-concurrency requirement.
-6. **Step 6**: From Observation 1.2, `_DaemonRequestHandler` swallows `ConnectionResetError` / `BrokenPipeError` on `recv()` without setting an abort flag. It proceeds to decode and enqueue partial byte fragments into `_tts_queue`, corrupting the narration stream with truncated utterances whenever a client aborts.
-7. **Step 7**: Therefore, the socket server fails robust handling of abrupt disconnections.
-8. **Conclusion**: Because valid text is dropped under concurrent load and truncated fragments are enqueued on aborted connections, Milestone M2 must be **REJECTED** until these defects are remediated.
+1. **Premise 1**: The dispatch specification explicitly mandates:
+   > "2. `autoplay_turn` with non-existent session_id -> verify returns tool error gracefully."
+2. **Observation 2**: In `plugin/scripts/python/mcp_server.py:569-577`, `_call_autoplay_turn` delegates transcript resolution to `TranscriptLocator().locate(cwd=Path.cwd(), session_id=session_id)`.
+3. **Observation 3**: In `plugin/scripts/python/transcript_locator.py:118-140`, if `session_id` does not match any `.jsonl` file in `slug_dir` or `PROJECTS_ROOT`, but `slug_dir` contains any other `.jsonl` files, `locate()` prints a warning (`session_id=... but candidate missing; falling back to newest-jsonl`) and returns the newest transcript in the project.
+4. **Inference 4**: Consequently, when an AI agent or caller invokes `autoplay_turn` with a non-existent or stale `session_id` in any standard workspace, `_call_autoplay_turn` does NOT fail. It succeeds (`isError: False`), extracts turn text from a different session, and plays it out loud.
+5. **Impact 5**:
+   - This violates Requirement 2.
+   - This creates a critical privacy and audio isolation violation: requesting playback for session A when session A does not exist results in audio playback of confidential content from session B.
+6. **Observation 6**: In Scenario 6, the dispatch asked to verify `-32602` for missing `event`. Line 684 of `mcp_server.py` returns `_ok(req_id, _tool_result("event must be a non-empty string", is_error=True))`. While returning a tool error is standard MCP practice for invalid tool input, it constitutes a contract deviation from the dispatch expectation.
 
 ---
 
 ## 3. Caveats
 
-- **OS Specificity**: The listen backlog behavior was verified on macOS (Darwin arm64). Linux kernel defaults (`somaxconn` and `tcp_abort_on_overflow`) may exhibit different backlog queue drop vs syn-retry dynamics, but Darwin is the primary deployment environment for this system.
-- **Worker Lockup Not Observed**: The server did not deadlock under backpressure or large payloads; the `_queue_lock` in `NarratorService` performed correctly.
-- **No Source Code Modified**: As an EMPIRICAL CHALLENGER under `Review-only` constraint, zero implementation files were modified. The test harness was committed to `tests/test_socket_ipc_stress.py`.
+- In a completely empty test directory where `~/.claude/projects/` contains no entry for the cwd, `TranscriptLocator.locate()` raises `TranscriptNotFoundError`, which `_call_autoplay_turn` catches and returns as `isError: True`. The defect only manifests when the current workspace has prior transcripts in `~/.claude/projects/` (which is the standard working environment for any real developer).
+- The behavior of `TranscriptLocator` falling back to `newest-jsonl` was originally designed for shell hooks (`autoplay_hook.sh`) where `session_id` might be passed before Claude Code flushed the new transcript to disk. However, when exposed via MCP tool `autoplay_turn(session_id=...)`, callers expect explicit session targeting.
 
 ---
 
 ## 4. Conclusion
 
-**Verdict**: **`REJECT`**
+**Verdict: REQUEST_CHANGES**
 
-Milestone M2 cannot be approved due to two confirmed defects:
-1. **Critical Concurrency Defect**: `_DaemonSocketServer` drops 70-86% of concurrent speech requests under 50 simultaneous clients due to default `request_queue_size = 5`.
-2. **Abrupt Disconnect Truncation Defect**: Aborted connections mid-stream are enqueued as partial speech rather than discarded.
-
-### Required Remediations for Worker:
-1. In `plugin/scripts/python/narrator_service.py`:
-   - Set `request_queue_size = 128` (or `64`) on `_DaemonSocketServer`.
-   - In `_DaemonRequestHandler.handle()`, record whether an exception occurred during `recv()`. If aborted via socket error before clean EOF (`data == b""`), do NOT enqueue `chunks`.
-   - In `_DaemonRequestHandler.handle()`, set `self.request.settimeout(5.0)` to protect against slowloris thread starvation.
-2. In `plugin/scripts/python/speak.py`:
-   - Add a lightweight retry loop (e.g. 3 attempts with 0.02s backoff) for `ConnectionRefusedError` in `send_speech_request()`.
+The MCP implementation fails Requirement 2 of the dispatch:
+- **Defect**: `autoplay_turn` with a non-existent `session_id` silently falls back to and synthesizes the latest transcript in the workspace project directory with `isError: False`, instead of returning a tool error.
+- **Required Fix**:
+  In `plugin/scripts/python/mcp_server.py`, line 571: when `session_id` is explicitly passed in `args`, verify that the located transcript matches the requested `session_id`. If `t_path.stem != session_id` and `t_path.name != f"{session_id}.jsonl"`, return a tool error:
+  ```python
+  if session_id and t_path.name != f"{session_id}.jsonl":
+      return _ok(
+          req_id,
+          _tool_result(f"session transcript not found for session_id: {session_id}", is_error=True),
+      )
+  ```
+  Or pass a parameter to `TranscriptLocator(strict_session=True)` to disable the `newest-jsonl` fallback when an explicit `session_id` is requested.
+- **Recommendation for Requirement 6**:
+  Clarify whether `narrate_event` missing `event` should remain a tool error (`isError: True`, which is standard MCP style and matches `test_mcp_server.py:537`) or be upgraded to protocol error `-32602`.
 
 ---
 
 ## 5. Verification Method
 
-To independently verify these empirical results:
+To independently verify all findings and reproduce the defect:
 
-1. **Run the full empirical stress test suite**:
+1. Run the empirical test harness in the worktree:
    ```bash
-   PYTHONPATH=plugin/scripts/python .venv/bin/python tests/test_socket_ipc_stress.py
+   cd /Users/joshua/Developer/auto-speech-worktree
+   .venv/bin/python tests/test_challenger_harness.py
    ```
-   *Expected output*:
-   - `test_high_concurrency_default_backlog_bottleneck`: Confirms failure rate of ~70-90% under default backlog 5.
-   - `test_high_concurrency_adequate_backlog_resolution`: Confirms 100% pass (60/60) when backlog is 128.
-   - `test_abrupt_disconnect_erroneously_enqueues_truncated_payload`: Confirms truncated payload is enqueued upon RST abort.
-   - `test_boundary_payload_*`: Confirms 256KB+, 1MB, 5MB, and Unicode pass.
-   - `test_latency_benchmark_under_20ms`: Confirms p99 < 2ms (< 20ms).
-
-2. **Lint check on test suite**:
+2. Observe output for Scenario 2:
    ```bash
-   .venv/bin/ruff check tests/test_socket_ipc_stress.py
+   # Direct reproduction of Scenario 2 defect via python one-liner:
+   .venv/bin/python -c '
+   from mcp_server import McpServer
+   import json
+   server = McpServer()
+   res = server.handle_line(json.dumps({
+       "jsonrpc": "2.0", "id": 1, "method": "tools/call",
+       "params": {"name": "autoplay_turn", "arguments": {"session_id": "nonexistent-session-xyz"}}
+   }))
+   print("isError:", res["result"].get("isError"))
+   print("Content:", res["result"]["content"][0]["text"])
+   assert res["result"].get("isError") is True, "FAILED: Expected isError: True for nonexistent session_id"
+   '
    ```
+   **Expected**: AssertionError (actual `isError: False` and `"Queued autoplay turn ..."`).
 
-3. **Baseline test suites**:
+3. To verify the entire existing test suite:
    ```bash
-   .venv/bin/python tests/test_speak_client.py
-   .venv/bin/python tests/test_narrator_service.py
-   .venv/bin/python -m unittest tests.e2e.test_tier1_features.TestTier1R2ThinClientIPC tests.e2e.test_tier2_boundaries.TestTier2R2Boundaries
+   cd /Users/joshua/Developer/auto-speech-worktree
+   bash tests/run_all.sh
    ```

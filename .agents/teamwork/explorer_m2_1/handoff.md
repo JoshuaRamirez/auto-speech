@@ -1,183 +1,133 @@
-# Handoff Report: Daemon Socket Server Integration (Milestone M2.1)
+# Handoff Report: Milestone M2 MCP Server Parity (`autoplay_turn` & `narrate_event`)
 
-**Agent**: `explorer_m2_1`  
-**Target Module**: `plugin/scripts/python/narrator_service.py`  
-**Handoff Type**: Hard (Task Complete)  
-**Date**: 2026-10-03  
+**Author**: `explorer_m2_1` (Teamwork Explorer)  
+**Date**: 2026-10-06  
+**Status**: Complete (Hard Handoff)  
+**Analysis Reference**: `/Users/joshua/Developer/auto-speech/.agents/teamwork/explorer_m2_1/analysis.md`
 
 ---
 
 ## 1. Observation
 
-1. **File Locations & Current Baseline**:
-   - `plugin/scripts/python/narrator_service.py` defines `NarratorService` and its worker threads.
-   - Lines 47-51 of `narrator_service.py`:
+1. **Current MCP Server Scope**:
+   In `/Users/joshua/Developer/auto-speech/plugin/scripts/python/mcp_server.py`:
+   - Line 41: Defines single tool schema `SPEAK_TOOL` (`"name": "speak"`).
+   - Lines 102–111: `McpServer.__init__` accepts injectable `spawner`, `gate`, and `client`.
+   - Lines 168–210: `_tools_call` checks `if name != "speak": return _error(req_id, INVALID_PARAMS, f"unknown tool: {name}")`.
+   - Lines 185–193: Checks global mute:
      ```python
-     EVENTS_LOG = Path("/tmp/auto-speech-narrator-events.jsonl")
-     PID_FILE = Path("/tmp/auto-speech-narrator-daemon.pid")
-     LOG_FILE = Path("/tmp/auto-speech-narrator-daemon.log")
-     DEPTH_FILE = Path("/tmp/auto-speech-narration-depth")
-     WATERMARK_FILE = Path("/tmp/auto-speech-narrator-daemon.watermark")
+     if self._gate.worker_gated_off():
+         return _ok(
+             req_id,
+             _tool_result(
+                 "auto-speech is globally muted (~/.claude/auto-speech.disabled); nothing was spoken",
+                 is_error=True,
+             ),
+         )
      ```
-   - Lines 537-538 of `narrator_service.py`:
-     ```python
-     if isinstance(phase, str):
-         self._speak(phase)
-     ```
-     `_tts_worker` already contains branch logic to process and speak plain `str` objects from `_tts_queue` using in-process `ResilientSynthesizer` and `NativeAudioSink`.
-   - Lines 285-289 of `narrator_service.py`:
-     ```python
-     if time.time() - self._last_event_ts > self._idle_shutdown:
-         _log(f"idle for >{self._idle_shutdown}s → shutting down")
-         if self._fsm.can(IDLE_SHUTDOWN):
-             self._fsm.transition(IDLE_SHUTDOWN)
-         return
-     ```
-   - Lines 28-36 of `tests/test_narrator_service.py`:
-     ```python
-     def _bare_service(max_queue: int):
-         svc = narrator_service.NarratorService.__new__(narrator_service.NarratorService)
-         svc._max_queue = max_queue
-         svc._tts_queue = queue.Queue(maxsize=max_queue)
-         svc._dropped_phases = 0
-         return svc
-     ```
-     Existing unit tests instantiate `NarratorService` via `__new__` without calling `__init__`.
 
-2. **Test Baseline Execution**:
-   - `PYTHONPATH=. pytest tests/test_narrator_service.py`:
-     Result: 21 passed in 0.10s.
-   - `PYTHONPATH=. pytest tests/e2e/test_unified_daemon_e2e.py`:
-     Result: 20 passed, 21 failed. All 20 passing tests are R1 (In-Process TTS & NativeAudioSink). The 21 failures correspond to un-implemented R2 (Thin Client IPC via UNIX Sockets) and R3 (Dead Architectural Sprawl).
+2. **Autoplay Turn Processing & Cache Hash Calculation**:
+   In `/Users/joshua/Developer/auto-speech/plugin/scripts/python/autoplay_worker.py`:
+   - Lines 337–346: Resolves transcript via `TranscriptLocator().locate(session_id=...)` and extracts turn via `MessageSelector().select(t_path, 1)`.
+   - Lines 357–370: Computes SHA-256 source hash against raw assistant message bytes:
+     ```python
+     source_bytes = src.encode("utf-8")
+     key_input = source_bytes + b"\x00" + f"{voice_id}:{speed}".encode("utf-8")
+     return 0, hashlib.sha256(key_input).hexdigest()
+     ```
+   - Lines 451–486: If bypass mode is active, speaks `src` directly. Otherwise, executes `ClaudeCliRewriter` and falls back to `src` (raw message) if rewriting fails.
+   - Lines 525–537: Dispatches via `client.speak(text, source_hash=source_hash, session_id=session_id, priority=Priority.AUTOPLAY)`.
 
-3. **Explicit Contract Assertions in Tests**:
-   - `tests/e2e/test_tier1_features.py:268-276`:
+3. **Transcript Resolution & Message Selector**:
+   - In `transcript_locator.py`: `TranscriptLocator().locate(cwd=..., session_id=...)` resolves project slug candidate directories under `~/.claude/projects/` and finds `{session_id}.jsonl` or newest `.jsonl`.
+   - In `message_selector.py` lines 51–82: `MessageSelector.select(path, n)` natively supports both Claude Code format (`record["type"] == "assistant"`) and Antigravity format (`record["type"] == "PLANNER_RESPONSE"`).
+
+4. **Narrator Event Pipeline & Session Enrollment**:
+   - In `plugin/scripts/shell/narrator_hook.sh` line 46: Checks session marker `~/.claude/auto-speech-narrate-sessions/$SESSION_ID`.
+   - In `narrator_hook.sh` lines 87–97: Assembles event record with `ts`, `cwd`, `pid`, `event`, `payload`.
+   - In `narrator_service.py` line 59: Tails `EVENTS_LOG = Path("/tmp/auto-speech-narrator-events.jsonl")`.
+   - In `narrator_service.py` lines 728–734: Enforces per-session marker recheck at runtime:
      ```python
-     self.assertTrue(
-         "socketserver" in content or "socket.AF_UNIX" in content,
-         "R2 Violation: narrator_service.py must include a UNIX domain socket server",
-     )
-     self.assertIn(
-         "auto-speech-daemon.sock",
-         content,
-         "R2 Violation: narrator_service.py must listen on /tmp/auto-speech-daemon.sock",
-     )
+     session_marker = Path.home() / ".claude" / "auto-speech-narrate-sessions" / session_id
+     if not session_marker.exists():
+         continue
      ```
-   - `tests/e2e/test_tier1_features.py:339-342`:
-     ```python
-     self.assertTrue(
-         "unlink" in content or "remove" in content,
-         "narrator_service.py must include cleanup logic for socket file on shutdown",
-     )
-     ```
-   - `tests/e2e/harness.py:140`:
-     ```python
-     self.env["AUTO_SPEECH_DAEMON_SOCK"] = str(self.socket_path)
-     ```
-   - `tests/e2e/test_tier3_combinations.py:140-174` (`test_tier3_multi_client_concurrent_burst`):
-     Runs 10 concurrent clients simultaneously via `ThreadPoolExecutor`, requiring multi-threaded socket request handling.
-   - `tests/e2e/test_tier2_boundaries.py:202-230` (`test_tier2_r2_large_socket_payload_chunking`):
-     Transmits 128 KB text, requiring chunked `recv()` reading in a loop until EOF.
-   - `tests/e2e/test_tier2_boundaries.py:232-270` (`test_tier2_r2_abrupt_client_disconnect`):
-     Closes connection with `SO_LINGER 0`, requiring exception shielding against `BrokenPipeError` / `ConnectionResetError`.
-   - `tests/e2e/test_tier2_boundaries.py:272-288` (`test_tier2_r2_stale_socket_file_cleanup_on_startup`):
-     Pre-existing socket file must be unlinked before binding.
+
+5. **Daemon Liveness & Priority Arbitration**:
+   - In `daemon_client.py` lines 24–30:
+     `Priority.USER_INTERRUPT = 1`, `Priority.EXPLICIT_MCP = 2`, `Priority.AUTOPLAY = 3`, `Priority.TOOL_NARRATION = 4`.
+   - Lines 78–106: `DaemonClient.ensure_daemon_running()` automatically boots `narrator_service_start.sh` if daemon socket is dead.
+
+6. **Current Test Baseline**:
+   - Running `bash tests/run_all.sh` in `/Users/joshua/Developer/auto-speech-worktree`:
+     `ran: 50, failed: 0, all tests passed`.
 
 ---
 
 ## 2. Logic Chain
 
-1. **Server Choice**:
-   - Observation 3 shows that 10 concurrent clients execute against the socket in `test_tier3_multi_client_concurrent_burst`.
-   - `socketserver.UnixStreamServer` is single-threaded; any slow reader or paused write-shutdown blocks subsequent clients, causing timeouts.
-   - Therefore, `socketserver.ThreadingUnixStreamServer` must be used. Setting `daemon_threads = True` ensures client worker threads do not block daemon process termination.
+1. **Parity Requirement without Shell Hooks**:
+   From [Observation 1], the current MCP server only allows verbatim speech via `speak`. However, automated agents running inside Claude Code or Antigravity cannot trigger shell hooks (`Stop`, `PreToolUse`) directly. Adding `autoplay_turn` and `narrate_event` provides programmatic parity.
 
-2. **Path Resolution**:
-   - Observation 3 shows `tests/e2e/test_tier1_features.py` expects `"auto-speech-daemon.sock"` in source code, while `tests/e2e/harness.py` sets `AUTO_SPEECH_DAEMON_SOCK` in the environment.
-   - Therefore, the path hierarchy must be: constructor argument `socket_path` (if provided) > `os.environ.get("AUTO_SPEECH_DAEMON_SOCK")` > default `Path("/tmp/auto-speech-daemon.sock")`.
+2. **Autoplay Flow Coherence**:
+   From [Observation 2 & 3], `TranscriptLocator` and `MessageSelector` are pure Python standard library modules that extract assistant turns across both Claude Code and Antigravity formats. By extracting the message, computing SHA-256 over raw text + `b"\x00"` + `voice:speed`, applying `ClaudeCliRewriter` (with default template fallback on missing prompt and raw text fallback on rewriter error), and queueing via `DaemonClient(priority=Priority.AUTOPLAY)`, `autoplay_turn` replicates `AutoplayWorker` exactly without subprocess sprawl.
 
-3. **Lifecycle & Stale Cleanup**:
-   - In UNIX domain sockets, `bind()` fails with `EADDRINUSE` if the file inode exists on disk, even if no process is listening.
-   - Therefore, on daemon startup, `_start_socket_server()` must unlink the socket file via `path.unlink(missing_ok=True)` immediately before `_DaemonSocketServer` initialization.
-   - On daemon shutdown, the server must call `shutdown()`, `server_close()`, join the listener thread, and unlink the socket file.
-   - To guarantee cleanup in all exit modes (signals, idle shutdown, uncaught exceptions, normal termination), `_stop_socket_server()` must be called in `run()`'s `finally:` block and supplemented with an `atexit` registration.
+3. **Narrator Pipeline Ingestion & Clean Gating**:
+   From [Observation 4], the narrator daemon relies on `~/.claude/auto-speech-narrate-sessions/<session_id>` to filter events. If a session is unenrolled, returning a fatal tool error (`isError=True`) would disrupt AI agent flows. Therefore, `narrate_event` returns a clean notice with `isError=False` (`"Session '<sid>' is not enrolled in narration; event ignored."`). When enrolled, appending JSON records to `/tmp/auto-speech-narrator-events.jsonl` provides atomic ingestion.
 
-4. **Shutdown Ordering**:
-   - If `_tts_worker` were terminated before the socket server, incoming client connections could enqueue items after the worker is dead or after the queue sentinel `None` has been placed.
-   - Therefore, shutdown order must be: (1) `_stop_socket_server()`, (2) put `None` into `_tts_queue`, (3) join `tts_thread`, (4) unlink `PID_FILE`, (5) transition `_fsm` to `NOT_RUNNING`.
-
-5. **Wire Protocol & Request Handling**:
-   - `speak.py` sends UTF-8 text and closes or shuts down write half (`SHUT_WR`).
-   - Observations show payloads can reach 128 KB and abrupt disconnects (`SO_LINGER 0`) can occur.
-   - Therefore, `_DaemonRequestHandler` must read in a `while True:` loop accumulating chunks of 4096 bytes until EOF (`b""`), wrapped in `(ConnectionResetError, BrokenPipeError, OSError)` exception handling.
-   - Text is decoded with `utf-8` (`errors="replace"`), whitespace-stripped, and if non-empty, passed to `enqueue_text()`.
-
-6. **Queue Concurrency & Drop-Oldest Backpressure**:
-   - Socket threads and the main `_tail_events()` thread will write to `_tts_queue` concurrently.
-   - Observation 1 shows `_bare_service` in `test_narrator_service.py` skips `__init__`.
-   - Therefore, enqueueing must use a shared lock `self._queue_lock`, guarded defensively with `lock = getattr(self, "_queue_lock", None)` to maintain 100% test compatibility with uninitialized bare instances.
-   - When the queue is full (`maxsize=32`), the oldest item is dropped via `get_nowait()`, `self._dropped_phases` is incremented, and `self._update_depth()` is called.
-
-7. **Idle Timer Prevention**:
-   - Observation 1 shows the daemon auto-shuts down if `time.time() - self._last_event_ts > self._idle_shutdown`.
-   - Incoming socket speech requests represent active user operations; therefore, `enqueue_text()` must reset `self._last_event_ts = time.time()`.
+4. **Standard Library & Test Isolation**:
+   All collaborators (`pathlib`, `json`, `os`, `hashlib`, `time`, `tomllib`) are standard library modules. By accepting optional `locator`, `selector`, `rewriter`, `narrator_events_file`, `narrator_sessions_dir`, `voice_calibration_path`, and `client` in `McpServer.__init__`, unit tests in `tests/test_mcp_server.py` can test all validation and execution branches without touching `~/.claude`, `/tmp`, external binaries, or live daemons.
 
 ---
 
 ## 3. Caveats
 
-1. **Client Implementation (`speak.py`)**:
-   - This investigation focuses specifically on the daemon socket server in `narrator_service.py` (M2.1). The corresponding CLI client refactoring in `speak.py` (M2.2) is a separate task, though its wire protocol contract is fully specified here.
-2. **macOS Socket Path Length Limit**:
-   - On Darwin, `sockaddr_un.sun_path` is limited to 104 bytes. The default path `/tmp/auto-speech-daemon.sock` is 29 bytes. Temporary paths generated in test fixtures (`IsolatedEnvironment`) should be monitored if deeply nested paths are ever used.
-3. **No Caveats in TTS Worker Core**:
-   - `_tts_worker` already supports string dispatch to `self._speak(phase)` without modification.
+1. **Other M2 Tools**:
+   This report specifically focuses on `autoplay_turn` and `narrate_event`. The remaining tools for Milestone M2 (`playback_control`, `session_configure`, `doctor`) should follow the identical pattern of standard library purity and injectable collaborators.
+2. **Claude Binary Dependency**:
+   When `mode != "raw"` and `bypass_llm=False`, `ClaudeCliRewriter` invokes `claude -p`. In environments where `claude` is not on `PATH` (such as headless CI containers), the rewriter raises `ClaudeCliUnavailable`. The handler is specified to gracefully fall back to speaking the raw turn text so speech playback remains functional.
 
 ---
 
 ## 4. Conclusion
 
-The daemon socket server integration for Milestone M2.1 is fully designed and verified against all architectural and testing requirements.
-
-The implementer should add:
-1. `_DaemonRequestHandler` and `_DaemonSocketServer(socketserver.ThreadingUnixStreamServer)` to `narrator_service.py`.
-2. `socket_path` resolution with default `/tmp/auto-speech-daemon.sock` and `AUTO_SPEECH_DAEMON_SOCK` env override.
-3. Stale socket unlinking on startup in `_start_socket_server()` before binding.
-4. Clean socket shutdown and unlinking in `_stop_socket_server()` invoked in `run()`'s `finally:` block, with `atexit` registration as safety fallback.
-5. Thread-safe `enqueue_text()` with drop-oldest queue management, `_queue_lock`, and idle timer reset.
-6. Defensive `getattr(self, "_queue_lock", None)` to guarantee existing unit tests pass without regression.
-
-Refer to `analysis.md` in this directory for the exact before/after code snippets and architectural specifications.
+The concrete implementation strategy for `autoplay_turn` and `narrate_event` is fully formulated and ready for execution by `worker_m2`:
+- Schemas: Full JSON-RPC 2.0 schemas defined in `analysis.md` §2.1 and §3.1.
+- Handler Blueprints: Complete, copy-paste-ready implementation code specified in `analysis.md` §6.1 and §6.2.
+- Error Semantics: Mute errors return `isError=True`; unenrolled narration returns `isError=False` with clean notice.
+- Test Strategy: 10 discrete test cases specified in `analysis.md` §7 to ensure 100% coverage and zero regressions across the 50 baseline tests.
 
 ---
 
 ## 5. Verification Method
 
-1. **Existing Unit Test Suite**:
-   ```bash
-   PYTHONPATH=. pytest tests/test_narrator_service.py
-   ```
-   *Expected*: All 21 tests pass with zero regressions.
+To verify the implementation once applied by `worker_m2`:
 
-2. **Tier 1 Feature Tests (Post-implementation of M2.1 & M2.2)**:
+1. **Unit Test Execution**:
+   Run the dedicated MCP test suite:
    ```bash
-   PYTHONPATH=. pytest tests/e2e/test_tier1_features.py -k "test_tier1_r2"
+   cd /Users/joshua/Developer/auto-speech-worktree
+   .venv/bin/python tests/test_mcp_server.py
    ```
-   *Expected*: `test_tier1_r2_daemon_socket_enqueues_to_tts_queue`, `test_tier1_r2_socket_wire_protocol_stream_handling`, and `test_tier1_r2_daemon_cleans_up_socket_file_on_shutdown` pass.
+   *Expected*: All existing and new tests pass with exit code 0.
 
-3. **Tier 2 Boundary Tests**:
+2. **Full Regression Suite**:
+   Run the global test runner:
    ```bash
-   PYTHONPATH=. pytest tests/e2e/test_tier2_boundaries.py -k "test_tier2_r2"
+   cd /Users/joshua/Developer/auto-speech-worktree
+   bash tests/run_all.sh
    ```
-   *Expected*: All Tier 2 R2 boundary tests pass (empty stdin, special characters, 128 KB payload, abrupt disconnect, stale socket cleanup).
+   *Expected*: All 50+ test suites pass with 0 failures.
 
-4. **Tier 3 Combination & Concurrency Tests**:
+3. **Code Style & Linting**:
    ```bash
-   PYTHONPATH=. pytest tests/e2e/test_tier3_combinations.py -k "socket"
+   cd /Users/joshua/Developer/auto-speech-worktree
+   .venv/bin/ruff check plugin/scripts/python/mcp_server.py tests/test_mcp_server.py
    ```
-   *Expected*: `test_tier3_concurrent_socket_and_jsonl_events`, `test_tier3_backpressure_queue_cap_with_socket_burst`, and `test_tier3_multi_client_concurrent_burst` pass.
+   *Expected*: 0 violations.
 
-5. **Invalidation Condition**:
-   - If binding fails with `Address already in use`, startup stale unlinking was bypassed or executed after `bind()`.
-   - If tests timeout during 10-client burst, `UnixStreamServer` was used instead of `ThreadingUnixStreamServer`.
-   - If `tests/test_narrator_service.py` fails with `AttributeError`, `_queue_lock` was accessed directly without `getattr` fallback.
+4. **Invalidation Conditions**:
+   - Any dependency on non-standard-library modules inside `mcp_server.py`.
+   - Failure to check `AutoplayGate().worker_gated_off()`.
+   - `narrate_event` returning `isError=True` when a session is simply unenrolled.
+   - Cache key calculation differing from `sha256(raw_bytes + b"\x00" + f"{voice}:{speed}".encode())`.

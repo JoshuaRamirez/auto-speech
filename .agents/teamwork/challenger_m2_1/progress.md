@@ -1,20 +1,15 @@
 # Progress — challenger_m2_1
 
-**Last visited**: 2026-10-03T19:03:30Z
-**Status**: Empirical stress-testing complete. 2 defects identified and empirically proven. Writing handoff.md with verdict REJECT.
+Last visited: 2026-10-06T22:31:30Z
+Current state: Empirical stress testing complete; writing handoff.md.
 
-## Plan
-1. [x] Initialize BRIEFING.md, DISPATCH.md, and progress.md
-2. [x] Read ORIGINAL_REQUEST.md, PROJECT.md, and worker_m2/handoff.md
-3. [x] Inspect implementation files (`narrator_service.py`, `speak.py`, tests)
-4. [x] Run existing tests to verify baseline state (all pass)
-5. [x] Design & execute empirical stress tests (`tests/test_socket_ipc_stress.py`):
-   - [x] High concurrency (50+ simultaneous clients): FAIL on unmodified server (40-43/50 fail with ECONNREFUSED)
-   - [x] Boundary payloads (256KB+, multi-MB, Unicode, empty, whitespace): PASS
-   - [x] Abrupt socket disconnects (`SO_LINGER 0`): FAIL on payload truncation handling (enqueues truncated text)
-   - [x] Latency benchmark (<20ms): PASS (0.02ms - 1.5ms)
-   - [x] Queue backpressure concurrency: PASS
-6. [x] Analyze results, identify failure modes and blast radius
-7. [x] Update BRIEFING.md
-8. [ ] Write final `handoff.md` with explicit verdict REJECT
-9. [ ] Send message to orchestrator parent
+- [x] Initialized DISPATCH.md and BRIEFING.md
+- [x] Inspected `plugin/scripts/python/mcp_server.py` implementations of `autoplay_turn` and `narrate_event`
+- [x] Executed baseline test suite `tests/run_all.sh` (50/50 test suites passed)
+- [x] Wrote and executed empirical stress harness `tests/test_challenger_harness.py` for Scenarios 1-7 (both Direct Python API and Subprocess Stdio JSON-RPC)
+- [x] Uncovered cross-session audio playback leak in Scenario 2 (`autoplay_turn` with non-existent `session_id`)
+- [x] Uncovered protocol error vs tool error discrepancy in Scenario 6 (`narrate_event` missing `event`)
+- [x] Verified Scenarios 1, 3, 4, 5, 7 pass all invariants
+- [x] Updated BRIEFING.md with empirical results
+- [ ] Write handoff.md with verdict REQUEST_CHANGES
+- [ ] Send final message to parent agent

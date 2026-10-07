@@ -1,29 +1,34 @@
-# Task Assignment: Explorer M1.1 (NativeAudioSink Specialist)
+## 2026-10-06T21:07:32Z
+You are teamwork_preview_explorer (explorer_m1_1).
+Your working directory is: /Users/joshua/Developer/auto-speech/.agents/teamwork/explorer_m1_1
 
-You are explorer_m1_1 (teamwork_preview_explorer).
-Your working directory: /Users/joshua/Developer/auto-speech/.agents/teamwork/explorer_m1_1
-Project root: /Users/joshua/Developer/auto-speech
-Original request: /Users/joshua/Developer/auto-speech/.agents/teamwork/ORIGINAL_REQUEST.md
-Project specification: /Users/joshua/Developer/auto-speech/PROJECT.md
+MANDATORY FIRST STEP: Read the user request verbatim in:
+/Users/joshua/Developer/auto-speech/.agents/teamwork/ORIGINAL_REQUEST.md (under header `## 2026-10-06T20:47:50Z`).
+Also read the project architecture in:
+/Users/joshua/Developer/auto-speech/PROJECT.md
+and reference the architectural survey in:
+/Users/joshua/Developer/auto-speech/.agents/teamwork/explorer_survey_1/analysis.md.
 
-## Objective
-Read ORIGINAL_REQUEST.md and PROJECT.md first.
-You are investigating Milestone M1: Design and exact specification for `plugin/scripts/python/native_audio_sink.py`.
-Design `NativeAudioSink` to:
-1. Play generated WAV files synchronously via `subprocess.run(["mpv", "--really-quiet", "--no-video", "--keep-open=no", "--idle=no", str(wav_path)])` or `subprocess.Popen` with `.wait()`.
-2. Provide clean `interrupt()` mechanism that terminates active playback process immediately (e.g. for UserPromptSubmit) without `pkill -9 mpv`.
-3. Ensure thread-safety and robust error handling (e.g. handling missing mpv, non-zero exit codes, interrupted process).
-4. Provide unit test strategy for `NativeAudioSink` (with mocked subprocess and real temp file execution).
+Note: All code changes for this milestone will be made inside the isolated git worktree at `/Users/joshua/Developer/auto-speech-worktree`.
 
-Write your findings to `/Users/joshua/Developer/auto-speech/.agents/teamwork/explorer_m1_1/analysis.md` and `handoff.md`. Send a message when done.
+Objective:
+Formulate the concrete, detailed implementation strategy for the core Python CLI dispatcher (`plugin/scripts/python/cli.py`) for Milestone M1.
+Investigate and specify:
+1. Argument parsing structure using `argparse`: top-level parser (`--help`, `--version`), 12 subcommands:
+   - `speak`: positional words, piped stdin, `--source-hash`, `--session-id`, `--priority`, `--voice`, `--speed`, `--socket-path`, `--ordinal`. Global mute check.
+   - `replay`: `--ordinal N`.
+   - `pause`, `resume`, `restart`: mpv IPC over `/tmp/auto-speech-mpv.sock`.
+   - `stop`: DaemonClient.interrupt() and process signaling.
+   - `seek`: target validation (`+N`, `-N`, `N`, `end`) and mpv IPC.
+   - `autoplay`: `on`, `off`, `status`, `mode`, `scope`.
+   - `narrate`: `on`, `off`, `status`, `stop`, `config`.
+   - `hook`: `stop`, `narrator`, `bootstrap`.
+   - `doctor`: text and `--json`.
+   - `update`: `--force`.
+2. Exact exit codes: 0 (OK/muted), 1 (failure), 2 (no session/invalid input), 3 (IPC fail), 4 (bad arg), 6 (playback fail), 130 (interrupted).
+3. Error handling: clear diagnostic messages on stderr on failures.
 
-## 2026-10-03T18:00:30Z
-You are explorer_m1_1.
-Your working directory: /Users/joshua/Developer/auto-speech/.agents/teamwork/explorer_m1_1
-Project root: /Users/joshua/Developer/auto-speech
-Original request: /Users/joshua/Developer/auto-speech/.agents/teamwork/ORIGINAL_REQUEST.md
-Project specification: /Users/joshua/Developer/auto-speech/PROJECT.md
-
-Read ORIGINAL_REQUEST.md and PROJECT.md first. Read your task assignment in /Users/joshua/Developer/auto-speech/.agents/teamwork/explorer_m1_1/DISPATCH.md.
-Investigate and design NativeAudioSink for plugin/scripts/python/native_audio_sink.py using synchronous mpv with clean interrupt handling and error management.
-Write findings to analysis.md and handoff.md. Send a message when done.
+Do NOT implement any code directly.
+Write your analysis to `/Users/joshua/Developer/auto-speech/.agents/teamwork/explorer_m1_1/analysis.md`
+and handoff report to `/Users/joshua/Developer/auto-speech/.agents/teamwork/explorer_m1_1/handoff.md`.
+Send a completion message back to caller when done.

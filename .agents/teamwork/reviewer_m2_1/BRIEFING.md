@@ -1,63 +1,57 @@
-# BRIEFING — 2026-10-03T19:00:00Z
+# BRIEFING — 2026-10-06T22:28:00Z
 
 ## Mission
-Independently review Milestone M2 implementation (speak.py, narrator_service.py, tests) for correctness, integrity, and compatibility.
+Review Milestone M2 (Native MCP Server) implementation in /Users/joshua/Developer/auto-speech-worktree for correctness, protocol conformance, integrity, and robustness.
 
 ## 🔒 My Identity
-- Archetype: teamwork_preview_reviewer
+- Archetype: reviewer_critic
 - Roles: reviewer, critic
 - Working directory: /Users/joshua/Developer/auto-speech/.agents/teamwork/reviewer_m2_1
-- Original parent: c05df6b8-cecd-49ba-9fb8-8fa47f977488
+- Original parent: 4db9af0e-498d-49a5-831a-0009fd31326e
 - Milestone: M2
 - Instance: 1 of 1
 
 ## 🔒 Key Constraints
 - Review-only — do NOT modify implementation code
-- Report failures as findings — do NOT fix them yourself
-- Actively check for integrity violations: hardcoded test results, facade implementations, shortcuts, fabricated verification, self-certifying work. If ANY detected, verdict MUST be REQUEST_CHANGES with Critical finding tagged INTEGRITY VIOLATION.
+- Actively check for integrity violations (hardcoding, facades, shortcuts, fake tests)
+- Empirically verify test runs in /Users/joshua/Developer/auto-speech-worktree
+- Issue verdict: APPROVE or REQUEST_CHANGES
 
 ## Current Parent
-- Conversation ID: c05df6b8-cecd-49ba-9fb8-8fa47f977488
-- Updated: 2026-10-03T18:56:03Z
+- Conversation ID: 4db9af0e-498d-49a5-831a-0009fd31326e
+- Updated: not yet
 
 ## Review Scope
-- **Files to review**: `plugin/scripts/python/speak.py`, `plugin/scripts/python/narrator_service.py`, `tests/test_speak_client.py`, `tests/test_narrator_service.py`
-- **Interface contracts**: `PROJECT.md`, `ORIGINAL_REQUEST.md` (R2)
-- **Review criteria**: Correctness, CLI backward compatibility, IPC protocol conformance, integrity verification, test suite execution
+- **Files to review**: `plugin/scripts/python/mcp_server.py`, `tests/test_mcp_server.py` in `/Users/joshua/Developer/auto-speech-worktree`
+- **Interface contracts**: `PROJECT.md`, `ORIGINAL_REQUEST.md`, `worker_m2/handoff.md`
+- **Review criteria**: correctness, protocol conformance (JSON-RPC 2.0 / MCP), hermetic isolation, architectural soundness, integrity
 
 ## Review Checklist
 - **Items reviewed**:
-  - `plugin/scripts/python/speak.py` (thin client implementation, backward-compatible flags, socket resolution)
-  - `plugin/scripts/python/narrator_service.py` (`_DaemonSocketServer`, `_DaemonRequestHandler`, thread-safe enqueueing)
-  - `tests/test_speak_client.py` (18 unit tests verified)
-  - `tests/test_narrator_service.py` (26 unit tests verified)
-  - `tests/e2e/test_tier1_features.py` (TestTier1R2ThinClientIPC: 6 tests verified)
-  - `tests/e2e/test_tier2_boundaries.py` (TestTier2R2Boundaries: 5 tests verified)
-  - `tests/e2e/test_tier3_combinations.py` (5 tests verified)
-  - `tests/e2e/test_tier4_scenarios.py` (3 tests verified)
+  - `plugin/scripts/python/mcp_server.py` (full 1,204 lines inspected)
+  - `tests/test_mcp_server.py` (full 1,033 lines inspected)
+  - Empirical execution of `.venv/bin/python tests/test_mcp_server.py` (52/52 tests passed)
+  - Empirical execution of `bash tests/run_all.sh` (50/50 test suites passed)
+  - Empirical execution of `.venv/bin/ruff check` (0 violations)
 - **Verdict**: APPROVE
-- **Unverified claims**: None. All claims independently reproduced and verified.
+- **Unverified claims**: none
 
 ## Attack Surface
 - **Hypotheses tested**:
-  - Burst concurrency: tested 50 simultaneous client connections to socket server. Found standard library backlog limit of 5 can drop connections under simultaneous zero-latency burst without `request_queue_size = 64`.
-  - Slowloris / partial socket writes: tested unclosed stream handling.
-  - Large payload streaming: verified 128KB payload across socket buffer without deadlock.
-  - Abrupt client disconnect: verified SO_LINGER 0 handling without server crash.
-  - Empty/whitespace input: verified zero spurious queue items.
-  - Legacy argument validation: verified `--ordinal`, `--keep-artifacts`, valid 64-hex `--source-hash` pass, invalid hash fails with exit code 2.
-- **Vulnerabilities found**:
-  - Minor: Default `request_queue_size = 5` in `_DaemonSocketServer` causes connection drops under massive concurrent bursts (50 simultaneous threads). Recommend setting `request_queue_size = 64` or `128`.
-  - Minor: Server request socket does not set explicit recv timeout, allowing hung client connections to hold a daemon thread until client terminates.
-- **Untested angles**: None within M2 scope.
+  - Parameter tampering (non-dict args, negative ordinals, invalid targets like inf/nan): PASSED (rejected with clean error messages)
+  - Global mute evasion: PASSED (all speech tools check AutoplayGate)
+  - Offline daemon / rewriter crash: PASSED (graceful fallbacks to raw text and spawn_say_worker)
+  - Host environment mutation during testing: PASSED (hermetic isolation via temp directories and collaborator mocks)
+- **Vulnerabilities found**: None
+- **Untested angles**: Heavy concurrent stdio request hammering (stdio line reader processes serially)
 
 ## Key Decisions Made
-- Confirmed full compliance with ORIGINAL_REQUEST.md §R2 and PROJECT.md interface contracts.
-- Confirmed zero integrity violations.
-- Verified 100% pass rate across all M1 and M2 test targets.
-- Issued APPROVE verdict.
+- Confirmed zero integrity violations, no facade/dummy shortcuts, genuine computational logic throughout.
+- Verified 100% empirical pass across unit, full suite, and lint checks.
+- Issued verdict APPROVE for Milestone M2.
 
 ## Artifact Index
-- `/Users/joshua/Developer/auto-speech/.agents/teamwork/reviewer_m2_1/BRIEFING.md` — persistent working memory
-- `/Users/joshua/Developer/auto-speech/.agents/teamwork/reviewer_m2_1/progress.md` — heartbeat and progress tracking
-- `/Users/joshua/Developer/auto-speech/.agents/teamwork/reviewer_m2_1/handoff.md` — final handoff report
+- DISPATCH.md — incoming dispatch instructions
+- BRIEFING.md — persistent working memory
+- progress.md — liveness heartbeat
+- handoff.md — final review report and verdict

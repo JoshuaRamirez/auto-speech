@@ -1,107 +1,98 @@
-# Handoff Report: Milestone M2 (Thin Client IPC via UNIX Sockets)
+# Handoff Report: Milestone M2 (Expanded MCP Server Tool Suite)
+
+**Author**: `teamwork_preview_worker` (`worker_m2`)  
+**Timestamp**: 2026-10-06T22:24:00Z  
+**Target Repository**: `/Users/joshua/Developer/auto-speech-worktree`  
+**Parent Agent**: `4db9af0e-498d-49a5-831a-0009fd31326e`  
+
+---
 
 ## 1. Observation
 
-1. **Pre-Implementation Codebase State**:
-   - `plugin/scripts/python/speak.py` imported `from pipeline import PipelineOrchestrator` and directly executed full pipeline synthesis and mpv playback per CLI invocation.
-   - `plugin/scripts/python/narrator_service.py` had no UNIX domain socket listener or IPC mechanism; speech requests were only triggered via JSONL events from `_tail_events()`.
-   - Running `.venv/bin/python -m unittest tests.e2e.test_tier1_features.TestTier1R2ThinClientIPC` produced:
-     ```
-     FAIL: test_tier1_r2_daemon_socket_enqueues_to_tts_queue
-     AssertionError: False is not true : R2 Violation: narrator_service.py must include a UNIX domain socket server
-     FAIL: test_tier1_r2_speak_cli_transmits_stdin_to_socket
-     AssertionError: 124 != 0 : speak.py failed with exit code 124. TimeoutExpired: command timed out after 2.5s
-     ```
-   - Running `.venv/bin/python -m unittest tests.e2e.test_tier2_boundaries.TestTier2R2Boundaries` produced:
-     ```
-     FAIL: test_tier2_r2_empty_stdin_ignored_by_daemon (AssertionError: 4 != 0)
-     FAIL: test_tier2_r2_large_socket_payload_chunking (AssertionError: 124 != 0)
-     FAIL: test_tier2_r2_special_characters_and_multiline_payload (AssertionError: 124 != 0)
-     ```
+1. **Baseline State**:
+   - The initial `plugin/scripts/python/mcp_server.py` advertised only a single tool (`speak`) and handled requests via stdio JSON-RPC 2.0.
+   - `tests/test_mcp_server.py` contained 17 unit tests asserting `test_tools_list_has_only_speak`.
+   - Running `.venv/bin/python tests/test_mcp_server.py` passed 17/17 tests.
+   - Running `bash tests/run_all.sh` passed 50/50 test suites.
+   - Running `.venv/bin/ruff check plugin/scripts/python/mcp_server.py tests/test_mcp_server.py` reported 0 violations.
 
-2. **Files Modified and Created**:
-   - `plugin/scripts/python/speak.py`: Refactored to thin client reading `sys.stdin`, short-circuiting on empty/whitespace input, connecting to `/tmp/auto-speech-daemon.sock` (or `$AUTO_SPEECH_DAEMON_SOCK`), sending UTF-8 payload, executing write shutdown (`SHUT_WR`), closing socket, and exiting 0 cleanly. Gracefully outputs error to `stderr` and exits code 1 if socket is absent or connection is refused.
-   - `plugin/scripts/python/narrator_service.py`: Added `_DaemonSocketServer(socketserver.ThreadingUnixStreamServer)` and `_DaemonRequestHandler`. In `NarratorService`, added background socket server thread in `_start_socket_server()`, automatic unlinking of stale socket in `server_bind()`, safe stop and unlinking in `_stop_socket_server()`, defensive `atexit` registration, and thread-safe drop-oldest enqueueing via `enqueue_text()` guarded by `_queue_lock`.
-   - `tests/test_speak_client.py`: Created 18 standalone unit tests covering CLI argument parsing, legacy backward-compatibility flags (`--ordinal`, `--keep-artifacts`, `--source-hash`), 64-hex hash validation, socket path resolution, empty stdin short-circuit, mocked socket wire protocol, and real ephemeral socket server interactions with emojis and 128KB payloads.
-   - `tests/test_narrator_service.py`: Added 5 unit tests verifying stale socket unlinking at startup, cleanup on shutdown, payload enqueueing to `_tts_queue`, empty input filtering, resilience against abrupt client reset (`SO_LINGER 0`), and backpressure queue shedding. Total suite grew from 21 to 26 passing tests.
+2. **Milestone M2 Implementation**:
+   - In `/Users/joshua/Developer/auto-speech-worktree/plugin/scripts/python/mcp_server.py`:
+     * Defined complete JSON-RPC 2.0 schemas for all 6 tools: `speak`, `autoplay_turn`, `narrate_event`, `playback_control`, `session_configure`, `doctor`.
+     * Preserved 100% backward compatibility for `speak`.
+     * Added `autoplay_turn`: resolves session transcript via `TranscriptLocator`, extracts qualifying turn with `MessageSelector`, enforces length threshold (`min_len` >= 20 bytes), computes content-addressable SHA-256 source hash, supports `raw` mode / `bypass_llm`, invokes `ClaudeCliRewriter` with template resolution and graceful raw fallback, queues to `DaemonClient.speak(priority=Priority.AUTOPLAY)` with offline `spawn_say_worker` fallback.
+     * Added `narrate_event`: checks global mute, validates session enrollment in `~/.claude/auto-speech-narrate-sessions/<sid>`, returns clean non-error notice on un-enrolled sessions (`isError: False`), ensures daemon liveness via `DaemonClient.ensure_daemon_running()`, and atomically appends JSON records to `/tmp/auto-speech-narrator-events.jsonl`.
+     * Added `playback_control`: manages transport actions (`pause`, `resume`, `stop`, `restart`, `seek`, `replay`). `stop` issues `DaemonClient.interrupt()`, unlinks PID file, and sends mpv stop; `pause`/`resume`/`restart`/`seek` interact over `/tmp/auto-speech-mpv.sock` via `MpvIpc`; `resume` and `replay` check global mute; `replay` retrieves cached entries via `CacheStore.list_by_recency()` and plays via `DaemonClient.play_cache()`.
+     * Added `session_configure`: manages `SessionEnrollment` markers, narration markers, `SoloScope` spotlight, and writes `autoplay.toml` configuration.
+     * Added `doctor`: runs `Doctor().run()` returning text or structured JSON, marking `isError: True` if unhealthy.
+     * Refactored `McpServer.__init__` with injectable collaborators (`spawner`, `gate`, `client`, `home`, `locator`, `selector`, `rewriter`, `events_log`, `narrator_sessions_dir`, `voice_calibration_path`, `mpv_sock`, `mpv_pid`, `mpv_ipc_sender`, `cache_store`, `enrollment`, `scope`, `doctor`, `is_mpv_alive`).
+   - In `/Users/joshua/Developer/auto-speech-worktree/tests/test_mcp_server.py`:
+     * Replaced `test_tools_list_has_only_speak` with `test_tools_list_advertises_all_six_tools`.
+     * Maintained all 16 existing `speak` and protocol unit tests.
+     * Implemented 35 new hermetic test cases covering all 5 new tools across happy paths, edge cases, error conditions, missing files, global mute gating, and rewriter fallbacks.
 
-3. **Post-Implementation Verification Results**:
-   - `.venv/bin/python tests/test_speak_client.py`:
-     ```
-     Ran 18 tests in 1.677s
-     OK
-     ```
-   - `.venv/bin/python tests/test_narrator_service.py`:
-     ```
-     narrator_service: 26 tests passed
-     ```
-   - `.venv/bin/python -m unittest tests.e2e.test_tier1_features.TestTier1R2ThinClientIPC`:
-     ```
-     Ran 6 tests in 1.199s
-     OK
-     ```
-   - `.venv/bin/python -m unittest tests.e2e.test_tier2_boundaries.TestTier2R2Boundaries`:
-     ```
-     Ran 5 tests in 2.223s
-     OK
-     ```
-   - `.venv/bin/python -m unittest tests.e2e.test_tier3_combinations`:
-     ```
-     Ran 5 tests in 3.845s
-     OK
-     ```
-   - `.venv/bin/python -m unittest tests.e2e.test_tier4_scenarios`:
-     ```
-     Ran 3 tests in 2.172s
-     OK
-     ```
-   - `.venv/bin/ruff check plugin/scripts/python/speak.py plugin/scripts/python/narrator_service.py tests/test_speak_client.py`:
-     ```
-     All checks passed!
-     ```
+3. **Empirical Verification Results**:
+   - Command: `.venv/bin/python tests/test_mcp_server.py`
+     * Result: Exited 0.
+     * Output: `mcp_server: 52 tests passed`.
+   - Command: `.venv/bin/ruff check plugin/scripts/python/mcp_server.py tests/test_mcp_server.py`
+     * Result: Exited 0.
+     * Output: `All checks passed!`.
+   - Command: `bash tests/run_all.sh`
+     * Result: Exited 0.
+     * Output: `ran: 50, failed: 0, all tests passed`.
+
+---
 
 ## 2. Logic Chain
 
-1. From Observation 1, `speak.py` was previously invoking `PipelineOrchestrator`, causing MLX engine load latency and detached process sprawl. The E2E tests expect a zero-overhead thin client communicating over a UNIX domain socket.
-2. Replacing `PipelineOrchestrator` in `speak.py` with standard library `socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)` directly eliminated the secondary Python process spawns and removed `PipelineOrchestrator` dependencies from the client layer.
-3. Adding `_DaemonSocketServer(socketserver.ThreadingUnixStreamServer)` to `narrator_service.py` allows handling multiple concurrent client bursts without blocking the main event-tailing loop.
-4. Implementing `server_bind()` unlinking and `_start_socket_server()` stale-file cleanup ensures that previous crashes do not block subsequent daemon instances from binding with `Address already in use`.
-5. Guarding `_enqueue_phase` and `enqueue_text` with `self._queue_lock` ensures thread-safe operations on `_tts_queue` when concurrent socket requests arrive while `_tail_events()` enqueues JSONL events.
-6. The test executions in Observation 3 confirm that all feature, boundary, concurrency, and scenario tests for Milestone M2 pass cleanly with zero regressions.
+1. **Schema & Dispatch Integration (Obs. 2)**:
+   The MCP server's `tools/list` must advertise the expanded tool suite to allow AI agents in Claude Code and Antigravity to discover all speech lifecycle operations. Defining `ALL_TOOLS` containing all 6 schemas with strict `additionalProperties: False` and required parameters guarantees full protocol compliance.
+2. **Collaborator Injection & Test Hermeticity (Obs. 2, Obs. 3)**:
+   By allowing optional dependency injection in `McpServer.__init__`, unit tests can supply temporary home directories, mock daemon clients, and stubbed IPC senders. This guarantees tests never modify host user files (`~/.claude`), kill live processes, or interact with real audio hardware.
+3. **Safety & Global Mute Invariant (Obs. 2)**:
+   All speech-producing tools (`speak`, `autoplay_turn`, `narrate_event`, and `playback_control` resume/replay) check `self._gate.worker_gated_off()`. When muted, they abort cleanly and return an informative error message without touching audio devices or background queues.
+4. **Resilience & Graceful Fallback (Obs. 2, Obs. 3)**:
+   `autoplay_turn` gracefully falls back to raw text if the rewriter encounters an error or timeout, and falls back to `spawn_say_worker` if the daemon socket is offline. Unenrolled sessions in `narrate_event` return a clean status (`isError: False`) rather than crashing, preventing AI agent false alarms.
+5. **Regression Verification (Obs. 3)**:
+   The successful execution of `tests/test_mcp_server.py` (52 passed) and `bash tests/run_all.sh` (50 test suites passed) confirms that the implementation satisfies all requirements of Milestone M2 with zero regressions across the codebase.
+
+---
 
 ## 3. Caveats
 
-- Milestone M3 files (`run_speak.sh`, `pipeline.py`, `short_path.py`, `mpv_controller.py`, `session_dir.py`) were left untouched in this milestone as they are owned by Milestone M3 (Elimination of Dead Sprawl & Caller Realignment).
-- Test runners in `tests/e2e/test_tier2_boundaries.py:345` referencing `run_all.sh` deletions relate to Milestone M3 deliverables and do not belong to M2.
+- Shell hook script reconciliations (`autoplay_hook.sh`, `narrator_hook.sh`) and slash command delegates (`plugin/commands/`) belong to Milestone M3 per `PROJECT.md`.
+- No caveats regarding code correctness, test coverage, or linting within the scope of Milestone M2.
+
+---
 
 ## 4. Conclusion
 
-Milestone M2 (Thin Client IPC via UNIX Sockets) is fully implemented and verified:
-- `speak.py` functions as a thin CLI client forwarding stdin to `/tmp/auto-speech-daemon.sock` with backward-compatible CLI arguments.
-- `narrator_service.py` runs a multi-threaded UNIX domain socket server enqueueing into `_tts_queue` with drop-oldest backpressure and automatic socket lifecycle management.
-- Unit and E2E test suites (Tier 1 R2, Tier 2 R2, Tier 3 combinations, Tier 4 scenarios) pass 100% with clean linting.
+Milestone M2 (Expanded MCP Server Tool Suite) is completely implemented and empirically verified inside `/Users/joshua/Developer/auto-speech-worktree`. The MCP server now provides full programmatic lifecycle hook and transport parity through 6 tools (`speak`, `autoplay_turn`, `narrate_event`, `playback_control`, `session_configure`, `doctor`). All 52 unit tests pass and the full test suite remains 100% green.
+
+---
 
 ## 5. Verification Method
 
-To independently verify this milestone:
+To independently verify this implementation inside `/Users/joshua/Developer/auto-speech-worktree`:
 
-1. Run the standalone unit test suite for the thin client:
+1. Run the MCP server unit test suite:
    ```bash
-   .venv/bin/python tests/test_speak_client.py
+   cd /Users/joshua/Developer/auto-speech-worktree
+   .venv/bin/python tests/test_mcp_server.py
    ```
-2. Run the narrator service unit tests:
+   *Expected Output*: `mcp_server: 52 tests passed` and exit code 0.
+
+2. Run code style and lint check:
    ```bash
-   .venv/bin/python tests/test_narrator_service.py
+   cd /Users/joshua/Developer/auto-speech-worktree
+   .venv/bin/ruff check plugin/scripts/python/mcp_server.py tests/test_mcp_server.py
    ```
-3. Run the Tier 1 R2 feature tests:
+   *Expected Output*: `All checks passed!` and exit code 0.
+
+3. Run the complete test suite:
    ```bash
-   .venv/bin/python -m unittest tests.e2e.test_tier1_features.TestTier1R2ThinClientIPC
+   cd /Users/joshua/Developer/auto-speech-worktree
+   bash tests/run_all.sh
    ```
-4. Run the Tier 2 R2 boundary tests:
-   ```bash
-   .venv/bin/python -m unittest tests.e2e.test_tier2_boundaries.TestTier2R2Boundaries
-   ```
-5. Run the linter:
-   ```bash
-   .venv/bin/ruff check plugin/scripts/python/speak.py plugin/scripts/python/narrator_service.py tests/test_speak_client.py
-   ```
+   *Expected Output*: `ran: 50, failed: 0, all tests passed` and exit code 0.

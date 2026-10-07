@@ -1,146 +1,193 @@
-# Handoff Report: Reviewer M1.2 (Milestone M1 Independent Review)
+# Review & Handoff Report: Milestone M1 CLI Dispatcher & Installer Integration
 
-**Reviewer**: `reviewer_m1_2` (Teamwork Reviewer & Critic)  
-**Working Directory**: `/Users/joshua/Developer/auto-speech/.agents/teamwork/reviewer_m1_2`  
-**Milestone**: M1 (In-Process TTSEngine & NativeAudioSink)  
-**Date**: 2026-10-03  
-**Verdict**: **APPROVE**  
+**Agent:** `reviewer_m1_2` (teamwork_preview_reviewer / critic)  
+**Date:** 2026-10-06T21:39:00Z  
+**Worktree Directory:** `/Users/joshua/Developer/auto-speech-worktree`  
+**Working Directory:** `/Users/joshua/Developer/auto-speech/.agents/teamwork/reviewer_m1_2`  
+**Verdict:** **APPROVE**
+
+---
+
+## Review Summary
+
+**Verdict**: **APPROVE**
+
+Milestone M1 delivers a robust, portable, and cleanly decoupled CLI surface and installer integration for `auto-speech`. The bash trampoline correctly handles arbitrary symlink hops without path assumptions or hardcoded directories, `cli.py` faithfully implements the 12 subcommands specified in `PROJECT.md`, installer and uninstaller integration protect user files with guarded removal, and test suites pass 100% across all 50 suites with 0 lint violations. No integrity violations or facade implementations were detected.
 
 ---
 
 ## 1. Observation
 
-Direct observations from independent code inspection, verification commands, and stress tests:
+Direct observations and empirical execution records in `/Users/joshua/Developer/auto-speech-worktree`:
 
-1. **Test Execution & Verification**:
-   - `NativeAudioSink` unit tests:
-     ```bash
-     .venv/bin/python tests/test_native_audio_sink.py
+1. **Required Verification Invocations**:
+   - `bash tests/test_install_plugin.sh`:
      ```
-     Result: 12 tests passed, `OK` in 0.528s.
-   - `NarratorService` unit tests:
-     ```bash
-     .venv/bin/python tests/test_narrator_service.py
-     ```
-     Result: 21 tests passed, exit code 0.
-   - Tier 1 R1 E2E tests:
-     ```bash
-     .venv/bin/python -m unittest tests.e2e.test_tier1_features.TestTier1R1InProcessAudioSink
-     ```
-     Result: 6 tests passed, `OK` in 1.457s.
-   - Tier 2 R1 Boundary tests:
-     ```bash
-     .venv/bin/python -m unittest tests.e2e.test_tier2_boundaries.TestTier2R1Boundaries
-     ```
-     Result: 5 tests passed, `OK` in 0.292s.
-   - Code style and lint check:
-     ```bash
-     .venv/bin/ruff check plugin/scripts/python/native_audio_sink.py plugin/scripts/python/narrator_service.py tests/test_native_audio_sink.py tests/test_narrator_service.py
-     ```
-     Result: `All checks passed!`.
+       ok  curated install links exactly 8 commands
+       ok  root file recorded with the clone path
+       ok  curated install links ~/.local/bin/auto-speech
+       ok  doctor block resolves root from ~/.config/auto-speech/root
+       ok  guard fires when root file is absent
+       ok  --with-extras links 21 commands
+       ok  plain re-run preserves opted-in extras
+       ok  prune removes non-keep-set links into plugin/commands/
+       ok  prune removes dangling links into plugin/commands-extra/
+       ok  uninstall removes the recorded root file
+       ok  uninstall removes ~/.local/bin/auto-speech symlink
+       ok  no hardcoded absolute project paths in command files
 
-2. **Thread Safety & MLX Stream Affinity**:
-   - In `plugin/scripts/python/narrator_service.py`:
-     - Lines 186–189: `__init__` sets `self._engine: TTSEngine | None = engine`, `self._synth: ResilientSynthesizer | None = synth`, and `self._profile: VoiceProfile | None = profile` without eager model loading on the main thread.
-     - Lines 501–527: `_ensure_tts_initialized()` initializes `TTSEngine`, `ResilientSynthesizer`, and calls `self._engine._ensure_loaded()`.
-     - Lines 530 & 584: `_ensure_tts_initialized()` is exclusively called from `_tts_worker()` at startup and in `_speak()`.
-     - `_ensure_tts_initialized` and `synthesize_one` are NEVER invoked on the main tail-events thread or caller threads.
+     install-plugin: 12/12 passed
+     ```
+     Exit code: `0`.
 
-3. **Resource & File Cleanup**:
-   - In `plugin/scripts/python/narrator_service.py`:
-     - Lines 589–591: `with tempfile.NamedTemporaryFile(prefix="narrator_", suffix=".wav", delete=False) as f: temp_wav = Path(f.name)` closes the open file descriptor immediately upon exiting the `with` block.
-     - Lines 601–606: In `_speak()`, the `finally:` block cleans up all related files:
-       ```python
-       finally:
-           temp_wav.unlink(missing_ok=True)
-           temp_wav.with_suffix(temp_wav.suffix + ".partial").unlink(missing_ok=True)
-           for frag in temp_wav.parent.glob(f"{temp_wav.stem}-*.wav"):
-               frag.unlink(missing_ok=True)
-       ```
-     - Temporary WAV files, `.partial` atomic swap files, and `ResilientSynthesizer` split fragment files are reliably deleted even on synthesis or playback failure.
+   - `bin/auto-speech --help`:
+     ```
+     usage: auto-speech [-h] [--version] <subcommand> ...
 
-4. **AudioSink Dual-Lock Concurrency & Deadlock Freedom**:
-   - In `plugin/scripts/python/native_audio_sink.py`:
-     - Lines 51–52: Two distinct threading locks: `self._playback_lock` and `self._state_lock`.
-     - Lines 86–101: `play()` acquires `_playback_lock` to serialize sequential audio playback, then acquires `_state_lock` to record `self._proc = proc`, releasing `_state_lock` before executing blocking `proc.communicate(timeout=timeout)`.
-     - Lines 134–140: `interrupt()` acquires only `_state_lock` to capture `self._proc` and set `self._interrupted = True`, never acquiring `_playback_lock`.
-     - Lines 141–153: `proc.terminate()` is called outside of `_state_lock`. If the process does not terminate within `_TERMINATE_TIMEOUT` (0.5s), it escalates to `proc.kill()`.
-     - Lock acquisition hierarchy is strictly unidirectional (`_playback_lock` -> `_state_lock`), rendering deadlock mathematically impossible.
+     Unified CLI dispatcher for auto-speech: speech synthesis, playback transport, session management, and diagnostics.
 
-5. **Legacy Code Cleanup & Bug Fixes**:
-   - Complete elimination of detached background mpv sessions, `run_speak.sh`, duration estimation sleeps (`time.sleep(duration)`), `SessionDir` checks, and `pkill -9 mpv` hacks in `narrator_service.py`.
-   - Line 237 bug fix verified: `classifier = getattr(self, "_classifier", None)` in `_tail_events` safely handles bare instances without throwing `AttributeError`.
+     positional arguments:
+       <subcommand>  Subcommand to execute. Run 'auto-speech <subcommand> --help'
+                     for details.
+         speak       Synthesize and play speech.
+         replay      Replay recent cached speech.
+         pause       Pause active mpv audio playback.
+         resume      Resume paused mpv audio playback.
+         restart     Restart active mpv audio playback from start.
+         stop        Stop playback immediately and purge pending queue.
+         seek        Seek active playback (+N, -N, N, or 'end').
+         autoplay    Autoplay subsystem controls.
+         narrate     Narration subsystem controls.
+         hook        Lifecycle hook execution.
+         doctor      System diagnostic health check.
+         update      Update and synchronize virtual environment dependencies.
+
+     options:
+       -h, --help    show this help message and exit
+       --version     show program's version number and exit
+     ```
+     Exit code: `0`.
+
+   - `~/.local/bin/auto-speech --help`:
+     Resolved link `/Users/joshua/.local/bin/auto-speech -> /Users/joshua/Developer/auto-speech-worktree/bin/auto-speech`.
+     Exited `0` with identical 12 subcommand synopsis.
+
+   - `bin/auto-speech --version`:
+     Output: `auto-speech 0.2.0`.
+     Exit code: `0`.
+
+2. **Full Regression and Unit Test Execution**:
+   - `.venv/bin/python -m unittest tests/test_cli_dispatcher.py`:
+     ```
+     Ran 74 tests in 0.201s
+     OK
+     ```
+     Exit code: `0`.
+   - `bash tests/run_all.sh`:
+     ```
+     ran:    50
+     failed: 0
+     all tests passed
+     ```
+     Exit code: `0`.
+   - `.venv/bin/ruff check plugin/scripts/python/cli.py tests/test_cli_dispatcher.py setup/`:
+     ```
+     All checks passed!
+     ```
+     Exit code: `0`.
+
+3. **Code Inspection and Path Hardcoding Audit**:
+   - `grep -r "/Users/" bin/ plugin/scripts/python/cli.py setup/install-plugin.sh setup/uninstall.sh`:
+     Returned exit code `1` (0 matches). No absolute home or user directory paths exist in executable or installation code.
+   - `bin/auto-speech`:
+     Unwinds symlink chains via `readlink` loop with `MAX_HOPS=20` and relative link resolution (`[[ "$SOURCE" != /* ]] && SOURCE="$DIR/$SOURCE"`). Resolves `$PROJECT_ROOT/.venv/bin/python`, validates existence of `cli.py`, exports `PYTHONPATH`, and replaces shell process via `exec`.
+   - `setup/install-plugin.sh`:
+     `install_cli_symlink()` idempotently creates `~/.local/bin/auto-speech`, replaces stale symlinks, and safely aborts if `dst` is a non-symlink file.
+   - `setup/uninstall.sh`:
+     Removes `~/.local/bin/auto-speech` if and only if its target matches `"$PROJECT_ROOT/"*`, protecting foreign symlinks.
+
+4. **Adversarial Stress-Test Observations**:
+   - Multi-hop relative symlink chain (`test-link-3 -> ../test-link-2 -> test-link-1 -> bin/auto-speech` executed from foreign directory `/tmp`):
+     Exited `0` outputting `auto-speech 0.2.0`.
+   - Exit codes on absent session:
+     `pause`, `resume`, `restart`, `stop`, `seek +10` all exited with code `2` as specified in `PROJECT.md`.
+   - Exit codes on input validation failure:
+     `replay --ordinal 0` exited `2`.
+     `speak --source-hash 123` exited `2`.
+     `speak` without text or stdin exited `2`.
+     `seek` with non-numeric target during active session exited `4`.
+   - Global mute check:
+     Running `bin/auto-speech speak "hello"` with `~/.claude/auto-speech.disabled` present printed notice to stderr and cleanly exited `0`.
 
 ---
 
 ## 2. Logic Chain
 
-1. **Integrity Audit**:
-   - Verified that implementation logic in `native_audio_sink.py` and `narrator_service.py` is genuine and complete (no mocks embedded in production paths, no hardcoded test responses, no shortcuts or facades).
-   - Test suites in `tests/test_native_audio_sink.py` and `tests/test_narrator_service.py` use rigorous unit assertions and isolated test doubles.
+1. **Integrity and Authenticity Verification**:
+   - All tests in `tests/test_cli_dispatcher.py` instantiate real or cleanly mocked components (`argparse`, `DaemonResponse`, `AutoplayGate`, `CacheStore`). None of the tests use hardcoded return values embedded in production code.
+   - `cli.py` contains substantive dispatch and integration logic for all 12 subcommands, linking directly with existing domain modules (`daemon_client`, `cache_store`, `mpv_ipc`, `doctor`, `native_audio_sink`, `autoplay_config`, `narrator_config`).
+   - Every verification result was produced by running commands directly in the shell environment.
 
-2. **MLX Stream Affinity Validation**:
-   - Apple MLX requires that models are loaded and computed on the same OS thread due to per-thread compute stream contexts.
-   - Because `_ensure_tts_initialized()` and `_speak()` are executed solely within the `_tts_worker` thread loop, MLX operations cannot cross threads.
-   - If an initialization error occurs, `_ensure_tts_initialized()` logs the exception and allows graceful retry on the next phase rather than crashing the worker.
+2. **Symlink and Shell Portability**:
+   - `bin/auto-speech` does not assume a fixed install directory; it dynamically resolves its own true path across up to 20 symlink hops and relative target paths.
+   - The multi-hop symlink stress test proved that even when invoked from an arbitrary current working directory through relative symlinks, the trampoline correctly locates `$PROJECT_ROOT/.venv/bin/python` and replaces itself via `exec`.
+   - The uninstaller `setup/uninstall.sh` uses case matching against `"$PROJECT_ROOT/"*` before deleting the symlink, ensuring it will not inadvertently remove a symlink belonging to another user installation or tool.
 
-3. **Concurrency & Deadlock Analysis**:
-   - `play()` locks `_playback_lock` to ensure only one audio stream plays at a time.
-   - When `interrupt()` is called from another thread (e.g. `_on_signal` or `UserPromptSubmit`), it does NOT wait on `_playback_lock`. It acquires `_state_lock`, signals `proc.terminate()`, and returns.
-   - Terminating `proc` unblocks `proc.communicate()` inside `play()`. The `finally:` block clears `self._proc = None` under `_state_lock`.
-   - Stress testing with 4 concurrent playback threads and a rapid interrupter thread completed across multiple cycles with 0 errors.
-
-4. **Resource Management**:
-   - File descriptors from `NamedTemporaryFile` are closed prior to synthesis.
-   - Every synthesis invocation is enclosed in `try ... finally` where `temp_wav`, `temp_wav.partial`, and all `{stem}-*.wav` fragments are unlinked with `missing_ok=True`.
+3. **Interface and Exit Code Contracts**:
+   - In accordance with `PROJECT.md` §75–96:
+     - Normal operations and muted runs return `0`.
+     - Transport operations without an active playback session return `2` (`EXIT_NO_SESSION`).
+     - Validation failures (e.g. invalid `--source-hash` length, invalid ordinal `< 1`, empty text) return `2` (`EXIT_INVALID_INPUT`).
+     - Bad seek targets return `4` (`EXIT_BAD_ARG`).
+     - Diagnostic failures return `1` (`EXIT_FAILURE`).
+   - The dispatcher strictly enforces these codes, preventing erroneous status reporting to callers and shell hooks.
 
 ---
 
 ## 3. Caveats
 
-- **Scope Boundary**: Milestone M1 implements in-process `TTSEngine` and `NativeAudioSink`. Milestones M2 (UNIX socket IPC and thin `speak.py`) and M3 (removal of `run_speak.sh` and deprecated caller modules) remain to be completed in subsequent milestones as specified in `PROJECT.md`.
-- **Pre-existing test in repository**: `tests/test_narrator_phase_classifier.py` failed due to pre-existing modifications in `narrator_phase_classifier.py` (`max_events_per_phase=1`), which is outside the Milestone M1 scope. All M1-scoped tests pass 100%.
+- **Worktree Symlink Retargeting at Milestone M5**: `~/.local/bin/auto-speech` currently targets `/Users/joshua/Developer/auto-speech-worktree/bin/auto-speech`. When Milestone M5 completes the merge into `main` and deletes the worktree directory, `setup/install-plugin.sh` must be executed from `/Users/joshua/Developer/auto-speech` to retarget the symlink to the permanent repository.
+- **Hermetic Mocking**: Automated test suites mock `MpvIpc` and audio sinks; no physical audio device was actuated during automated tests.
 
 ---
 
 ## 4. Conclusion
 
-**Verdict: APPROVE**
+Milestone M1 fulfills all functional and non-functional requirements specified in `PROJECT.md` and `ORIGINAL_REQUEST.md`:
+1. `bin/auto-speech` is portable, robust, and correctly linked to `~/.local/bin/auto-speech`.
+2. `plugin/scripts/python/cli.py` provides complete coverage of all 12 subcommands with exact exit code conformity.
+3. `setup/install-plugin.sh` and `setup/uninstall.sh` handle symlink lifecycle idempotently and defensively.
+4. All 50 test suites in `tests/run_all.sh` pass cleanly with zero lint errors.
+5. No integrity violations, shortcuts, or facade implementations exist.
 
-Milestone M1 satisfies all requirements outlined in `ORIGINAL_REQUEST.md`, `PROJECT.md`, and the assignment dispatch:
-1. `NativeAudioSink` delivers synchronous, non-overlapping playback via `mpv` with safe interruption and SIGKILL escalation.
-2. `NarratorService` hosts `TTSEngine` in-process with strict MLX thread affinity.
-3. Temporary audio files and file descriptors are systematically cleaned up without resource leaks.
-4. Legacy duration sleep calculations and indiscriminate `pkill` calls have been completely removed.
-5. All relevant unit, boundary, and E2E tests pass with zero lint errors.
+**Final Verdict**: **APPROVE**. The codebase is ready to proceed to Milestone M2.
 
 ---
 
 ## 5. Verification Method
 
-To independently verify this review:
+To independently reproduce and verify this review in `/Users/joshua/Developer/auto-speech-worktree`:
 
-1. **Run Unit Tests for NativeAudioSink**:
-   ```bash
-   .venv/bin/python tests/test_native_audio_sink.py
-   ```
-   *Expected output*: 12 tests pass, `OK`.
+```bash
+# 1. Run installer contract test suite (12 assertions)
+bash tests/test_install_plugin.sh
 
-2. **Run Unit Tests for NarratorService**:
-   ```bash
-   .venv/bin/python tests/test_narrator_service.py
-   ```
-   *Expected output*: 21 tests pass, exit code 0.
+# 2. Run CLI dispatcher unit and integration tests (74 tests)
+.venv/bin/python -m unittest tests/test_cli_dispatcher.py
 
-3. **Run E2E Tier 1 & Tier 2 R1 Tests**:
-   ```bash
-   .venv/bin/python -m unittest tests.e2e.test_tier1_features.TestTier1R1InProcessAudioSink
-   .venv/bin/python -m unittest tests.e2e.test_tier2_boundaries.TestTier2R1Boundaries
-   ```
-   *Expected output*: All 11 tests pass, `OK`.
+# 3. Run full test suite (50 suites)
+bash tests/run_all.sh
 
-4. **Run Linter**:
-   ```bash
-   .venv/bin/ruff check plugin/scripts/python/native_audio_sink.py plugin/scripts/python/narrator_service.py tests/test_native_audio_sink.py tests/test_narrator_service.py
-   ```
-   *Expected output*: `All checks passed!`.
+# 4. Check ruff linter
+.venv/bin/ruff check plugin/scripts/python/cli.py tests/test_cli_dispatcher.py setup/
+
+# 5. Verify direct CLI entrypoints
+bin/auto-speech --help
+~/.local/bin/auto-speech --help
+bin/auto-speech --version
+
+# 6. Verify exit code contracts
+bin/auto-speech pause; echo "exit: $?"       # Expect 2
+bin/auto-speech seek +10; echo "exit: $?"    # Expect 2
+bin/auto-speech replay --ordinal 0; echo "exit: $?" # Expect 2
+```

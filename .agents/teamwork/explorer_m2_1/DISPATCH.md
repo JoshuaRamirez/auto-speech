@@ -1,35 +1,44 @@
-# Task Assignment: Explorer M2.1 (Daemon Socket Server Specialist)
+## 2026-10-06T22:05:42Z
 
-You are explorer_m2_1 (teamwork_preview_explorer).
-Your working directory: /Users/joshua/Developer/auto-speech/.agents/teamwork/explorer_m2_1
-Project root: /Users/joshua/Developer/auto-speech
-Original request: /Users/joshua/Developer/auto-speech/.agents/teamwork/ORIGINAL_REQUEST.md
-Project specification: /Users/joshua/Developer/auto-speech/PROJECT.md
+[Message] timestamp=2026-10-06T22:05:42Z sender=4db9af0e-498d-49a5-831a-0009fd31326e priority=MESSAGE_PRIORITY_HIGH content=You are teamwork_preview_explorer (explorer_m2_1).
+Your dedicated working directory is: /Users/joshua/Developer/auto-speech/.agents/teamwork/explorer_m2_1
 
-## Objective
-Read ORIGINAL_REQUEST.md and PROJECT.md first.
-You are investigating Milestone M2: UNIX domain socket server integration into `plugin/scripts/python/narrator_service.py`.
-Specify:
-1. `socketserver.ThreadingUnixStreamServer` or `socketserver.UnixStreamServer` background thread in `NarratorService`.
-2. Socket path: `/tmp/auto-speech-daemon.sock` (configurable via environment or constructor).
-3. Lifecycle & cleanup:
-   - Safe unlinking of stale socket file on startup before binding.
-   - Clean unlinking of socket file on daemon shutdown (`_stop`, signals, exit).
-4. Request handling:
-   - Read UTF-8 stream from client until EOF.
-   - Strip whitespace; if non-empty, enqueue to `self._tts_queue`.
-   - Handle concurrent client connections safely.
+MANDATORY FIRST STEP: Read the user request verbatim in:
+/Users/joshua/Developer/auto-speech/.agents/teamwork/ORIGINAL_REQUEST.md (under header `## 2026-10-06T20:47:50Z`).
+Also read:
+/Users/joshua/Developer/auto-speech/PROJECT.md
+and reference the architectural survey in:
+/Users/joshua/Developer/auto-speech/.agents/teamwork/explorer_survey_2/analysis.md.
 
-Write your findings to `/Users/joshua/Developer/auto-speech/.agents/teamwork/explorer_m2_1/analysis.md` and `handoff.md`. Send a message when done.
+Note: Code changes for Milestone M2 will be applied inside the isolated git worktree at `/Users/joshua/Developer/auto-speech-worktree`.
 
+Objective:
+Formulate the concrete, detailed implementation strategy for the `autoplay_turn` and `narrate_event` MCP tools in `plugin/scripts/python/mcp_server.py` for Milestone M2.
 
-## 2026-10-03T18:36:44Z
-You are explorer_m2_1.
-Your working directory: /Users/joshua/Developer/auto-speech/.agents/teamwork/explorer_m2_1
-Project root: /Users/joshua/Developer/auto-speech
-Original request: /Users/joshua/Developer/auto-speech/.agents/teamwork/ORIGINAL_REQUEST.md
-Project specification: /Users/joshua/Developer/auto-speech/PROJECT.md
+Investigate and specify:
+1. `autoplay_turn` tool schema & handler:
+   - Input properties: `session_id` (string), `transcript_path` (string), `mode` (enum: summary, verbatim, raw), `size` (enum: small, medium, large), `ordinal` (integer, default 1), `bypass_llm` (boolean).
+   - Validation & execution steps:
+     * Global mute check (`AutoplayGate().worker_gated_off()`) returning tool error if muted.
+     * Transcript resolution: explicit path or `TranscriptLocator().locate(cwd=..., session_id=...)`.
+     * Turn extraction: `MessageSelector().select(path, n=ordinal)` (handling both Claude Code and Antigravity formats, minimum length check).
+     * Cache key calculation: SHA-256 hash of text + null byte + voice:speed.
+     * Rewriting pipeline: `autoplay_config`, `ClaudeCliRewriter` with template prompt fallback on failure.
+     * Enqueueing to daemon: `DaemonClient().speak(text, priority=Priority.AUTOPLAY, source_hash=source_hash, session_id=session_id)`.
+     * Error handling: Return clear tool results with `isError=True` on failure.
+2. `narrate_event` tool schema & handler:
+   - Input properties: `event` (string, required), `payload` (object, optional), `session_id` (string, optional), `cwd` (string, optional).
+   - Validation & execution steps:
+     * Global mute check (`AutoplayGate().worker_gated_off()`).
+     * Session enrollment check: verifies marker `~/.claude/auto-speech-narrate-sessions/<session_id>` exists. If not enrolled, returns clean notice without error.
+     * Daemon liveness check: `DaemonClient().ensure_daemon_running()`.
+     * Event logging: append JSON line with ts, cwd, pid, event, payload to `/tmp/auto-speech-narrator-events.jsonl`.
+     * Return confirmation of event ingestion.
+3. How to keep `mcp_server.py` clean, standard-library-only, and maintain testability (injectable collaborators).
 
-Read ORIGINAL_REQUEST.md and PROJECT.md first. Read your task assignment in /Users/joshua/Developer/auto-speech/.agents/teamwork/explorer_m2_1/DISPATCH.md.
-Investigate daemon socket server integration into narrator_service.py on /tmp/auto-speech-daemon.sock, stale cleanup, unlinking on exit, and enqueueing to _tts_queue.
-Write findings to analysis.md and handoff.md. Send a message when done.
+Do NOT implement code directly.
+Write your analysis to:
+/Users/joshua/Developer/auto-speech/.agents/teamwork/explorer_m2_1/analysis.md
+and handoff report to:
+/Users/joshua/Developer/auto-speech/.agents/teamwork/explorer_m2_1/handoff.md
+Send a completion message back to caller when done.

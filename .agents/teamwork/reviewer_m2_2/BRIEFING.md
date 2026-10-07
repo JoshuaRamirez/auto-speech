@@ -1,64 +1,61 @@
-# BRIEFING — 2026-10-03T19:02:00Z
+# BRIEFING — 2026-10-06T22:28:30Z
 
 ## Mission
-Review Milestone M2 implementation focusing on socket lifecycle, thread safety, wire protocol chunking, error handling, test/linter verification, and adversarial analysis.
+Review Milestone M2 tool schemas, backward compatibility, and error handling in /Users/joshua/Developer/auto-speech-worktree.
 
 ## 🔒 My Identity
-- Archetype: reviewer_m2_2
+- Archetype: reviewer_critic
 - Roles: reviewer, critic
 - Working directory: /Users/joshua/Developer/auto-speech/.agents/teamwork/reviewer_m2_2
-- Original parent: c05df6b8-cecd-49ba-9fb8-8fa47f977488
+- Original parent: 4db9af0e-498d-49a5-831a-0009fd31326e
 - Milestone: M2
-- Instance: 1 of 1
+- Instance: 2 of 2
 
 ## 🔒 Key Constraints
 - Review-only — do NOT modify implementation code
-- Review Milestone M2 implementation focusing on socket lifecycle, thread safety (_queue_lock), wire protocol chunking, error handling, and linter check
-- Verify integrity: actively check for integrity violations (hardcoded test results, facade implementations, shortcuts, fabricated verification, self-certifying work)
-- Deliver report to handoff.md with APPROVE or REQUEST_CHANGES
-- Send a message when done via send_message to parent (c05df6b8-cecd-49ba-9fb8-8fa47f977488)
+- Check for integrity violations (hardcoded test results, facade implementations, shortcuts, fake verification)
+- Check backward compatibility for `speak` tool
+- Check global mute check `~/.claude/auto-speech.disabled`
+- Check defensive error handling (no uncaught tracebacks)
+- Empirical execution of tests and tools/list in /Users/joshua/Developer/auto-speech-worktree
 
 ## Current Parent
-- Conversation ID: c05df6b8-cecd-49ba-9fb8-8fa47f977488
-- Updated: 2026-10-03T19:02:00Z
+- Conversation ID: 4db9af0e-498d-49a5-831a-0009fd31326e
+- Updated: 2026-10-06T22:28:30Z
 
 ## Review Scope
-- **Files to review**: `plugin/scripts/python/speak.py`, `plugin/scripts/python/narrator_service.py`, `tests/test_speak_client.py`, `tests/test_narrator_service.py`
-- **Interface contracts**: PROJECT.md, ORIGINAL_REQUEST.md
-- **Review criteria**: correctness, thread safety, socket lifecycle, wire protocol chunking, error handling, style/conformance, integrity
-
-## Key Decisions Made
-- Executed unit tests for `test_speak_client.py` (18/18 passed) and `test_narrator_service.py` (26/26 passed)
-- Executed E2E test suites: Tier 1 R2 (6/6 passed), Tier 2 R2 (5/5 passed), Tier 3 combinations (5/5 passed), Tier 4 scenarios (3/3 passed)
-- Executed linter `ruff check` on all affected modules (all passed)
-- Conducted integrity check: confirmed zero hardcoded fixtures, facade logic, or fabricated claims
-- Conducted adversarial analysis: tested `_queue_lock` under 500-message heavy contention, tested queue overflow on `Stop`/`UserPromptSubmit`, tested socket timeouts and memory limits
-- Verdict: APPROVE Milestone M2
-
-## Artifact Index
-- handoff.md — Review and adversarial challenge report
-- progress.md — Liveness heartbeat
+- **Files to review**: `plugin/scripts/python/mcp_server.py`, `tests/test_mcp_server.py` in `/Users/joshua/Developer/auto-speech-worktree`
+- **Interface contracts**: `/Users/joshua/Developer/auto-speech/PROJECT.md`, `/Users/joshua/Developer/auto-speech/.agents/teamwork/ORIGINAL_REQUEST.md`
+- **Review criteria**: Schema correctness for 6 tools, backward compatibility of `speak`, mute handling, defensive error handling, integrity check.
 
 ## Review Checklist
 - **Items reviewed**:
-  - `plugin/scripts/python/speak.py`
-  - `plugin/scripts/python/narrator_service.py`
-  - `tests/test_speak_client.py`
-  - `tests/test_narrator_service.py`
-  - Tier 1-4 E2E test suites
+  - `plugin/scripts/python/mcp_server.py` lines 1-1204: Verified all 6 schemas and implementations.
+  - `tests/test_mcp_server.py` lines 1-1033: Verified 52 hermetic unit test cases.
+  - Empirical execution of `.venv/bin/python tests/test_mcp_server.py`: Passed 52/52.
+  - Empirical execution of `tools/list` JSON-RPC: Verified all 6 schemas formatted properly.
+  - Empirical execution of `bash tests/run_all.sh`: Passed 50/50 test suites.
+  - Empirical execution of `.venv/bin/ruff check plugin/scripts/python/mcp_server.py tests/test_mcp_server.py`: 0 errors.
+  - Empirical stress test of 43 adversarial inputs: 0 uncaught exceptions.
+  - Global mute verification across all 5 speech-producing operations.
 - **Verdict**: APPROVE
-- **Unverified claims**: none
+- **Unverified claims**: None. All claims independently verified.
 
 ## Attack Surface
 - **Hypotheses tested**:
-  - Heavy socket burst vs queue lock contention: passed (zero race conditions, perfect backpressure shedding)
-  - Abrupt client disconnect with SO_LINGER 0: passed (handled cleanly without crash)
-  - Large payload chunking (128KB): passed (streams cleanly without deadlock)
-  - Malformed UTF-8 stream: passed (`errors="replace"` prevents decode crashes)
-  - Event-tailing queue full blocking on `.put()` for `UserPromptSubmit`/`Stop`: confirmed vulnerability (noted for M3/M4)
-  - Client socket read timeout in handler: noted lack of timeout on idle connections
-- **Vulnerabilities found**:
-  - Minor: Blocking `.put()` in `_process_chunk` bypassing `_queue_lock` and backpressure
-  - Minor: Lack of socket read timeout and max payload cap in `_DaemonRequestHandler`
-- **Untested angles**:
-  - Operating system extreme FD exhaustion
+  - `speak` schema or signature regressed from previous version: Disproved (exact schema, identical arguments and behavior preserved).
+  - Malformed or edge-case numbers in `seek` (`nan`, `inf`, float overflow) cause server crash: Disproved (`math.isfinite` and bounds validation catch all).
+  - Global mute bypassed by `autoplay_turn`, `narrate_event`, or `playback_control`: Disproved (all speech paths verify `AutoplayGate().worker_gated_off()`).
+  - Daemon offline causes uncaught tracebacks in `autoplay_turn`, `speak`, `narrate_event`, `playback_control`: Disproved (graceful fallback to `spawn_say_worker` or clean JSON-RPC tool error).
+  - LLM rewriter timeout/failure causes unhandled exception: Disproved (falls back to raw assistant text).
+- **Vulnerabilities found**: None.
+- **Untested angles**: Hardware audio speaker output (mocked in tests and unit harnesses as required).
+
+## Key Decisions Made
+- Confirmed full compliance with Milestone M2 requirements and issued verdict APPROVE.
+
+## Artifact Index
+- `.agents/teamwork/reviewer_m2_2/DISPATCH.md` — Incoming dispatch log
+- `.agents/teamwork/reviewer_m2_2/BRIEFING.md` — Working memory and context
+- `.agents/teamwork/reviewer_m2_2/progress.md` — Liveness heartbeat
+- `.agents/teamwork/reviewer_m2_2/handoff.md` — Final review report and verdict

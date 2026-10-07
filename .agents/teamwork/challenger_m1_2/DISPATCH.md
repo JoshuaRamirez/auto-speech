@@ -30,3 +30,23 @@ Worker handoff: /Users/joshua/Developer/auto-speech/.agents/teamwork/worker_m1/h
 Read ORIGINAL_REQUEST.md and PROJECT.md first. Read your task assignment in /Users/joshua/Developer/auto-speech/.agents/teamwork/challenger_m1_2/DISPATCH.md.
 Empirically stress-test narrator_service.py in-process synthesis and playback: worker queue resilience on errors, rapid UserPromptSubmit interruptions without pkill, verify zero temporary file leaks, verify clean process table.
 Deliver your report to handoff.md with APPROVE or REJECT. Send a message when done.
+
+## 2026-10-06T21:34:35Z
+You are teamwork_preview_challenger (challenger_m1_2).
+Your working directory is: /Users/joshua/Developer/auto-speech/.agents/teamwork/challenger_m1_2
+
+MANDATORY FIRST STEP: Read the user request verbatim in:
+/Users/joshua/Developer/auto-speech/.agents/teamwork/ORIGINAL_REQUEST.md (under header `## 2026-10-06T20:47:50Z`).
+Also read:
+/Users/joshua/Developer/auto-speech/PROJECT.md.
+
+Scope: Adversarially challenge transport controls, global mute, and daemon interaction in `/Users/joshua/Developer/auto-speech-worktree`.
+Conduct empirical tests against `bin/auto-speech`:
+1. Global mute test: touch a temporary test disable marker `~/.claude/auto-speech.disabled`. Run `bin/auto-speech speak "should be muted"`. Verify it exits 0 cleanly without audio synthesis, prints mute note to stderr. (Clean up the test marker immediately!).
+2. Transport control when no playback is active: `bin/auto-speech pause`, `resume`, `restart`, `stop`. Verify exit code 2 on missing session.
+3. Hook simulation: test `bin/auto-speech hook stop` and `hook narrator` with malformed JSON payloads. Verify defensive handling (no unhandled tracebacks).
+4. Run full test suite: `cd /Users/joshua/Developer/auto-speech-worktree && bash tests/run_all.sh`.
+
+Record all findings and verification outputs in:
+/Users/joshua/Developer/auto-speech/.agents/teamwork/challenger_m1_2/handoff.md
+State your verdict: APPROVE or REQUEST_CHANGES. Send a completion message when finished.
