@@ -65,6 +65,21 @@ for cmd in "${NAMESPACED_CMDS[@]}" "${LEGACY_CMDS[@]}"; do
 done
 echo "[uninstall] removed $removed_cmds slash command symlinks"
 
+# 1b. Remove CLI dispatcher symlink in ~/.local/bin/ if (and only if) it points into our project.
+cli_link="$HOME/.local/bin/auto-speech"
+if [[ -L "$cli_link" ]]; then
+    target="$(readlink "$cli_link")"
+    case "$target" in
+        "$PROJECT_ROOT/"*)
+            rm -f "$cli_link"
+            echo "[uninstall] removed CLI symlink $cli_link → $target"
+            ;;
+        *)
+            echo "[uninstall] skipped $cli_link (symlink points outside project: $target)"
+            ;;
+    esac
+fi
+
 # 2. Remove Stop hook entry. Use the existing idempotent uninstall script.
 if [[ -x "$PROJECT_ROOT/setup/uninstall-hook.sh" ]]; then
     "$PROJECT_ROOT/setup/uninstall-hook.sh" || true

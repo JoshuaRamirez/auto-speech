@@ -9,27 +9,9 @@ You are executing `/auto-speech-narrate-off` for the auto-speech plugin.
 Run this single Bash command, then respond with one short status line.
 
 ```
-set -euo pipefail
-SESSION_ID="${CLAUDE_CODE_SESSION_ID:-}"
-
-if [[ -z "$SESSION_ID" ]]; then
-    echo "narrate off: CLAUDE_CODE_SESSION_ID not set; nothing to remove"
-    exit 0
-fi
-
-MARKER="$HOME/.claude/auto-speech-narrate-sessions/$SESSION_ID"
-if [[ -e "$MARKER" ]]; then
-    rm -f "$MARKER"
-    echo "removed: $MARKER"
-else
-    echo "marker already absent: $MARKER"
-fi
-
-# Also remove the deprecated per-project marker if present.
-if [[ -e "$PWD/.claude/narrate.enabled" ]]; then
-    rm -f "$PWD/.claude/narrate.enabled"
-    echo "(also removed legacy per-project marker)"
-fi
+PROJECT_ROOT="$(cat "$HOME/.config/auto-speech/root" 2>/dev/null || true)"
+[ -d "$PROJECT_ROOT" ] || { echo "auto-speech: project root not configured — run setup/install-plugin.sh from your clone" >&2; exit 1; }
+"$PROJECT_ROOT/bin/auto-speech" narrate off
 ```
 
 Respond with exactly one line: `narrate off — session <session-id>, <message from stdout>`.

@@ -42,3 +42,7 @@ package = false
 target-version = "py312"
 line-length = 100
 extend-exclude = [".venv", "docs", ".agents"]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/**" = ["E402"]
+

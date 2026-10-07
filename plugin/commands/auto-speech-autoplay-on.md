@@ -6,32 +6,15 @@ allowed-tools: Bash
 Run this single Bash command:
 
 ```
-set -euo pipefail
-SESSION_ID="${CLAUDE_CODE_SESSION_ID:-}"
-# Clear the global mute if set — autoplay-on always means "I want sound".
-rm -f "$HOME/.claude/auto-speech.disabled"
-if [ -z "$SESSION_ID" ]; then
-    echo "no-session-id"
-    exit 0
-fi
-# Autoplay is opt-IN: create this session's enrollment marker.
-mkdir -p "$HOME/.claude/auto-speech-autoplay-enabled"
-MARKER="$HOME/.claude/auto-speech-autoplay-enabled/$SESSION_ID"
-if [ -e "$MARKER" ]; then
-    echo "on-already $SESSION_ID"
-else
-    touch "$MARKER"
-    echo "on $SESSION_ID"
-fi
+PROJECT_ROOT="$(cat "$HOME/.config/auto-speech/root" 2>/dev/null || true)"
+[ -d "$PROJECT_ROOT" ] || { echo "auto-speech: project root not configured — run setup/install-plugin.sh from your clone" >&2; exit 1; }
+"$PROJECT_ROOT/bin/auto-speech" autoplay on
 ```
 
-If the output is `on <id>`, respond with one line:
+If the command succeeds and outputs `autoplay enabled for session <id>`, respond with one line:
 `autoplay enabled for session <id> (other sessions stay off)`.
 
-If the output is `on-already <id>`, respond with one line:
-`autoplay was already enabled for session <id>`.
-
-If the output is `no-session-id`, respond with one line:
+If the command fails because `CLAUDE_CODE_SESSION_ID` is not set, respond with one line:
 `global mute cleared, but CLAUDE_CODE_SESSION_ID is not set — autoplay is opt-in per session and cannot enroll without it (check that jq is installed; /auto-speech-doctor reports it)`.
 
 On any other output, respond with the output verbatim.

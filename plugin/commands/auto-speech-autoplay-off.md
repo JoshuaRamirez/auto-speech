@@ -6,32 +6,15 @@ allowed-tools: Bash
 Run this single Bash command:
 
 ```
-set -euo pipefail
-SESSION_ID="${CLAUDE_CODE_SESSION_ID:-}"
-if [ -z "$SESSION_ID" ]; then
-    # No session id to scope by — fall back to the global mute marker.
-    mkdir -p "$HOME/.claude"
-    touch "$HOME/.claude/auto-speech.disabled"
-    echo "off-global"
-    exit 0
-fi
-# Autoplay is opt-IN: withdraw this session's enrollment marker.
-MARKER="$HOME/.claude/auto-speech-autoplay-enabled/$SESSION_ID"
-if [ -e "$MARKER" ]; then
-    rm -f "$MARKER"
-    echo "off $SESSION_ID"
-else
-    echo "off-already $SESSION_ID"
-fi
+PROJECT_ROOT="$(cat "$HOME/.config/auto-speech/root" 2>/dev/null || true)"
+[ -d "$PROJECT_ROOT" ] || { echo "auto-speech: project root not configured — run setup/install-plugin.sh from your clone" >&2; exit 1; }
+"$PROJECT_ROOT/bin/auto-speech" autoplay off
 ```
 
-If the output is `off <id>`, respond:
+If the output contains `autoplay disabled for session <id>`, respond:
 `autoplay disabled for session <id> (other sessions unchanged)`.
 
-If the output is `off-already <id>`, respond:
-`autoplay was already off for session <id> (it is off by default)`.
-
-If the output is `off-global`, respond:
+If the output contains `set global mute marker instead`, respond:
 `no session id — set global mute marker instead (~/.claude/auto-speech.disabled)`.
 
 On any other output, respond with the output verbatim.

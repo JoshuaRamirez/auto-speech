@@ -20,7 +20,7 @@ Run this single Bash command, substituting `ORDINAL`:
 ```
 PROJECT_ROOT="$(cat "$HOME/.config/auto-speech/root" 2>/dev/null || true)"
 [ -d "$PROJECT_ROOT" ] || { echo "auto-speech: project root not configured — run setup/install-plugin.sh from your clone" >&2; exit 1; }
-"$PROJECT_ROOT/plugin/scripts/shell/run_replay.sh" --ordinal ORDINAL
+"$PROJECT_ROOT/bin/auto-speech" replay --ordinal ORDINAL
 ```
 
 `/replay` does NOT consult the current session transcript. It only reads

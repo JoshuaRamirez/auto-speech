@@ -37,6 +37,13 @@ if [[ -f "$root_file" && "$(cat "$root_file")" == "$PROJECT_ROOT" ]]; then
     ok "root file recorded with the clone path"
 else fail "root file" "missing or wrong content: $(cat "$root_file" 2>/dev/null)"; fi
 
+cli_link="$SANDBOX/.local/bin/auto-speech"
+if [[ -L "$cli_link" && "$(readlink "$cli_link")" == "$PROJECT_ROOT/bin/auto-speech" ]]; then
+    ok "curated install links ~/.local/bin/auto-speech"
+else
+    fail "cli symlink" "missing or wrong target: $(readlink "$cli_link" 2>/dev/null)"
+fi
+
 # --- a real command block runs against the recorded root --------------------
 # Execute the doctor command's fenced block with HOME pointed at the sandbox;
 # it must resolve PROJECT_ROOT and reach the real doctor.py (any exit status
@@ -94,10 +101,17 @@ HOME="$SANDBOX" PATH="$SANDBOX/bin:$PATH" AUTO_SPEECH_TMP_ROOT="$SANDBOX/tmp" \
 if [[ ! -f "$root_file" ]]; then ok "uninstall removes the recorded root file"
 else fail "uninstall root" "root file still present"; fi
 
+if [[ ! -L "$cli_link" && ! -e "$cli_link" ]]; then
+    ok "uninstall removes ~/.local/bin/auto-speech symlink"
+else
+    fail "uninstall cli symlink" "symlink still present: $(readlink "$cli_link" 2>/dev/null)"
+fi
+
 # --- portability invariant --------------------------------------------------
-if grep -rq "/Users/joshua" "$PROJECT_ROOT/plugin/commands" \
-        "$PROJECT_ROOT/plugin/commands-extra" 2>/dev/null; then
-    fail "portability" "hardcoded /Users/joshua path present in command files"
+if grep -rqE "/Users/[A-Za-z][^/]*/" "$PROJECT_ROOT/plugin/commands" \
+        "$PROJECT_ROOT/plugin/commands-extra" \
+        "$PROJECT_ROOT/bin" 2>/dev/null; then
+    fail "portability" "hardcoded /Users/<name> path present in command files"
 else
     ok "no hardcoded absolute project paths in command files"
 fi
