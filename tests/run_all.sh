@@ -84,6 +84,7 @@ CHEAP=(
     test_apple_say_engine.py
     test_native_audio_sink.py
     test_speak_client.py
+    test_cli_dispatcher.py
 )
 
 # Bash-script tests for shell helpers.

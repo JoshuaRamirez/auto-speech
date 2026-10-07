@@ -127,6 +127,63 @@ else
 fi
 rm -rf "$FAKE_HOME"
 
+# ---- Functional: Antigravity enrolled session proceeds ----
+FAKE_HOME_AG="$(mktemp -d -t auto-speech-hook-test-ag-XXXXXX)"
+mkdir -p "$FAKE_HOME_AG/.claude/auto-speech-autoplay-enabled"
+touch "$FAKE_HOME_AG/.claude/auto-speech-autoplay-enabled/conv-1"
+PAYLOAD_AG='{"conversationId":"conv-1","transcriptPath":"/nonexistent.jsonl"}'
+if HOME="$FAKE_HOME_AG" AUTO_SPEECH_AUTOPLAY_MIN_LEN=99999999 \
+        bash "$HOOK" <<<"$PAYLOAD_AG" >/dev/null 2>&1; then
+    if [[ -e "/tmp/auto-speech-last-stop.conv-1" ]]; then
+        ok "hook-proceeds-for-antigravity-session"
+        rm -f "/tmp/auto-speech-last-stop.conv-1"
+    else
+        fail "hook-antigravity-enrolled" "hook bailed for enrolled Antigravity session (no beacon)"
+    fi
+else
+    fail "hook-antigravity-exit" "hook exited non-zero for enrolled Antigravity session"
+fi
+
+# ---- Functional: Antigravity unenrolled session bails ----
+PAYLOAD_AG_UNENROLLED='{"conversationId":"conv-unenrolled","transcriptPath":"/nonexistent.jsonl"}'
+if HOME="$FAKE_HOME_AG" bash "$HOOK" <<<"$PAYLOAD_AG_UNENROLLED" >/dev/null 2>&1; then
+    if [[ -e "/tmp/auto-speech-last-stop.conv-unenrolled" ]]; then
+        fail "hook-antigravity-unenrolled" "hook proceeded for unenrolled Antigravity session"
+        rm -f "/tmp/auto-speech-last-stop.conv-unenrolled"
+    else
+        ok "hook-bails-for-antigravity-unenrolled"
+    fi
+else
+    fail "hook-antigravity-unenrolled-exit" "hook exited non-zero for unenrolled Antigravity session"
+fi
+
+# ---- Functional: Antigravity global mute overrides enrolled session ----
+touch "$FAKE_HOME_AG/.claude/auto-speech.disabled"
+touch "$FAKE_HOME_AG/.claude/auto-speech-autoplay-enabled/conv-muted"
+PAYLOAD_AG_MUTED='{"conversationId":"conv-muted","transcriptPath":"/nonexistent.jsonl"}'
+if HOME="$FAKE_HOME_AG" bash "$HOOK" <<<"$PAYLOAD_AG_MUTED" >/dev/null 2>&1; then
+    if [[ -e "/tmp/auto-speech-last-stop.conv-muted" ]]; then
+        fail "hook-antigravity-mute" "hook proceeded for Antigravity despite global mute"
+        rm -f "/tmp/auto-speech-last-stop.conv-muted"
+    else
+        ok "hook-bails-on-antigravity-global-mute"
+    fi
+else
+    fail "hook-antigravity-mute-exit" "hook exited non-zero for Antigravity under global mute"
+fi
+rm -rf "$FAKE_HOME_AG"
+
+# ---- Functional: Non-dict and malformed JSON payloads bail cleanly ----
+FAKE_HOME_ND="$(mktemp -d -t auto-speech-hook-test-nd-XXXXXX)"
+for nd_payload in '["Stop"]' '"Stop"' '12345' 'non-json' ''; do
+    if HOME="$FAKE_HOME_ND" bash "$HOOK" <<<"$nd_payload" >/dev/null 2>&1; then
+        ok "hook-non-dict-bail-cleanly (${nd_payload:-empty})"
+    else
+        fail "hook-non-dict-exit" "hook exited non-zero for non-dict payload: $nd_payload"
+    fi
+done
+rm -rf "$FAKE_HOME_ND"
+
 echo
 echo "autoplay shim: $ran ran, $failures failed"
 exit $failures

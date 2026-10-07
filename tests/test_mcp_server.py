@@ -1,15 +1,18 @@
-"""Unit tests for the auto-speech MCP server (the `speak` tool).
+"""Unit tests for the auto-speech MCP server (expanded 6-tool suite).
 
-Drives McpServer with raw JSON-RPC lines and a stub spawner, so no worker
-process, audio, or real mute marker is touched. Covers:
-  - initialize negotiates a supported protocol, falls back otherwise
-  - notifications get no response
-  - tools/list advertises exactly `speak`
-  - speak queues the text verbatim and reports success
-  - speak rejects empty / non-string / oversize text as tool errors
-  - speak honors the global mute
-  - unknown tool, unknown method, bad params, parse error, invalid request
-  - serve() writes one JSON line per request and none per notification
+Drives McpServer with raw JSON-RPC lines and mocked collaborators, so no
+audio hardware, real worker processes, or host system markers are touched.
+
+Covers:
+  - Protocol initialization, protocol version negotiation, ping, and notifications
+  - tools/list advertises all six tools with complete schemas
+  - speak tool (100% backward compatibility, parameter validation, global mute, fallbacks)
+  - autoplay_turn tool (extraction, min-len check, caching hash, rewriting, fallbacks, mute)
+  - narrate_event tool (parameter validation, enrollment gating, daemon check, JSONL logging)
+  - playback_control tool (stop, pause, resume, restart, seek targets, replay cache, mute)
+  - session_configure tool (autoplay markers, narrate markers, solo scope, config TOML)
+  - doctor tool (human text report, structured JSON, health failure isError signaling)
+  - stdio line framing and protocol errors
 """
 
 from __future__ import annotations
@@ -20,20 +23,32 @@ import os
 import sys
 import tempfile
 from pathlib import Path
+import unittest
+from unittest.mock import MagicMock, patch
 
 SRC = Path(__file__).resolve().parents[1] / "plugin" / "scripts" / "python"
-sys.path.insert(0, str(SRC))
+if str(SRC) not in sys.path:
+    sys.path.insert(0, str(SRC))
 
 import mcp_server  # noqa: E402
+from assistant_message import AssistantMessage  # noqa: E402
 from autoplay_gate import AutoplayGate  # noqa: E402
+from autoplay_scope import SoloScope  # noqa: E402
+from cache_entry import CacheEntry  # noqa: E402
+from claude_cli_rewriter import ClaudeCliRewriteError  # noqa: E402
+from daemon_client import DaemonResponse, Priority  # noqa: E402
+from health_report import Check, HealthReport, Status  # noqa: E402
 from mcp_server import McpServer, serve  # noqa: E402
+from message_selector import NoSuchAssistantTurn  # noqa: E402
+from transcript_locator import TranscriptLocator  # noqa: E402
 
 
-def _server(muted: bool = False, spawn_error: Exception | None = None):
+def _server(muted: bool = False, spawn_error: Exception | None = None, **kwargs):
     home = Path(tempfile.mkdtemp(prefix="auto-speech-mcp-test-"))
+    claude_dir = home / ".claude"
+    claude_dir.mkdir(parents=True, exist_ok=True)
     if muted:
-        (home / ".claude").mkdir()
-        (home / ".claude" / "auto-speech.disabled").touch()
+        (claude_dir / "auto-speech.disabled").touch()
     spoken: list[str] = []
 
     def spawner(text: str) -> None:
@@ -41,7 +56,13 @@ def _server(muted: bool = False, spawn_error: Exception | None = None):
             raise spawn_error
         spoken.append(text)
 
-    return McpServer(spawner=spawner, gate=AutoplayGate(home=home)), spoken
+    srv = McpServer(
+        spawner=spawner,
+        gate=AutoplayGate(home=home),
+        home=home,
+        **kwargs,
+    )
+    return srv, spoken
 
 
 def _req(method: str, params=None, req_id=1) -> str:
@@ -54,6 +75,16 @@ def _req(method: str, params=None, req_id=1) -> str:
 def _call_speak(server: McpServer, arguments) -> dict:
     return server.handle_line(_req("tools/call", {"name": "speak", "arguments": arguments}))
 
+
+def _call_tool(server: McpServer, name: str, arguments=None, req_id=1) -> dict:
+    return server.handle_line(
+        _req("tools/call", {"name": name, "arguments": arguments if arguments is not None else {}}, req_id=req_id)
+    )
+
+
+# =========================================================================
+# Group 1: Protocol & Advertisement
+# =========================================================================
 
 def test_initialize_echoes_supported_protocol() -> None:
     s, _ = _server()
@@ -81,12 +112,34 @@ def test_ping() -> None:
     assert s.handle_line(_req("ping"))["result"] == {}
 
 
-def test_tools_list_has_only_speak() -> None:
+def test_tools_list_advertises_all_six_tools() -> None:
     s, _ = _server()
     tools = s.handle_line(_req("tools/list"))["result"]["tools"]
-    assert [t["name"] for t in tools] == ["speak"]
-    assert tools[0]["inputSchema"]["required"] == ["text"]
+    tool_names = [t["name"] for t in tools]
+    expected_names = [
+        "speak",
+        "autoplay_turn",
+        "narrate_event",
+        "playback_control",
+        "session_configure",
+        "doctor",
+    ]
+    assert tool_names == expected_names
 
+    tool_dict = {t["name"]: t for t in tools}
+    assert tool_dict["speak"]["inputSchema"]["required"] == ["text"]
+    assert tool_dict["narrate_event"]["inputSchema"]["required"] == ["event"]
+    assert tool_dict["playback_control"]["inputSchema"]["required"] == ["action"]
+
+    for name in expected_names:
+        schema = tool_dict[name]["inputSchema"]
+        assert schema["type"] == "object"
+        assert schema["additionalProperties"] is False
+
+
+# =========================================================================
+# Group 2: Backward Compatibility of speak
+# =========================================================================
 
 def test_speak_queues_text_verbatim() -> None:
     s, spoken = _server()
@@ -182,72 +235,1033 @@ def test_plugin_mcp_manifest_points_at_the_launcher() -> None:
 
 
 def test_speak_invokes_daemon_client_directly() -> None:
-    from unittest.mock import MagicMock
-    from daemon_client import DaemonResponse, Priority
-
     mock_client = MagicMock()
     mock_client.speak.return_value = DaemonResponse(status="ok", action="speak")
 
     server = McpServer(client=mock_client)
-    res = server.handle_line(_req("tools/call", {"name": "speak", "arguments": {"text": "hello sublimated"}}))
+    res = server.handle_line(
+        _req("tools/call", {"name": "speak", "arguments": {"text": "hello sublimated"}})
+    )
     assert res["result"]["isError"] is False
     assert "Queued 16 characters" in res["result"]["content"][0]["text"]
-    mock_client.speak.assert_called_once_with("hello sublimated", priority=Priority.EXPLICIT_MCP)
+    mock_client.speak.assert_called_once_with(
+        "hello sublimated", priority=Priority.EXPLICIT_MCP
+    )
 
 
 def test_speak_falls_back_to_spawn_say_worker_on_connection_error() -> None:
-    from unittest.mock import MagicMock, patch
-
     mock_client = MagicMock()
     mock_client.speak.side_effect = ConnectionError("daemon offline")
 
     with patch("mcp_server.spawn_say_worker") as mock_spawn:
         server = McpServer(client=mock_client)
-        res = server.handle_line(_req("tools/call", {"name": "speak", "arguments": {"text": "fallback text"}}))
+        res = server.handle_line(
+            _req("tools/call", {"name": "speak", "arguments": {"text": "fallback text"}})
+        )
         assert res["result"]["isError"] is False
         assert "Queued 13 characters" in res["result"]["content"][0]["text"]
         mock_spawn.assert_called_once_with("fallback text")
 
 
 def test_speak_falls_back_to_spawn_say_worker_on_daemon_error_status() -> None:
-    from unittest.mock import MagicMock, patch
-    from daemon_client import DaemonResponse
-
     mock_client = MagicMock()
-    mock_client.speak.return_value = DaemonResponse(status="error", action="speak", message="queue full")
+    mock_client.speak.return_value = DaemonResponse(
+        status="error", action="speak", message="queue full"
+    )
 
     with patch("mcp_server.spawn_say_worker") as mock_spawn:
         server = McpServer(client=mock_client)
-        res = server.handle_line(_req("tools/call", {"name": "speak", "arguments": {"text": "status error fallback"}}))
+        res = server.handle_line(
+            _req("tools/call", {"name": "speak", "arguments": {"text": "status error fallback"}})
+        )
         assert res["result"]["isError"] is False
         assert "Queued 21 characters" in res["result"]["content"][0]["text"]
         mock_spawn.assert_called_once_with("status error fallback")
 
 
-def main() -> int:
-    tests = [
-        test_initialize_echoes_supported_protocol,
-        test_initialize_unknown_protocol_falls_back_to_latest,
-        test_notification_gets_no_response,
-        test_ping,
-        test_tools_list_has_only_speak,
-        test_speak_queues_text_verbatim,
-        test_speak_rejects_bad_text,
-        test_speak_rejects_oversize_text,
-        test_speak_honors_global_mute,
-        test_speak_spawn_failure_is_tool_error,
-        test_protocol_errors,
-        test_response_messages_are_ignored,
-        test_serve_writes_one_line_per_request,
-        test_plugin_mcp_manifest_points_at_the_launcher,
-        test_speak_invokes_daemon_client_directly,
-        test_speak_falls_back_to_spawn_say_worker_on_connection_error,
-        test_speak_falls_back_to_spawn_say_worker_on_daemon_error_status,
+# =========================================================================
+# Group 3: autoplay_turn
+# =========================================================================
+
+def test_autoplay_turn_happy_path() -> None:
+    tmp = Path(tempfile.mkdtemp(prefix="auto-speech-test-ap-"))
+    transcript = tmp / "session.jsonl"
+    transcript.write_text("dummy\n", encoding="utf-8")
+
+    turn_text = "Here is the comprehensive report for the build system."
+    mock_selector = MagicMock()
+    mock_selector.select.return_value = AssistantMessage(
+        turn_index=1,
+        ordinal_from_end=1,
+        timestamp="2026-10-06T12:00:00Z",
+        text=turn_text,
+    )
+
+    mock_client = MagicMock()
+    mock_client.speak.return_value = DaemonResponse(status="ok", action="speak")
+
+    server = McpServer(
+        client=mock_client,
+        selector=mock_selector,
+        home=tmp,
+    )
+
+    res = _call_tool(
+        server,
+        "autoplay_turn",
+        {"transcript_path": str(transcript), "mode": "raw"},
+    )
+    assert res["result"]["isError"] is False
+    assert "Queued autoplay turn" in res["result"]["content"][0]["text"]
+
+    mock_client.speak.assert_called_once()
+    args, kwargs = mock_client.speak.call_args
+    assert args[0] == turn_text
+    assert kwargs.get("priority") == Priority.AUTOPLAY
+    assert len(kwargs.get("source_hash")) == 64
+
+
+def test_autoplay_turn_honors_global_mute() -> None:
+    tmp = Path(tempfile.mkdtemp(prefix="auto-speech-test-ap-mute-"))
+    claude_dir = tmp / ".claude"
+    claude_dir.mkdir(parents=True, exist_ok=True)
+    (claude_dir / "auto-speech.disabled").touch()
+
+    mock_client = MagicMock()
+    server = McpServer(
+        client=mock_client,
+        gate=AutoplayGate(home=tmp),
+        home=tmp,
+    )
+
+    res = _call_tool(server, "autoplay_turn", {})
+    assert res["result"]["isError"] is True
+    assert "globally muted" in res["result"]["content"][0]["text"]
+    assert mock_client.speak.call_count == 0
+
+
+def test_autoplay_turn_missing_transcript_returns_tool_error() -> None:
+    server, _ = _server()
+    res = _call_tool(
+        server,
+        "autoplay_turn",
+        {"transcript_path": "/tmp/nonexistent_transcript_12345.jsonl"},
+    )
+    assert res["result"]["isError"] is True
+    assert "transcript not found" in res["result"]["content"][0]["text"]
+
+
+def test_autoplay_turn_no_qualifying_turn_returns_tool_error() -> None:
+    tmp = Path(tempfile.mkdtemp(prefix="auto-speech-test-ap-noturn-"))
+    transcript = tmp / "session.jsonl"
+    transcript.write_text("dummy\n", encoding="utf-8")
+
+    mock_selector = MagicMock()
+    mock_selector.select.side_effect = NoSuchAssistantTurn("no turn")
+
+    server = McpServer(selector=mock_selector, home=tmp)
+    res = _call_tool(server, "autoplay_turn", {"transcript_path": str(transcript)})
+    assert res["result"]["isError"] is True
+    assert "no qualifying assistant turn found" in res["result"]["content"][0]["text"]
+
+
+def test_autoplay_turn_text_below_min_len_returns_tool_error() -> None:
+    tmp = Path(tempfile.mkdtemp(prefix="auto-speech-test-ap-short-"))
+    transcript = tmp / "session.jsonl"
+    transcript.write_text("dummy\n", encoding="utf-8")
+
+    mock_selector = MagicMock()
+    mock_selector.select.return_value = AssistantMessage(
+        turn_index=1,
+        ordinal_from_end=1,
+        timestamp="2026-10-06T12:00:00Z",
+        text="Short.",
+    )
+    mock_client = MagicMock()
+
+    server = McpServer(client=mock_client, selector=mock_selector, home=tmp)
+    res = _call_tool(server, "autoplay_turn", {"transcript_path": str(transcript)})
+    assert res["result"]["isError"] is True
+    assert "too short" in res["result"]["content"][0]["text"]
+    assert mock_client.speak.call_count == 0
+
+
+def test_autoplay_turn_mode_raw_bypasses_rewriter() -> None:
+    tmp = Path(tempfile.mkdtemp(prefix="auto-speech-test-ap-raw-"))
+    transcript = tmp / "session.jsonl"
+    transcript.write_text("dummy\n", encoding="utf-8")
+
+    turn_text = "This is a sufficiently long message exceeding twenty characters."
+    mock_selector = MagicMock()
+    mock_selector.select.return_value = AssistantMessage(
+        turn_index=1,
+        ordinal_from_end=1,
+        timestamp="2026-10-06T12:00:00Z",
+        text=turn_text,
+    )
+
+    mock_rewriter = MagicMock()
+    mock_rewriter.rewrite.side_effect = AssertionError("Rewriter should not be called in raw mode")
+
+    mock_client = MagicMock()
+    mock_client.speak.return_value = DaemonResponse(status="ok", action="speak")
+
+    server = McpServer(
+        client=mock_client,
+        selector=mock_selector,
+        rewriter=mock_rewriter,
+        home=tmp,
+    )
+
+    res = _call_tool(
+        server,
+        "autoplay_turn",
+        {"transcript_path": str(transcript), "mode": "raw"},
+    )
+    assert res["result"]["isError"] is False
+    mock_client.speak.assert_called_once()
+    assert mock_client.speak.call_args[0][0] == turn_text
+
+
+def test_autoplay_turn_bypass_llm_flag_bypasses_rewriter() -> None:
+    tmp = Path(tempfile.mkdtemp(prefix="auto-speech-test-ap-bypass-"))
+    transcript = tmp / "session.jsonl"
+    transcript.write_text("dummy\n", encoding="utf-8")
+
+    turn_text = "This is a sufficiently long message exceeding twenty characters."
+    mock_selector = MagicMock()
+    mock_selector.select.return_value = AssistantMessage(
+        turn_index=1,
+        ordinal_from_end=1,
+        timestamp="2026-10-06T12:00:00Z",
+        text=turn_text,
+    )
+
+    mock_rewriter = MagicMock()
+    mock_rewriter.rewrite.side_effect = AssertionError("Rewriter should not be called when bypass_llm=True")
+
+    mock_client = MagicMock()
+    mock_client.speak.return_value = DaemonResponse(status="ok", action="speak")
+
+    server = McpServer(
+        client=mock_client,
+        selector=mock_selector,
+        rewriter=mock_rewriter,
+        home=tmp,
+    )
+
+    res = _call_tool(
+        server,
+        "autoplay_turn",
+        {"transcript_path": str(transcript), "bypass_llm": True},
+    )
+    assert res["result"]["isError"] is False
+    assert mock_client.speak.call_args[0][0] == turn_text
+
+
+def test_autoplay_turn_rewriter_fallback_on_failure() -> None:
+    tmp = Path(tempfile.mkdtemp(prefix="auto-speech-test-ap-rwfail-"))
+    transcript = tmp / "session.jsonl"
+    transcript.write_text("dummy\n", encoding="utf-8")
+
+    turn_text = "This is a sufficiently long message exceeding twenty characters."
+    mock_selector = MagicMock()
+    mock_selector.select.return_value = AssistantMessage(
+        turn_index=1,
+        ordinal_from_end=1,
+        timestamp="2026-10-06T12:00:00Z",
+        text=turn_text,
+    )
+
+    mock_rewriter = MagicMock()
+    mock_rewriter.rewrite.side_effect = ClaudeCliRewriteError("timeout")
+
+    mock_client = MagicMock()
+    mock_client.speak.return_value = DaemonResponse(status="ok", action="speak")
+
+    server = McpServer(
+        client=mock_client,
+        selector=mock_selector,
+        rewriter=mock_rewriter,
+        home=tmp,
+    )
+
+    res = _call_tool(
+        server,
+        "autoplay_turn",
+        {"transcript_path": str(transcript), "mode": "summary"},
+    )
+    assert res["result"]["isError"] is False
+    assert mock_client.speak.call_args[0][0] == turn_text
+
+
+def test_autoplay_turn_connection_error_falls_back_cleanly() -> None:
+    tmp = Path(tempfile.mkdtemp(prefix="auto-speech-test-ap-connerr-"))
+    transcript = tmp / "session.jsonl"
+    transcript.write_text("dummy\n", encoding="utf-8")
+
+    turn_text = "This is a sufficiently long message exceeding twenty characters."
+    mock_selector = MagicMock()
+    mock_selector.select.return_value = AssistantMessage(
+        turn_index=1,
+        ordinal_from_end=1,
+        timestamp="2026-10-06T12:00:00Z",
+        text=turn_text,
+    )
+
+    mock_client = MagicMock()
+    mock_client.speak.side_effect = ConnectionError("daemon offline")
+
+    server = McpServer(
+        client=mock_client,
+        selector=mock_selector,
+        home=tmp,
+    )
+
+    with patch("mcp_server.spawn_say_worker") as mock_spawn:
+        res = _call_tool(
+            server,
+            "autoplay_turn",
+            {"transcript_path": str(transcript), "mode": "raw"},
+        )
+        assert res["result"]["isError"] is False
+        mock_spawn.assert_called_once_with(turn_text)
+
+
+def test_autoplay_turn_nonexistent_session_id_returns_tool_error() -> None:
+    mock_locator = MagicMock()
+    mock_locator.locate.return_value = Path("/tmp/unrelated-newest-session.jsonl")
+    mock_client = MagicMock()
+
+    server = McpServer(client=mock_client, locator=mock_locator)
+    res = _call_tool(
+        server,
+        "autoplay_turn",
+        {"session_id": "requested-session-xyz"},
+    )
+    assert res["result"]["isError"] is True
+    assert (
+        "session transcript not found for session_id: requested-session-xyz"
+        in res["result"]["content"][0]["text"]
+    )
+    assert mock_client.speak.call_count == 0
+
+
+def test_autoplay_turn_matching_session_id_succeeds() -> None:
+    tmp = Path(tempfile.mkdtemp(prefix="auto-speech-test-ap-match-"))
+    transcript = tmp / "target-sess.jsonl"
+    transcript.write_text("dummy\n", encoding="utf-8")
+
+    turn_text = "This is a sufficiently long message exceeding twenty characters."
+    mock_selector = MagicMock()
+    mock_selector.select.return_value = AssistantMessage(
+        turn_index=1,
+        ordinal_from_end=1,
+        timestamp="2026-10-06T12:00:00Z",
+        text=turn_text,
+    )
+    mock_client = MagicMock()
+    mock_client.speak.return_value = DaemonResponse(status="ok", action="speak")
+    mock_locator = MagicMock()
+    mock_locator.locate.return_value = transcript
+
+    server = McpServer(
+        client=mock_client,
+        selector=mock_selector,
+        locator=mock_locator,
+        home=tmp,
+    )
+    res = _call_tool(
+        server,
+        "autoplay_turn",
+        {"session_id": "target-sess", "mode": "raw"},
+    )
+    assert res["result"]["isError"] is False
+    assert "Queued autoplay turn" in res["result"]["content"][0]["text"]
+    mock_client.speak.assert_called_once()
+
+
+def test_autoplay_turn_invalid_session_id_validation() -> None:
+    server, _ = _server()
+    res = _call_tool(server, "autoplay_turn", {"session_id": 12345})
+    assert res["result"]["isError"] is True
+    assert "session_id must be a string" in res["result"]["content"][0]["text"]
+
+    res = _call_tool(server, "autoplay_turn", {"session_id": ""})
+    assert res["result"]["isError"] is True
+    assert "session_id must be a non-empty string" in res["result"]["content"][0]["text"]
+
+    res = _call_tool(server, "autoplay_turn", {"session_id": "   "})
+    assert res["result"]["isError"] is True
+    assert "session_id must be a non-empty string" in res["result"]["content"][0]["text"]
+
+
+def test_autoplay_turn_nonexistent_session_id_with_real_locator_returns_tool_error() -> None:
+    tmp_home = Path(tempfile.mkdtemp(prefix="auto-speech-test-ap-realloc-"))
+    projects_dir = tmp_home / ".claude" / "projects"
+    cwd = Path("/Users/me/test-proj")
+    slug = str(cwd).replace("/", "-")
+    slug_dir = projects_dir / slug
+    slug_dir.mkdir(parents=True, exist_ok=True)
+    real_transcript = slug_dir / "real-session-abc.jsonl"
+    real_transcript.write_text("dummy\n", encoding="utf-8")
+
+    real_locator = TranscriptLocator()
+    real_locator.PROJECTS_ROOT = projects_dir
+
+    mock_client = MagicMock()
+    server = McpServer(client=mock_client, locator=real_locator, home=tmp_home)
+    with patch("pathlib.Path.cwd", return_value=cwd):
+        res = _call_tool(
+            server,
+            "autoplay_turn",
+            {"session_id": "nonexistent-xyz"},
+        )
+        assert res["result"]["isError"] is True
+        assert (
+            "session transcript not found for session_id: nonexistent-xyz"
+            in res["result"]["content"][0]["text"]
+        )
+        assert mock_client.speak.call_count == 0
+
+
+# =========================================================================
+# Group 4: narrate_event
+# =========================================================================
+
+def test_narrate_event_missing_event_returns_parameter_error() -> None:
+    server, _ = _server()
+    for bad_args in ({}, {"event": ""}, {"event": "   "}):
+        res = _call_tool(server, "narrate_event", bad_args)
+        assert res["result"]["isError"] is True
+
+
+def test_narrate_event_honors_global_mute() -> None:
+    server, _ = _server(muted=True)
+    res = _call_tool(server, "narrate_event", {"event": "PreToolUse"})
+    assert res["result"]["isError"] is True
+    assert "globally muted" in res["result"]["content"][0]["text"]
+
+
+def test_narrate_event_unenrolled_session_returns_clean_notice() -> None:
+    tmp = Path(tempfile.mkdtemp(prefix="auto-speech-test-narr-unenroll-"))
+    events_log = tmp / "events.jsonl"
+    server, _ = _server(events_log=events_log)
+
+    res = _call_tool(
+        server,
+        "narrate_event",
+        {"event": "PreToolUse", "session_id": "unenrolled-session-999"},
+    )
+    assert res["result"]["isError"] is False
+    assert "not enrolled" in res["result"]["content"][0]["text"]
+    assert not events_log.exists()
+
+
+def test_narrate_event_enrolled_session_appends_jsonl_and_ensures_daemon() -> None:
+    tmp = Path(tempfile.mkdtemp(prefix="auto-speech-test-narr-enroll-"))
+    claude_dir = tmp / ".claude"
+    sessions_dir = claude_dir / "auto-speech-narrate-sessions"
+    sessions_dir.mkdir(parents=True, exist_ok=True)
+    (sessions_dir / "sess-123").touch()
+
+    events_log = tmp / "events.jsonl"
+    mock_client = MagicMock()
+
+    server = McpServer(
+        client=mock_client,
+        home=tmp,
+        events_log=events_log,
+        narrator_sessions_dir=sessions_dir,
+    )
+
+    res = _call_tool(
+        server,
+        "narrate_event",
+        {
+            "event": "PreToolUse",
+            "session_id": "sess-123",
+            "payload": {"tool_name": "Bash"},
+        },
+    )
+    assert res["result"]["isError"] is False
+    assert "ingested for session 'sess-123'" in res["result"]["content"][0]["text"]
+    assert mock_client.ensure_daemon_running.called
+
+    assert events_log.is_file()
+    lines = events_log.read_text(encoding="utf-8").strip().splitlines()
+    assert len(lines) == 1
+    record = json.loads(lines[0])
+    assert record["event"] == "PreToolUse"
+    assert record["session_id"] == "sess-123"
+    assert record["payload"] == {"tool_name": "Bash"}
+    assert "ts" in record
+    assert "pid" in record
+
+
+def test_narrate_event_antigravity_conversation_id_resolution() -> None:
+    tmp = Path(tempfile.mkdtemp(prefix="auto-speech-test-narr-ag-"))
+    sessions_dir = tmp / ".claude" / "auto-speech-narrate-sessions"
+    sessions_dir.mkdir(parents=True, exist_ok=True)
+    (sessions_dir / "ag-conv-99").touch()
+
+    events_log = tmp / "events.jsonl"
+    server = McpServer(
+        home=tmp,
+        events_log=events_log,
+        narrator_sessions_dir=sessions_dir,
+    )
+
+    res = _call_tool(
+        server,
+        "narrate_event",
+        {
+            "event": "Stop",
+            "payload": {"conversationId": "ag-conv-99"},
+        },
+    )
+    assert res["result"]["isError"] is False
+    assert "ingested for session 'ag-conv-99'" in res["result"]["content"][0]["text"]
+    record = json.loads(events_log.read_text(encoding="utf-8").strip())
+    assert record["session_id"] == "ag-conv-99"
+
+
+def test_narrate_event_default_cwd_fallback() -> None:
+    tmp = Path(tempfile.mkdtemp(prefix="auto-speech-test-narr-cwd-"))
+    sessions_dir = tmp / ".claude" / "auto-speech-narrate-sessions"
+    sessions_dir.mkdir(parents=True, exist_ok=True)
+    (sessions_dir / "sess-cwd").touch()
+
+    events_log = tmp / "events.jsonl"
+    server = McpServer(
+        home=tmp,
+        events_log=events_log,
+        narrator_sessions_dir=sessions_dir,
+    )
+
+    res = _call_tool(
+        server,
+        "narrate_event",
+        {"event": "UserPromptSubmit", "session_id": "sess-cwd"},
+    )
+    assert res["result"]["isError"] is False
+    record = json.loads(events_log.read_text(encoding="utf-8").strip())
+    assert record["cwd"] != ""
+
+
+# =========================================================================
+# Group 5: playback_control
+# =========================================================================
+
+def test_playback_control_invalid_action_returns_error() -> None:
+    server, _ = _server()
+    res = _call_tool(server, "playback_control", {"action": "jump"})
+    assert res["result"]["isError"] is True
+    assert "unknown action" in res["result"]["content"][0]["text"]
+
+
+def test_playback_control_stop_invokes_interrupt() -> None:
+    mock_client = MagicMock()
+    server, _ = _server(client=mock_client)
+
+    res = _call_tool(server, "playback_control", {"action": "stop"})
+    assert res["result"]["isError"] is False
+    assert "Playback stopped and queue cleared." in res["result"]["content"][0]["text"]
+    assert mock_client.interrupt.called
+
+
+def test_playback_control_pause_resume_restart_seek_when_socket_missing() -> None:
+    tmp = Path(tempfile.mkdtemp(prefix="auto-speech-test-ctrl-nosock-"))
+    server = McpServer(home=tmp, is_mpv_alive=lambda: False)
+
+    for act in ("pause", "resume", "restart"):
+        res = _call_tool(server, "playback_control", {"action": act})
+        assert res["result"]["isError"] is True
+        assert "No active playback session." in res["result"]["content"][0]["text"]
+
+    res_seek = _call_tool(server, "playback_control", {"action": "seek", "target": "+10"})
+    assert res_seek["result"]["isError"] is True
+    assert "No active playback session." in res_seek["result"]["content"][0]["text"]
+
+
+def test_playback_control_pause_resume_restart_when_socket_alive() -> None:
+    sent_cmds: list[list] = []
+
+    def mock_sender(cmd, _sock_path):
+        sent_cmds.append(cmd)
+        return {"error": "success"}
+
+    server = McpServer(
+        mpv_ipc_sender=mock_sender,
+        is_mpv_alive=lambda: True,
+    )
+
+    res = _call_tool(server, "playback_control", {"action": "pause"})
+    assert res["result"]["isError"] is False
+    assert "Playback paused." in res["result"]["content"][0]["text"]
+    assert sent_cmds[-1] == ["set_property", "pause", True]
+
+    res = _call_tool(server, "playback_control", {"action": "resume"})
+    assert res["result"]["isError"] is False
+    assert "Playback resumed." in res["result"]["content"][0]["text"]
+    assert sent_cmds[-1] == ["set_property", "pause", False]
+
+    res = _call_tool(server, "playback_control", {"action": "restart"})
+    assert res["result"]["isError"] is False
+    assert "Playback restarted." in res["result"]["content"][0]["text"]
+    assert sent_cmds[-1] == ["seek", 0, "absolute"]
+
+
+def test_playback_control_resume_honors_global_mute() -> None:
+    server, _ = _server(muted=True, is_mpv_alive=lambda: True)
+    res = _call_tool(server, "playback_control", {"action": "resume"})
+    assert res["result"]["isError"] is True
+    assert "globally muted" in res["result"]["content"][0]["text"]
+
+
+def test_playback_control_seek_targets() -> None:
+    sent_cmds: list[list] = []
+
+    def mock_sender(cmd, _sock_path):
+        sent_cmds.append(cmd)
+        return {"error": "success"}
+
+    server = McpServer(
+        mpv_ipc_sender=mock_sender,
+        is_mpv_alive=lambda: True,
+    )
+
+    test_cases = [
+        ("+10", ["seek", 10.0, "relative"]),
+        ("-5", ["seek", -5.0, "relative"]),
+        ("60", ["seek", 60.0, "absolute"]),
+        ("end", ["seek", 999999, "absolute"]),
     ]
-    for t in tests:
+
+    for target_str, expected_cmd in test_cases:
+        res = _call_tool(server, "playback_control", {"action": "seek", "target": target_str})
+        assert res["result"]["isError"] is False
+        assert sent_cmds[-1] == expected_cmd
+
+
+def test_playback_control_seek_invalid_target_returns_error() -> None:
+    server = McpServer(is_mpv_alive=lambda: True)
+    for bad_target in ("", "   ", "abc", "+inf", "-inf"):
+        res = _call_tool(server, "playback_control", {"action": "seek", "target": bad_target})
+        assert res["result"]["isError"] is True
+        assert "seek requires a target" in res["result"]["content"][0]["text"]
+
+
+def test_playback_control_replay_cached_audio() -> None:
+    mock_store = MagicMock()
+    entry = CacheEntry(
+        source_hash="abcd" * 16,
+        voice_id="system",
+        speed=1.0,
+        char_count=40,
+        duration_seconds=2.5,
+        created_at="now",
+        chars_per_second_at_creation=16.0,
+    )
+    mock_store.list_by_recency.return_value = [(Path("/tmp/audio.wav"), entry)]
+
+    mock_client = MagicMock()
+    mock_client.play_cache.return_value = DaemonResponse(status="ok", action="play_cache")
+
+    server = McpServer(client=mock_client, cache_store=mock_store)
+
+    res = _call_tool(server, "playback_control", {"action": "replay", "ordinal": 1})
+    assert res["result"]["isError"] is False
+    assert "Replaying cached audio" in res["result"]["content"][0]["text"]
+    mock_client.play_cache.assert_called_once_with("abcd" * 16)
+
+
+def test_playback_control_replay_empty_cache_and_bounds() -> None:
+    mock_store = MagicMock()
+    mock_store.list_by_recency.return_value = []
+
+    server = McpServer(cache_store=mock_store)
+    res = _call_tool(server, "playback_control", {"action": "replay", "ordinal": 1})
+    assert res["result"]["isError"] is True
+    assert "No cached audio available" in res["result"]["content"][0]["text"]
+
+    entry = CacheEntry(
+        source_hash="abcd" * 16,
+        voice_id="system",
+        speed=1.0,
+        char_count=40,
+        duration_seconds=2.5,
+        created_at="now",
+        chars_per_second_at_creation=16.0,
+    )
+    mock_store.list_by_recency.return_value = [(Path("/tmp/audio.wav"), entry)]
+    res = _call_tool(server, "playback_control", {"action": "replay", "ordinal": 5})
+    assert res["result"]["isError"] is True
+    assert "No cached audio available" in res["result"]["content"][0]["text"]
+
+
+def test_playback_control_replay_honors_global_mute() -> None:
+    server, _ = _server(muted=True)
+    res = _call_tool(server, "playback_control", {"action": "replay"})
+    assert res["result"]["isError"] is True
+    assert "globally muted" in res["result"]["content"][0]["text"]
+
+
+# =========================================================================
+# Group 6: session_configure
+# =========================================================================
+
+def test_session_configure_autoplay_on_and_off() -> None:
+    tmp = Path(tempfile.mkdtemp(prefix="auto-speech-test-cfg-ap-"))
+    server = McpServer(home=tmp)
+
+    res = _call_tool(
+        server,
+        "session_configure",
+        {"autoplay": "on", "session_id": "sess-1"},
+    )
+    assert res["result"]["isError"] is False
+    assert (tmp / ".claude" / "auto-speech-autoplay-enabled" / "sess-1").exists()
+
+    res = _call_tool(
+        server,
+        "session_configure",
+        {"autoplay": "off", "session_id": "sess-1"},
+    )
+    assert res["result"]["isError"] is False
+    assert not (tmp / ".claude" / "auto-speech-autoplay-enabled" / "sess-1").exists()
+
+
+def test_session_configure_autoplay_off_without_session_sets_global_mute() -> None:
+    tmp = Path(tempfile.mkdtemp(prefix="auto-speech-test-cfg-mute-"))
+    server = McpServer(home=tmp)
+
+    res = _call_tool(server, "session_configure", {"autoplay": "off"})
+    assert res["result"]["isError"] is False
+    assert (tmp / ".claude" / "auto-speech.disabled").exists()
+
+
+def test_session_configure_narrate_on_and_off() -> None:
+    tmp = Path(tempfile.mkdtemp(prefix="auto-speech-test-cfg-narr-"))
+    mock_client = MagicMock()
+    server = McpServer(client=mock_client, home=tmp)
+
+    res = _call_tool(
+        server,
+        "session_configure",
+        {"narrate": "on", "session_id": "sess-2"},
+    )
+    assert res["result"]["isError"] is False
+    assert (tmp / ".claude" / "auto-speech-narrate-sessions" / "sess-2").exists()
+    assert mock_client.ensure_daemon_running.called
+
+    res = _call_tool(
+        server,
+        "session_configure",
+        {"narrate": "off", "session_id": "sess-2"},
+    )
+    assert res["result"]["isError"] is False
+    assert not (tmp / ".claude" / "auto-speech-narrate-sessions" / "sess-2").exists()
+
+
+def test_session_configure_scope_solo_and_all() -> None:
+    tmp = Path(tempfile.mkdtemp(prefix="auto-speech-test-cfg-scope-"))
+    server = McpServer(home=tmp)
+
+    res = _call_tool(
+        server,
+        "session_configure",
+        {"scope": "solo", "session_id": "sess-3"},
+    )
+    assert res["result"]["isError"] is False
+    assert SoloScope(home=tmp).current() == "sess-3"
+
+    res = _call_tool(server, "session_configure", {"scope": "all"})
+    assert res["result"]["isError"] is False
+    assert SoloScope(home=tmp).current() is None
+
+
+def test_session_configure_scope_solo_without_session_returns_error() -> None:
+    server, _ = _server()
+    res = _call_tool(server, "session_configure", {"scope": "solo"})
+    assert res["result"]["isError"] is True
+
+
+def test_session_configure_mode_and_size() -> None:
+    tmp = Path(tempfile.mkdtemp(prefix="auto-speech-test-cfg-mode-"))
+    server = McpServer(home=tmp)
+
+    res = _call_tool(
+        server,
+        "session_configure",
+        {"mode": "summary", "size": "large"},
+    )
+    assert res["result"]["isError"] is False
+    cfg_file = tmp / ".config" / "auto-speech" / "autoplay.toml"
+    assert cfg_file.is_file()
+    content = cfg_file.read_text(encoding="utf-8")
+    assert 'mode = "summary"' in content
+    assert 'summary_size = "large"' in content
+
+
+def test_session_configure_status_reports() -> None:
+    server, _ = _server()
+    res = _call_tool(server, "session_configure", {})
+    assert res["result"]["isError"] is False
+    assert "autoplay" in res["result"]["content"][0]["text"].lower()
+
+
+def test_session_configure_subsystem_and_action_validation() -> None:
+    server, _ = _server()
+
+    # Invalid subsystem
+    res = _call_tool(server, "session_configure", {"subsystem": "bogus"})
+    assert res["result"]["isError"] is True
+    assert "invalid subsystem: 'bogus'" in res["result"]["content"][0]["text"]
+
+    res = _call_tool(server, "session_configure", {"subsystem": "bogus", "action": "on"})
+    assert res["result"]["isError"] is True
+    assert "invalid subsystem: 'bogus'" in res["result"]["content"][0]["text"]
+
+    # Unhandled action without subsystem
+    res = _call_tool(server, "session_configure", {"action": "bogus"})
+    assert res["result"]["isError"] is True
+    assert "unhandled action 'bogus' without valid subsystem" in res["result"]["content"][0]["text"]
+
+    res = _call_tool(server, "session_configure", {"action": "on", "session_id": "sess-test"})
+    assert res["result"]["isError"] is True
+    assert "unhandled action 'on' without valid subsystem" in res["result"]["content"][0]["text"]
+
+    # Invalid action under subsystem
+    res = _call_tool(server, "session_configure", {"subsystem": "autoplay", "action": "bogus"})
+    assert res["result"]["isError"] is True
+    assert "invalid autoplay action: 'bogus'" in res["result"]["content"][0]["text"]
+
+    res = _call_tool(server, "session_configure", {"subsystem": "narrate", "action": "bogus"})
+    assert res["result"]["isError"] is True
+    assert "invalid narrate action: 'bogus'" in res["result"]["content"][0]["text"]
+
+    res = _call_tool(server, "session_configure", {"subsystem": "narrate", "action": "mode"})
+    assert res["result"]["isError"] is True
+    assert "invalid narrate action: 'mode'" in res["result"]["content"][0]["text"]
+
+    # Mode / scope missing value
+    res = _call_tool(server, "session_configure", {"subsystem": "autoplay", "action": "mode"})
+    assert res["result"]["isError"] is True
+    assert "action 'mode' requires 'value'" in res["result"]["content"][0]["text"]
+
+    res = _call_tool(server, "session_configure", {"subsystem": "autoplay", "action": "scope"})
+    assert res["result"]["isError"] is True
+    assert "action 'scope' requires 'value'" in res["result"]["content"][0]["text"]
+
+    res = _call_tool(server, "session_configure", {"action": "mode"})
+    assert res["result"]["isError"] is True
+    assert "action 'mode' requires 'value'" in res["result"]["content"][0]["text"]
+
+    res = _call_tool(server, "session_configure", {"action": "scope"})
+    assert res["result"]["isError"] is True
+    assert "action 'scope' requires 'value'" in res["result"]["content"][0]["text"]
+
+
+def test_session_configure_alternative_dispatch_routing() -> None:
+    tmp = Path(tempfile.mkdtemp(prefix="auto-speech-test-cfg-alt-"))
+    server = McpServer(home=tmp)
+
+    # 1. Autoplay on via alternative dispatch
+    res = _call_tool(
+        server,
+        "session_configure",
+        {"subsystem": "autoplay", "action": "on", "session_id": "sess-alt-1"},
+    )
+    assert res["result"]["isError"] is False
+    assert (tmp / ".claude" / "auto-speech-autoplay-enabled" / "sess-alt-1").exists()
+
+    # 2. Autoplay mode via alternative dispatch (mode="raw")
+    res = _call_tool(
+        server,
+        "session_configure",
+        {"subsystem": "autoplay", "action": "mode", "value": "raw"},
+    )
+    assert res["result"]["isError"] is False
+    cfg_file = tmp / ".config" / "auto-speech" / "autoplay.toml"
+    assert cfg_file.is_file()
+    assert 'mode = "raw"' in cfg_file.read_text(encoding="utf-8")
+
+    # 3. Autoplay scope via alternative dispatch (scope="solo")
+    res = _call_tool(
+        server,
+        "session_configure",
+        {"subsystem": "autoplay", "action": "scope", "value": "solo", "session_id": "sess-alt-1"},
+    )
+    assert res["result"]["isError"] is False
+    assert SoloScope(home=tmp).current() == "sess-alt-1"
+
+    # 4. Autoplay scope via alternative dispatch (scope="all")
+    res = _call_tool(
+        server,
+        "session_configure",
+        {"subsystem": "autoplay", "action": "scope", "value": "all"},
+    )
+    assert res["result"]["isError"] is False
+    assert SoloScope(home=tmp).current() is None
+
+    # 5. Narrate on via alternative dispatch
+    res = _call_tool(
+        server,
+        "session_configure",
+        {"subsystem": "narrate", "action": "on", "session_id": "sess-alt-2"},
+    )
+    assert res["result"]["isError"] is False
+    assert (tmp / ".claude" / "auto-speech-narrate-sessions" / "sess-alt-2").exists()
+
+    # 6. Standalone action mode and scope
+    res = _call_tool(
+        server,
+        "session_configure",
+        {"action": "mode", "value": "verbatim"},
+    )
+    assert res["result"]["isError"] is False
+    assert 'mode = "verbatim"' in cfg_file.read_text(encoding="utf-8")
+
+    res = _call_tool(
+        server,
+        "session_configure",
+        {"action": "scope", "value": "solo", "session_id": "sess-alt-3"},
+    )
+    assert res["result"]["isError"] is False
+    assert SoloScope(home=tmp).current() == "sess-alt-3"
+
+
+# =========================================================================
+# Group 7: doctor
+# =========================================================================
+
+def test_doctor_text_report_healthy() -> None:
+    mock_doctor = MagicMock()
+    mock_doctor.run.return_value = HealthReport(
+        checks=[Check("binaries", Status.OK, "mpv available")]
+    )
+    server = McpServer(doctor=mock_doctor)
+
+    res = _call_tool(server, "doctor", {"as_json": False})
+    assert res["result"]["isError"] is False
+    assert "auto-speech doctor — HEALTHY" in res["result"]["content"][0]["text"]
+
+
+def test_doctor_json_report_healthy() -> None:
+    mock_doctor = MagicMock()
+    mock_doctor.run.return_value = HealthReport(
+        checks=[Check("binaries", Status.OK, "mpv available")]
+    )
+    server = McpServer(doctor=mock_doctor)
+
+    res = _call_tool(server, "doctor", {"as_json": True})
+    assert res["result"]["isError"] is False
+    data = json.loads(res["result"]["content"][0]["text"])
+    assert data["healthy"] is True
+    assert isinstance(data["checks"], list)
+
+
+def test_doctor_unhealthy_sets_is_error_true() -> None:
+    mock_doctor = MagicMock()
+    mock_doctor.run.return_value = HealthReport(
+        checks=[Check("disk", Status.FAIL, "disk full")]
+    )
+    server = McpServer(doctor=mock_doctor)
+
+    res_text = _call_tool(server, "doctor", {"as_json": False})
+    assert res_text["result"]["isError"] is True
+    assert "UNHEALTHY" in res_text["result"]["content"][0]["text"]
+
+    res_json = _call_tool(server, "doctor", {"as_json": True})
+    assert res_json["result"]["isError"] is True
+    data = json.loads(res_json["result"]["content"][0]["text"])
+    assert data["healthy"] is False
+
+
+TESTS = [
+    # Group 1: Protocol & Advertisement
+    test_initialize_echoes_supported_protocol,
+    test_initialize_unknown_protocol_falls_back_to_latest,
+    test_notification_gets_no_response,
+    test_ping,
+    test_tools_list_advertises_all_six_tools,
+    # Group 2: Backward Compatibility of speak
+    test_speak_queues_text_verbatim,
+    test_speak_rejects_bad_text,
+    test_speak_rejects_oversize_text,
+    test_speak_honors_global_mute,
+    test_speak_spawn_failure_is_tool_error,
+    test_protocol_errors,
+    test_response_messages_are_ignored,
+    test_serve_writes_one_line_per_request,
+    test_plugin_mcp_manifest_points_at_the_launcher,
+    test_speak_invokes_daemon_client_directly,
+    test_speak_falls_back_to_spawn_say_worker_on_connection_error,
+    test_speak_falls_back_to_spawn_say_worker_on_daemon_error_status,
+    # Group 3: autoplay_turn
+    test_autoplay_turn_happy_path,
+    test_autoplay_turn_honors_global_mute,
+    test_autoplay_turn_missing_transcript_returns_tool_error,
+    test_autoplay_turn_no_qualifying_turn_returns_tool_error,
+    test_autoplay_turn_text_below_min_len_returns_tool_error,
+    test_autoplay_turn_mode_raw_bypasses_rewriter,
+    test_autoplay_turn_bypass_llm_flag_bypasses_rewriter,
+    test_autoplay_turn_rewriter_fallback_on_failure,
+    test_autoplay_turn_connection_error_falls_back_cleanly,
+    test_autoplay_turn_nonexistent_session_id_returns_tool_error,
+    test_autoplay_turn_matching_session_id_succeeds,
+    test_autoplay_turn_invalid_session_id_validation,
+    test_autoplay_turn_nonexistent_session_id_with_real_locator_returns_tool_error,
+    # Group 4: narrate_event
+    test_narrate_event_missing_event_returns_parameter_error,
+    test_narrate_event_honors_global_mute,
+    test_narrate_event_unenrolled_session_returns_clean_notice,
+    test_narrate_event_enrolled_session_appends_jsonl_and_ensures_daemon,
+    test_narrate_event_antigravity_conversation_id_resolution,
+    test_narrate_event_default_cwd_fallback,
+    # Group 5: playback_control
+    test_playback_control_invalid_action_returns_error,
+    test_playback_control_stop_invokes_interrupt,
+    test_playback_control_pause_resume_restart_seek_when_socket_missing,
+    test_playback_control_pause_resume_restart_when_socket_alive,
+    test_playback_control_resume_honors_global_mute,
+    test_playback_control_seek_targets,
+    test_playback_control_seek_invalid_target_returns_error,
+    test_playback_control_replay_cached_audio,
+    test_playback_control_replay_empty_cache_and_bounds,
+    test_playback_control_replay_honors_global_mute,
+    # Group 6: session_configure
+    test_session_configure_autoplay_on_and_off,
+    test_session_configure_autoplay_off_without_session_sets_global_mute,
+    test_session_configure_narrate_on_and_off,
+    test_session_configure_scope_solo_and_all,
+    test_session_configure_scope_solo_without_session_returns_error,
+    test_session_configure_mode_and_size,
+    test_session_configure_status_reports,
+    test_session_configure_subsystem_and_action_validation,
+    test_session_configure_alternative_dispatch_routing,
+    # Group 7: doctor
+    test_doctor_text_report_healthy,
+    test_doctor_json_report_healthy,
+    test_doctor_unhealthy_sets_is_error_true,
+]
+
+
+def load_tests(
+    loader: unittest.TestLoader, tests: unittest.TestSuite, pattern: str | None
+) -> unittest.TestSuite:
+    suite = unittest.TestSuite()
+    for t in TESTS:
+        suite.addTest(unittest.FunctionTestCase(t, description=t.__name__))
+    return suite
+
+
+def main() -> int:
+    for t in TESTS:
         t()
         print(f"  ok  {t.__name__}")
-    print(f"mcp_server: {len(tests)} tests passed")
+    print(f"mcp_server: {len(TESTS)} tests passed")
     return 0
 
 
