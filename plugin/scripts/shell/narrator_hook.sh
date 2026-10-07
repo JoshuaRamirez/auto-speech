@@ -26,6 +26,13 @@ if [[ "${AUTO_SPEECH_SUPPRESS_HOOKS:-}" == "1" ]]; then
     exit 0
 fi
 
+# Disable marker — exit 0 fast. Global mute, takes precedence over
+# everything else.
+DISABLED_MARKER="$HOME/.claude/auto-speech.disabled"
+if [[ -e "$DISABLED_MARKER" ]]; then
+    exit 0
+fi
+
 # Per-session gate. Each session opts in individually by touching
 # ~/.claude/auto-speech-narrate-sessions/<session_id>. The session id
 # comes from the Claude Code hook payload (which always includes it),
@@ -35,7 +42,7 @@ fi
 # don't — so payload is preferred.
 SESSION_ID=""
 if command -v jq >/dev/null 2>&1; then
-    SESSION_ID="$(printf '%s' "$PAYLOAD" | jq -r '.session_id // ""' 2>/dev/null || true)"
+    SESSION_ID="$(printf '%s' "$PAYLOAD" | jq -r '(.session_id // .conversationId // empty)' 2>/dev/null || true)"
 fi
 if [[ -z "$SESSION_ID" ]]; then
     SESSION_ID="${CLAUDE_CODE_SESSION_ID:-}"
@@ -83,7 +90,7 @@ TS="$(date +%s)"
 
 # Build the event record. Tolerate non-JSON payloads so a malformed
 # Claude Code hook payload (or a manual smoke test) still produces a line.
-if printf '%s' "$PAYLOAD" | jq -e . >/dev/null 2>&1; then
+if printf '%s' "$PAYLOAD" | jq -e 'type == "object"' >/dev/null 2>&1; then
     EVENT="$(printf '%s' "$PAYLOAD" | jq -c \
         --arg cwd "$PWD" \
         --arg ts "$TS" \

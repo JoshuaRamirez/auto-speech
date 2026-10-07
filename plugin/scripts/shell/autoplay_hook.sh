@@ -32,12 +32,6 @@ BEACON_DEFAULT="/tmp/auto-speech-last-stop"
 # runs two Claude sessions in the same project, or any time `claude -p`
 # briefly leaves a newer-mtime jsonl in the slug dir.
 PAYLOAD="$(cat)"
-TRANSCRIPT_PATH=""
-SESSION_ID=""
-if command -v jq >/dev/null 2>&1; then
-    TRANSCRIPT_PATH="$(printf '%s' "$PAYLOAD" | jq -r '(.transcript_path // .transcriptPath) // ""' 2>/dev/null || true)"
-    SESSION_ID="$(printf '%s' "$PAYLOAD" | jq -r '(.session_id // .conversationId) // ""' 2>/dev/null || true)"
-fi
 
 # Nested-claude-p guard: the autoplay's own cli_rewrite spawns `claude -p`,
 # which fires Stop hooks against this script. Without this, every rewrite
@@ -52,6 +46,13 @@ fi
 # everything else.
 if [[ -e "$DISABLED_MARKER" ]]; then
     exit 0
+fi
+
+TRANSCRIPT_PATH=""
+SESSION_ID=""
+if command -v jq >/dev/null 2>&1; then
+    TRANSCRIPT_PATH="$(printf '%s' "$PAYLOAD" | jq -r '(.transcript_path // .transcriptPath // empty)' 2>/dev/null || true)"
+    SESSION_ID="$(printf '%s' "$PAYLOAD" | jq -r '(.session_id // .conversationId // empty)' 2>/dev/null || true)"
 fi
 
 # Per-session SOLO scoping. When the spotlight marker exists it names the
