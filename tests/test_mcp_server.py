@@ -30,6 +30,13 @@ SRC = Path(__file__).resolve().parents[1] / "plugin" / "scripts" / "python"
 if str(SRC) not in sys.path:
     sys.path.insert(0, str(SRC))
 
+# The caller's Claude Code session must not leak into these tests: the server
+# falls back to CLAUDE_CODE_SESSION_ID / CLAUDE_SESSION_ID when a call names
+# no session, which would turn every "without session" case into a
+# per-session one when the file runs from a Claude Code shell.
+for _var in ("CLAUDE_CODE_SESSION_ID", "CLAUDE_SESSION_ID"):
+    os.environ.pop(_var, None)
+
 import mcp_server  # noqa: E402
 from assistant_message import AssistantMessage  # noqa: E402
 from autoplay_gate import AutoplayGate  # noqa: E402

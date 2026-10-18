@@ -49,6 +49,12 @@ cleanup_state_dir() {
 }
 trap cleanup_state_dir EXIT
 
+# The caller's Claude Code session must not leak into the tests: mcp_server
+# falls back to CLAUDE_CODE_SESSION_ID / CLAUDE_SESSION_ID as the session
+# when a call names none, which changes what session_configure does.
+unset CLAUDE_CODE_SESSION_ID CLAUDE_SESSION_ID
+echo "[isolation] CLAUDE_CODE_SESSION_ID and CLAUDE_SESSION_ID cleared"
+
 PYTHON="${AUTO_SPEECH_TEST_PYTHON:-$VENV/bin/python}"
 if [[ ! -x "$PYTHON" ]]; then
     echo "error: python interpreter not found at $PYTHON" >&2
