@@ -7,7 +7,7 @@
 #   - the recorded project root file is written and points at this clone
 #   - installed command blocks resolve PROJECT_ROOT from that file (the
 #     doctor block actually executes against the sandbox root file)
-#   - --with-extras → 21 links; plain re-run preserves the opted-in extras
+#   - --with-extras → 23 links; plain re-run preserves the opted-in extras
 #   - prune: a stale link into plugin/commands/ (not in keep-set) is
 #     removed; a dangling link into plugin/commands-extra/ is removed
 #   - uninstall.sh removes the recorded root file
@@ -67,13 +67,13 @@ HOME="$SANDBOX" bash "$INSTALL" >/dev/null 2>&1   # restore root file
 # --- extras + idempotency ---------------------------------------------------
 HOME="$SANDBOX" bash "$INSTALL" --with-extras >/dev/null 2>&1
 n="$(find "$SANDBOX/.claude/commands" -name 'auto-speech-*.md' | wc -l | tr -d ' ')"
-if [[ "$n" == "22" ]]; then ok "--with-extras links 22 commands"
-else fail "--with-extras" "expected 22 links, got $n"; fi
+if [[ "$n" == "23" ]]; then ok "--with-extras links 23 commands"
+else fail "--with-extras" "expected 23 links, got $n"; fi
 
 HOME="$SANDBOX" bash "$INSTALL" >/dev/null 2>&1
 n="$(find "$SANDBOX/.claude/commands" -name 'auto-speech-*.md' | wc -l | tr -d ' ')"
-if [[ "$n" == "22" ]]; then ok "plain re-run preserves opted-in extras"
-else fail "extras preservation" "expected 22 links after re-run, got $n"; fi
+if [[ "$n" == "23" ]]; then ok "plain re-run preserves opted-in extras"
+else fail "extras preservation" "expected 23 links after re-run, got $n"; fi
 
 # --- prune tiers ------------------------------------------------------------
 ln -s "$PROJECT_ROOT/plugin/commands/auto-speech-bogus.md" \

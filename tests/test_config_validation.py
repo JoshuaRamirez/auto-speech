@@ -104,18 +104,17 @@ def test_valid_sound_yield_section_clean() -> None:
         "enabled": True,
         "exceptions": ["Music", "com.spotify.client"],
         "max_wait_seconds": 180,
-        "after_max_wait": "drop",
         "poll_seconds": 0.5,
     }
     assert cv.validate_section(section, cv.SOUND_YIELD_FIELDS, "sound_yield") == []
 
 
 def test_sound_yield_bad_values_flagged() -> None:
-    section = {"enabled": "yes", "exceptions": "Music", "after_max_wait": "ignore", "max_wait_seconds": -3}
+    section = {"enabled": "yes", "exceptions": "Music", "after_max_wait": "drop", "max_wait_seconds": -3}
     problems = cv.validate_section(section, cv.SOUND_YIELD_FIELDS, "sound_yield")
     assert any("enabled should be true or false" in p for p in problems)
     assert any("exceptions should be a list of strings" in p for p in problems)
-    assert any("after_max_wait must be one of" in p for p in problems)
+    assert any("unknown key 'after_max_wait'" in p for p in problems)  # gone since 0.4.0: nothing is dropped
     assert any("max_wait_seconds must be >= 0" in p for p in problems)
 
 

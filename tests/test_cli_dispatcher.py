@@ -87,7 +87,7 @@ class TestCliHelpAndRouting(BaseCliTestCase):
         with mock.patch("sys.stdout", stdout):
             rc = cli.main(["--version"])
         self.assertEqual(rc, 0)
-        self.assertIn("auto-speech 0.3.0", stdout.getvalue())
+        self.assertIn("auto-speech 0.4.0", stdout.getvalue())
 
     def test_top_level_missing_subcommand_exits_two(self) -> None:
         stderr = io.StringIO()
@@ -747,7 +747,7 @@ class TestCliYield(BaseCliTestCase):
         self.assertEqual(rc, 0)
         self.assertIn("sound yield: ON — speech holds while another app plays sound", out)
         self.assertIn("exceptions (apps whose sound does not hold speech): none", out)
-        self.assertIn("longest hold: 180 s, then drop it", out)
+        self.assertIn("longest hold: 180 s, then set aside as missed (auto-speech missed)", out)
         self.assertIn("config: defaults (no config file yet)", out)
         self.assertFalse(self._cfg().exists())
 
@@ -809,7 +809,7 @@ class TestCliYield(BaseCliTestCase):
             rc = cli.handle_yield(args, gate=gate)
         self.assertEqual(rc, 0)
         self.assertIn("playing: Music (com.apple.Music) (pid 501) — holds speech", stdout.getvalue())
-        self.assertIn("speech would HOLD (up to 180 s, then drop it)", stdout.getvalue())
+        self.assertIn("speech would HOLD (up to 180 s, then set aside as missed)", stdout.getvalue())
 
     def test_yield_config_shape_matches_mcp_and_file(self) -> None:
         import tomllib
@@ -817,9 +817,103 @@ class TestCliYield(BaseCliTestCase):
         self._run("yield", "off")
         self._run("yield", "add", "Music")
         data = tomllib.loads(self._cfg().read_text())["sound_yield"]
-        self.assertEqual(set(data), {"enabled", "exceptions", "max_wait_seconds", "after_max_wait", "poll_seconds"})
+        self.assertEqual(set(data), {"enabled", "exceptions", "max_wait_seconds", "poll_seconds"})
         self.assertEqual(data["enabled"], False)
         self.assertEqual(data["exceptions"], ["Music"])
+
+
+class TestCliMissed(BaseCliTestCase):
+    """`auto-speech missed [--play|--clear]` — the lines held or set aside
+    while another app played sound. HOME is sandboxed, so the list lands in
+    the temp home (~/.local/state/auto-speech/missed.json)."""
+
+    def setUp(self) -> None:
+        super().setUp()
+        os.environ.pop("AUTO_SPEECH_MISSED_FILE", None)
+        from missed_speech import MissedList, default_missed_path
+
+        self.list_path = default_missed_path()
+        self.assertTrue(str(self.list_path).startswith(str(self.home)))
+        self.missed = MissedList(self.list_path)
+
+    def _run(self, *argv: str, client=None) -> tuple[int, str, str]:
+        stdout, stderr = io.StringIO(), io.StringIO()
+        with mock.patch("sys.stdout", stdout), mock.patch("sys.stderr", stderr):
+            rc = cli.main(list(argv), client=client)
+        return rc, stdout.getvalue(), stderr.getvalue()
+
+    def _seed(self) -> None:
+        from missed_speech import REASON_LONGEST_WAIT, MissedLine
+
+        self.missed.miss(
+            MissedLine(id="aa11", text="The build is green.", queued_at=1_700_000_000.0, voice_id="af_bella", speed=1.1),
+            reason=REASON_LONGEST_WAIT,
+            waited_seconds=180.0,
+            held_for=("ChatGPT (pid 9)",),
+        )
+        self.missed.hold(MissedLine(id="bb22", text="Second line.", queued_at=1_700_000_100.0), ("ChatGPT (pid 9)",))
+
+    def test_missed_lists_nothing_when_empty(self) -> None:
+        rc, out, _ = self._run("missed")
+        self.assertEqual(rc, 0)
+        self.assertIn("missed speech: nothing missed, nothing held", out)
+        self.assertFalse(self.list_path.exists())  # a read never creates the file
+
+    def test_missed_lists_held_and_missed_lines_oldest_first(self) -> None:
+        self._seed()
+        rc, out, _ = self._run("missed")
+        self.assertEqual(rc, 0)
+        self.assertIn("missed speech: 2 lines you have not heard (1 held, 1 missed), oldest first", out)
+        self.assertLess(out.index("The build is green."), out.index("Second line."))
+        self.assertIn("missed: longest wait (180 s) while ChatGPT (pid 9) played", out)
+        self.assertIn("held ", out)
+        self.assertIn("replay the missed lines, oldest first: auto-speech missed --play", out)
+        self.assertIn("1 held line will play by themselves when the sound stops", out)
+
+    def test_missed_play_replays_missed_lines_through_the_daemon_without_a_hold(self) -> None:
+        self._seed()
+        client = mock.MagicMock()
+        rc, out, _ = self._run("missed", "--play", client=client)
+        self.assertEqual(rc, 0)
+        self.assertIn("missed speech: replaying 1 line, oldest first, over any other sound", out)
+        self.assertIn("each leaves the list once it has played", out)
+        client.speak.assert_called_once()
+        _, kwargs = client.speak.call_args
+        self.assertEqual(client.speak.call_args[0][0], "The build is green.")
+        self.assertEqual(kwargs["missed_id"], "aa11")
+        self.assertIs(kwargs["hold"], False)
+        self.assertEqual(kwargs["voice_id"], "af_bella")
+        self.assertEqual(kwargs["speed"], 1.1)
+        client.play_cache.assert_not_called()  # the held line stays with the daemon
+        # The list is the daemon's to clear once the line has played.
+        self.assertEqual([m.id for m in self.missed.load()], ["aa11", "bb22"])
+
+    def test_missed_play_with_nothing_missed_says_so(self) -> None:
+        client = mock.MagicMock()
+        rc, out, _ = self._run("missed", "--play", client=client)
+        self.assertEqual(rc, 0)
+        self.assertIn("missed speech: nothing to replay", out)
+        client.speak.assert_not_called()
+
+    def test_missed_play_reports_a_daemon_that_cannot_be_reached(self) -> None:
+        self._seed()
+        client = mock.MagicMock()
+        client.speak.side_effect = ConnectionError("no socket")
+        rc, _, err = self._run("missed", "--play", client=client)
+        self.assertEqual(rc, cli.EXIT_FAILURE)
+        self.assertIn("could not reach the auto-speech daemon", err)
+
+    def test_missed_clear_forgets_everything(self) -> None:
+        self._seed()
+        rc, out, _ = self._run("missed", "--clear")
+        self.assertEqual(rc, 0)
+        self.assertIn("missed speech: cleared 2 lines", out)
+        self.assertEqual(self.missed.load(), [])
+
+    def test_missed_play_and_clear_are_exclusive(self) -> None:
+        rc, _, err = self._run("missed", "--play", "--clear")
+        self.assertNotEqual(rc, 0)
+        self.assertIn("not allowed with", err)
 
 
 class TestCliHook(BaseCliTestCase):

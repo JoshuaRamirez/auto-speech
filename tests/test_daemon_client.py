@@ -115,6 +115,22 @@ class TestDaemonClientUnitMethods(unittest.TestCase):
         )
 
     @mock.patch.object(DaemonClient, "_send_request")
+    def test_speak_and_play_cache_carry_the_missed_replay_flags_only_when_set(self, mock_send: mock.MagicMock) -> None:
+        client = DaemonClient()
+        client.speak("again", missed_id="aa11", hold=False)
+        payload = mock_send.call_args[0][0]
+        self.assertEqual(payload["missed_id"], "aa11")
+        self.assertIs(payload["hold"], False)
+        mock_send.reset_mock()
+        client.play_cache("b" * 64, missed_id="cc33", hold=False)
+        payload = mock_send.call_args[0][0]
+        self.assertEqual((payload["action"], payload["missed_id"], payload["hold"]), ("play_cache", "cc33", False))
+        mock_send.reset_mock()
+        client.play_cache("b" * 64)
+        self.assertNotIn("missed_id", mock_send.call_args[0][0])
+        self.assertNotIn("hold", mock_send.call_args[0][0])
+
+    @mock.patch.object(DaemonClient, "_send_request")
     def test_speak_payload_custom_args(self, mock_send: mock.MagicMock) -> None:
         client = DaemonClient()
         client.speak(
