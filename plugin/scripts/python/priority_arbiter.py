@@ -40,6 +40,8 @@ class QueueItem:
     timestamp: float = field(default_factory=time.time)
     enqueued_at: float = field(default_factory=time.time)
     request_id: str = ""
+    missed_id: str = ""  # set when this is a replay of a line on the missed list
+    hold: bool = True  # False: play over other apps' sound (an explicit replay)
 
     def __post_init__(self) -> None:
         if self.enqueued_at is None:

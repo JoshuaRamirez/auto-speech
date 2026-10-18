@@ -119,7 +119,7 @@ def test_ping() -> None:
     assert s.handle_line(_req("ping"))["result"] == {}
 
 
-def test_tools_list_advertises_all_seven_tools() -> None:
+def test_tools_list_advertises_all_eight_tools() -> None:
     s, _ = _server()
     tools = s.handle_line(_req("tools/list"))["result"]["tools"]
     tool_names = [t["name"] for t in tools]
@@ -130,6 +130,7 @@ def test_tools_list_advertises_all_seven_tools() -> None:
         "playback_control",
         "session_configure",
         "sound_yield",
+        "missed",
         "doctor",
     ]
     assert tool_names == expected_names
@@ -1227,7 +1228,7 @@ def test_sound_yield_status_defaults_without_a_config_file() -> None:
     assert res["result"]["isError"] is False
     assert "sound yield: ON" in text
     assert "exceptions (apps whose sound does not hold speech): none" in text
-    assert "longest hold: 180 s, then drop it" in text
+    assert "longest hold: 180 s, then set aside as missed (auto-speech missed)" in text
     assert "defaults (no config file yet)" in text
 
 
@@ -1276,7 +1277,95 @@ def test_sound_yield_check_reports_the_live_assessment() -> None:
     text = res["result"]["content"][0]["text"]
     assert res["result"]["isError"] is False
     assert "playing: Music (com.apple.Music) (pid 501) — holds speech" in text
-    assert "speech would HOLD (up to 180 s, then drop it)" in text
+    assert "speech would HOLD (up to 180 s, then set aside as missed)" in text
+
+
+# Group 9: missed
+
+
+def _missed_server(client=None):
+    from missed_speech import MissedList
+
+    tmp = Path(tempfile.mkdtemp(prefix="auto-speech-mcp-missed-"))
+    missed = MissedList(tmp / "missed.json")
+    srv, _ = _server(missed_list=missed, client=client)
+    return srv, missed
+
+
+def _seed_missed(missed) -> None:
+    from missed_speech import REASON_LONGEST_WAIT, MissedLine
+
+    missed.miss(
+        MissedLine(id="aa11", text="The build is green.", queued_at=1_700_000_000.0, voice_id="af_bella", speed=1.1),
+        reason=REASON_LONGEST_WAIT,
+        waited_seconds=180.0,
+        held_for=("ChatGPT (pid 9)",),
+    )
+    missed.hold(MissedLine(id="bb22", text="Second line.", queued_at=1_700_000_100.0), ("ChatGPT (pid 9)",))
+
+
+def test_missed_requires_a_known_action() -> None:
+    srv, _ = _missed_server()
+    res = _call_tool(srv, "missed", {"action": "drop"})
+    assert res["result"]["isError"] is True
+    assert "list, play, clear" in res["result"]["content"][0]["text"]
+
+
+def test_missed_list_is_the_default_and_matches_the_cli_text() -> None:
+    srv, missed = _missed_server()
+    res = _call_tool(srv, "missed", {})
+    assert res["result"]["isError"] is False
+    assert res["result"]["content"][0]["text"] == "missed speech: nothing missed, nothing held"
+    _seed_missed(missed)
+    text = _call_tool(srv, "missed", {"action": "list"})["result"]["content"][0]["text"]
+    assert "missed speech: 2 lines you have not heard (1 held, 1 missed), oldest first" in text
+    assert text.index("The build is green.") < text.index("Second line.")
+    assert "missed: longest wait (180 s) while ChatGPT (pid 9) played" in text
+    assert "replay the missed lines, oldest first: auto-speech missed --play" in text
+
+
+def test_missed_play_sends_each_missed_line_to_the_daemon_without_a_hold() -> None:
+    client = MagicMock()
+    srv, missed = _missed_server(client=client)
+    _seed_missed(missed)
+    res = _call_tool(srv, "missed", {"action": "play"})
+    text = res["result"]["content"][0]["text"]
+    assert res["result"]["isError"] is False
+    assert "missed speech: replaying 1 line, oldest first, over any other sound" in text
+    client.speak.assert_called_once()
+    args, kwargs = client.speak.call_args
+    assert args[0] == "The build is green."
+    assert kwargs["missed_id"] == "aa11"
+    assert kwargs["hold"] is False
+    assert kwargs["priority"] == Priority.EXPLICIT_MCP
+    assert [m.id for m in missed.load()] == ["aa11", "bb22"]  # the daemon clears it once played
+
+
+def test_missed_play_reports_an_unreachable_daemon() -> None:
+    client = MagicMock()
+    client.speak.side_effect = ConnectionError("no socket")
+    srv, missed = _missed_server(client=client)
+    _seed_missed(missed)
+    res = _call_tool(srv, "missed", {"action": "play"})
+    assert res["result"]["isError"] is True
+    assert "could not reach the auto-speech daemon" in res["result"]["content"][0]["text"]
+
+
+def test_missed_clear_forgets_everything() -> None:
+    srv, missed = _missed_server()
+    _seed_missed(missed)
+    res = _call_tool(srv, "missed", {"action": "clear"})
+    assert res["result"]["content"][0]["text"] == "missed speech: cleared 2 lines"
+    assert missed.load() == []
+
+
+def test_missed_tool_schema() -> None:
+    s, _ = _server()
+    tools = s.handle_line(_req("tools/list"))["result"]["tools"]
+    tool = next(t for t in tools if t["name"] == "missed")
+    assert tool["inputSchema"]["properties"]["action"]["enum"] == ["list", "play", "clear"]
+    assert "required" not in tool["inputSchema"]
+    assert tool["inputSchema"]["additionalProperties"] is False
 
 
 def test_sound_yield_tool_schema() -> None:
@@ -1295,7 +1384,7 @@ TESTS = [
     test_initialize_unknown_protocol_falls_back_to_latest,
     test_notification_gets_no_response,
     test_ping,
-    test_tools_list_advertises_all_seven_tools,
+    test_tools_list_advertises_all_eight_tools,
     # Group 2: Backward Compatibility of speak
     test_speak_queues_text_verbatim,
     test_speak_rejects_bad_text,
@@ -1361,6 +1450,12 @@ TESTS = [
     test_sound_yield_on_off_add_remove_clear_write_the_shared_config,
     test_sound_yield_check_reports_the_live_assessment,
     test_sound_yield_tool_schema,
+    test_missed_requires_a_known_action,
+    test_missed_list_is_the_default_and_matches_the_cli_text,
+    test_missed_play_sends_each_missed_line_to_the_daemon_without_a_hold,
+    test_missed_play_reports_an_unreachable_daemon,
+    test_missed_clear_forgets_everything,
+    test_missed_tool_schema,
 ]
 
 

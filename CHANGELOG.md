@@ -9,6 +9,52 @@ The Chrome extension under `chrome-extension/` is versioned independently
 
 ## [Unreleased]
 
+## [0.4.0] - 2026-10-18
+
+Nothing held is ever dropped: a missed list you can read, replay and clear
+from the CLI and the MCP. Baseline tag `v0.3.0`; commits `2617431` (feature) plus this release-notes commit
+landed on `main` by a `--no-ff` merge of `worktree/missed-list`;
+`tests/run_all.sh`: 53 test files ran, 0 failed, under the isolated
+runner with the caller's Claude Code session cleared. Release notes:
+[docs/releases/v0.4.0.md](docs/releases/v0.4.0.md).
+
+### Added
+- **The missed list** (ADR-015, amended). A line held for another app's
+  sound goes on the list as *held* the moment the hold starts and leaves
+  it only once it has played. It stays as *missed* when the longest wait
+  passes, when it turns out to be stale backlog once the sound stops, when
+  a user interrupt releases its hold, or when the daemon restarted while
+  it was held. `auto-speech missed` lists held and missed lines oldest
+  first with when, why and the text; `missed --play` replays the missed
+  ones in that order over any other sound, through the daemon, and each
+  leaves the list once it has played; `missed --clear` forgets them. MCP
+  tool `missed(action = list | play | clear)` prints the same text; slash
+  command `/auto-speech-missed` (extras). One file:
+  `~/.local/state/auto-speech/missed.json` (`AUTO_SPEECH_MISSED_FILE`
+  overrides it; the test runner isolates it). The daemon `status` reply
+  carries `missed` counts.
+- `NativeAudioSink.play(hold=False)` plays one file over other sound (a
+  replay); `already_waited` and `on_hold` carry the queue age and the hold
+  callback to the gate; `last_hold` exposes the outcome.
+  `DaemonClient.speak`/`play_cache` take `missed_id` and `hold`.
+
+### Changed
+- **Past the longest wait a held line is set aside, never dropped**
+  (`EXPIRED` replaces `expired_drop`/`expired_play`). The longest wait
+  (`max_wait_seconds`, 180 s) is now counted from when the line was asked
+  for, so a line that waited behind an earlier hold is held only for the
+  remainder; and once the sound stops, lines that sat behind a hold and
+  are older than it go to the missed list instead of playing late, line
+  by line. A line that is merely old because the queue was busy still
+  plays.
+- `yield status` and `yield check` say "then set aside as missed" where
+  they said "then drop it".
+
+### Removed
+- `after_max_wait` (`drop` | `play`) from `[sound_yield]`: the loader
+  names it in a warning and ignores it; `yield on/off/add` rewrite the
+  file without it.
+
 ## [0.3.0] - 2026-10-18
 
 Speech yields to other apps' sound, and the CLI and MCP surfaces reach

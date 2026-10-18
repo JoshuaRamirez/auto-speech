@@ -299,11 +299,16 @@ class _ScriptedGate:
         self.outcome = outcome
         self.abort_after = abort_after
         self.calls = 0
+        self.kwargs: list[dict] = []
 
-    def wait_until_clear(self, should_abort=None):
+    def wait_until_clear(self, should_abort=None, **kwargs):
         from sound_yield import ABORTED, HoldOutcome
 
         self.calls += 1
+        self.kwargs.append(kwargs)
+        on_hold = kwargs.get("on_hold")
+        if on_hold is not None and self.outcome is not None and self.outcome.waited_seconds > 0:
+            on_hold(self.outcome.blockers)
         if self.abort_after is not None and should_abort is not None:
             for _ in range(self.abort_after):
                 if should_abort():
@@ -357,34 +362,62 @@ class TestNativeAudioSinkSoundYield(unittest.TestCase):
         finally:
             wav.unlink(missing_ok=True)
 
-    def test_expired_drop_raises_playback_yielded_and_never_starts_mpv(self) -> None:
+    def test_expired_raises_playback_yielded_and_never_starts_mpv(self) -> None:
         from native_audio_sink import AudioSinkError, PlaybackYielded
-        from sound_yield import EXPIRED_DROP, HoldOutcome
+        from sound_yield import EXPIRED, HoldOutcome
 
         wav = _make_silent_wav(0.05)
-        gate = _ScriptedGate(HoldOutcome(EXPIRED_DROP, 180.0, ("Spotify (pid 2)",)))
+        outcome = HoldOutcome(EXPIRED, 180.0, ("Spotify (pid 2)",))
+        gate = _ScriptedGate(outcome)
+        sink = NativeAudioSink(sound_yield=gate)
         try:
             with mock.patch("shutil.which", return_value="/usr/bin/mpv"), mock.patch(
                 "subprocess.Popen", return_value=self._mpv()
             ) as popen:
                 with self.assertRaises(PlaybackYielded) as ctx:
-                    NativeAudioSink(sound_yield=gate).play(wav)
+                    sink.play(wav)
             popen.assert_not_called()
-            self.assertIn("held 180s while Spotify (pid 2) played sound", str(ctx.exception))
+            self.assertIn("set aside: held 180s while Spotify (pid 2) played sound", str(ctx.exception))
+            self.assertIs(ctx.exception.outcome, outcome)
             self.assertIsInstance(ctx.exception, AudioSinkError)
+            self.assertIs(sink.last_hold, outcome)
         finally:
             wav.unlink(missing_ok=True)
 
-    def test_expired_play_outcome_plays(self) -> None:
-        from sound_yield import EXPIRED_PLAY, HoldOutcome
+    def test_hold_false_skips_the_gate_and_plays_over_other_sound(self) -> None:
+        from sound_yield import EXPIRED, HoldOutcome
 
         wav = _make_silent_wav(0.05)
+        gate = _ScriptedGate(HoldOutcome(EXPIRED, 180.0, ("Spotify (pid 2)",)))
+        sink = NativeAudioSink(sound_yield=gate)
         try:
             with mock.patch("shutil.which", return_value="/usr/bin/mpv"), mock.patch(
                 "subprocess.Popen", return_value=self._mpv()
             ) as popen:
-                NativeAudioSink(sound_yield=_ScriptedGate(HoldOutcome(EXPIRED_PLAY, 180.0))).play(wav)
+                sink.play(wav, hold=False)
             popen.assert_called_once()
+            self.assertEqual(gate.calls, 0)
+            self.assertIsNone(sink.last_hold)
+        finally:
+            wav.unlink(missing_ok=True)
+
+    def test_queue_age_and_on_hold_reach_the_gate(self) -> None:
+        from sound_yield import RESUMED, HoldOutcome
+
+        wav = _make_silent_wav(0.05)
+        outcome = HoldOutcome(RESUMED, 4.0, ("Music (pid 1)",))
+        gate = _ScriptedGate(outcome)
+        seen: list[tuple[str, ...]] = []
+        try:
+            with mock.patch("shutil.which", return_value="/usr/bin/mpv"), mock.patch(
+                "subprocess.Popen", return_value=self._mpv()
+            ) as popen:
+                sink = NativeAudioSink(sound_yield=gate)
+                sink.play(wav, already_waited=42.0, on_hold=seen.append)
+            popen.assert_called_once()
+            self.assertEqual(gate.kwargs[0]["already_waited"], 42.0)
+            self.assertEqual(seen, [("Music (pid 1)",)])
+            self.assertIs(sink.last_hold, outcome)
         finally:
             wav.unlink(missing_ok=True)
 

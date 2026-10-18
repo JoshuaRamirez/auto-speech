@@ -25,6 +25,7 @@ from mpv_ipc import MpvIpc, MpvIpcError
 from native_audio_sink import AudioSinkError, NativeAudioSink
 from narrator_config import load_config as load_narrator_config
 from self_update import needs_sync
+from missed_speech import run_action as run_missed_action
 from sound_yield import run_action as run_sound_yield_action
 from speak import send_speech_request
 
@@ -644,6 +645,23 @@ def handle_yield(args: argparse.Namespace, store: Any | None = None, gate: Any |
     return EXIT_OK
 
 
+def handle_missed(args: argparse.Namespace, client: Any | None = None, missed: Any | None = None) -> int:
+    """`auto-speech missed [--play | --clear]`: the lines held or set aside
+    while another app played sound (same verbs as the MCP tool `missed`)."""
+    if getattr(args, "play", False):
+        action = "play"
+    elif getattr(args, "clear", False):
+        action = "clear"
+    else:
+        action = "list"
+    result = run_missed_action(action, missed=missed, client=client)
+    if not result.ok:
+        print(result.text, file=sys.stderr)
+        return EXIT_FAILURE
+    print(result.text)
+    return EXIT_OK
+
+
 def handle_hook(args: argparse.Namespace) -> int:
     action = getattr(args, "hook_action", None)
     if not action:
@@ -824,7 +842,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--version",
         action="version",
-        version="auto-speech 0.3.0",
+        version="auto-speech 0.4.0",
     )
     subparsers = parser.add_subparsers(
         dest="subcommand",
@@ -1024,6 +1042,14 @@ def build_parser() -> argparse.ArgumentParser:
     sub_sy.add_parser("clear", help="Empty the exception list.")
     sub_sy.add_parser("check", help="Say who is playing sound now and whether speech would hold.")
 
+    p_md = subparsers.add_parser(
+        "missed",
+        help="Speech held or set aside while another app played sound: list it, replay it, or clear it.",
+    )
+    md_mode = p_md.add_mutually_exclusive_group()
+    md_mode.add_argument("--play", action="store_true", help="Replay the missed lines, oldest first, over any other sound.")
+    md_mode.add_argument("--clear", action="store_true", help="Forget every line on the missed list.")
+
     # 9. hook
     p_hk = subparsers.add_parser("hook", help="Lifecycle hook execution.")
     sub_hk = p_hk.add_subparsers(dest="hook_action", metavar="<action>")
@@ -1103,6 +1129,8 @@ def main(
             return handle_narrate(args)
         elif args.subcommand in ("yield", "sound-yield"):
             return handle_yield(args)
+        elif args.subcommand == "missed":
+            return handle_missed(args, client=client)
         elif args.subcommand == "hook":
             return handle_hook(args)
         elif args.subcommand == "doctor":

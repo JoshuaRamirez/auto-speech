@@ -1,7 +1,7 @@
 # auto-speech — feature catalog
 
 The authoritative inventory of what auto-speech does, by capability
-domain, as of v0.3.0 (2026-10-18). Each entry names the surface and the
+domain, as of v0.4.0 (2026-10-18). Each entry names the surface and the
 module that owns it. Release-by-release history is in
 [CHANGELOG.md](CHANGELOG.md) and [docs/releases/](docs/releases/INDEX.md).
 
@@ -28,11 +28,19 @@ module that owns it. Release-by-release history is in
   transport control (`native_audio_sink.py`, `mpv_ipc.py`, ADR-009).
 - **Speech yields to other apps' sound** (v0.3.0, ADR-015): a playback does
   not start while another process is outputting audio; it keeps its turn
-  and plays when the sound stops, or is dropped after the longest hold
-  (180 s; `after_max_wait = "play"` to play anyway). Core Audio process
-  list with running-output flag, device running-somewhere fallback; no
-  permission; own playback never counts; `interrupt()` releases a hold
+  and plays when the sound stops. Core Audio process list with
+  running-output flag, device running-somewhere fallback; no permission;
+  own playback never counts; `interrupt()` releases a hold
   (`sound_yield.py`).
+- **Nothing held is ever dropped: the missed list** (v0.4.0, ADR-015):
+  past the longest wait (180 s from the ask) a held line is set aside, not
+  dropped; once the sound stops only lines younger than that play by
+  themselves, older backlog is set aside too. `auto-speech missed` lists
+  held and missed lines oldest first, `missed --play` replays the missed
+  ones in that order over any other sound (each leaves the list once it
+  has played), `missed --clear` forgets them; MCP tool `missed`, slash
+  command `/auto-speech-missed`; file
+  `~/.local/state/auto-speech/missed.json` (`missed_speech.py`).
 - **Exception list and off switch** for the hold, identical in the CLI
   (`auto-speech yield`), the MCP tool (`sound_yield`) and
   `~/.config/auto-speech/sound-yield.toml`; live re-read, no restart.
@@ -84,11 +92,12 @@ module that owns it. Release-by-release history is in
 - **CLI** `bin/auto-speech` (`cli.py`): `speak`, `replay`, `pause`,
   `resume`, `restart`, `stop`, `seek`, `autoplay {on,off,status,mode,scope}`,
   `narrate {on,off,status,stop,config}`, `yield {status,on,off,add,remove,
-  clear,check}`, `hook {stop,narrator,bootstrap}`, `doctor`, `update`.
+  clear,check}`, `missed [--play|--clear]`, `hook {stop,narrator,bootstrap}`,
+  `doctor`, `update`.
 - **MCP server** (`mcp_server.py`, stdio JSON-RPC): `speak`,
   `autoplay_turn`, `narrate_event`, `playback_control`, `session_configure`,
-  `sound_yield`, `doctor` (ADR-014 for the fire-and-forget shape).
-- **Slash commands**: 8 curated (`plugin/commands/`) plus 14 extras
+  `sound_yield`, `missed`, `doctor` (ADR-014 for the fire-and-forget shape).
+- **Slash commands**: 8 curated (`plugin/commands/`) plus 15 extras
   (`plugin/commands-extra/`), every one prefixed `auto-speech-`.
 - **Web app** at `http://127.0.0.1:7860` (loopback only): paste-to-speak,
   transport, replay browser, `/api/synthesize`, `/api/voices`, job status

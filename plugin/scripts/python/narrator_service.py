@@ -16,6 +16,7 @@ the end-of-turn response.
 from __future__ import annotations
 
 import atexit
+import inspect
 import json
 import os
 import queue
@@ -38,7 +39,16 @@ from auto_speech_log import get_logger
 from cache_entry import CacheEntry
 from cache_store import CachePromotionError, CacheStore
 from config_constants import DEFAULT_SPEED, DEFAULT_VOICE_ID, FALLBACK_CHARS_PER_SEC
-from native_audio_sink import NativeAudioSink
+from missed_speech import (
+    REASON_INTERRUPTED,
+    REASON_LONGEST_WAIT,
+    REASON_RESTART,
+    REASON_STALE,
+    MissedLine,
+    MissedList,
+    new_id,
+)
+from native_audio_sink import NativeAudioSink, PlaybackYielded
 from narrator_config import load_config
 from narrator_phase_classifier import Category, Phase, PhaseClassifier
 from narrator_state import (
@@ -50,7 +60,7 @@ from narrator_state import (
     NarratorStateMachine,
 )
 from narrator_summarizer import Summarizer, load_summarizer
-from sound_yield import SoundYieldGate
+from sound_yield import ABORTED, DEFAULT_MAX_WAIT_SECONDS, SoundYieldGate
 from priority_arbiter import Priority, PriorityArbiter, QueueItem, QueueProxyFacade
 from unix_ipc_server import _DaemonSocketServer
 from tts_executor import TTSExecutor
@@ -187,6 +197,16 @@ def _load_profile_or_fallback(config: dict | None = None) -> VoiceProfile:
     )
 
 
+def _replay_flags(payload: dict) -> tuple[str, bool]:
+    """`missed_id` (the missed-list line this request replays) and `hold`
+    (False = play over other apps' sound) from a socket request. Absent
+    means an ordinary request: no id, hold as usual."""
+    raw = payload.get("missed_id")
+    missed_id = raw.strip() if isinstance(raw, str) else ""
+    hold = payload.get("hold", True)
+    return missed_id, (hold if isinstance(hold, bool) else True)
+
+
 class NarratorService:
     @property
     def _cache(self) -> CacheStore:
@@ -233,6 +253,8 @@ class NarratorService:
         synth: ResilientSynthesizer | Any = None,
         engine: TTSEngine | Any = None,
         config: dict | None = None,
+        sound_yield_gate: SoundYieldGate | Any | None = None,
+        missed: MissedList | None = None,
     ) -> None:
         self._config = config if config is not None else load_config()
         self._classifier = PhaseClassifier(silence_seconds=0.5, max_events_per_phase=1)
@@ -261,10 +283,18 @@ class NarratorService:
         self._phases_this_turn = 0
 
         # The default sink holds speech while another app plays sound; its
-        # gate logs to the daemon log so a hold is visible there.
+        # gate logs to the daemon log so a hold is visible there. The daemon
+        # keeps the gate too, for the longest-wait setting the stale-backlog
+        # rule reads, and a missed list for every line it held.
+        if sound_yield_gate is None and sink is None:
+            sound_yield_gate = SoundYieldGate(log=_log)
+        self._yield_gate = sound_yield_gate
         self._sink: NativeAudioSink = (
-            sink if sink is not None else NativeAudioSink(sound_yield=SoundYieldGate(log=_log))
+            sink if sink is not None else NativeAudioSink(sound_yield=sound_yield_gate)
         )
+        self._missed: MissedList = missed if missed is not None else MissedList()
+        self._last_hold_ended_at: Optional[float] = None
+        self._sink_takes_hold_kwargs: Optional[bool] = None
         if tts_executor is not None:
             self._tts_executor = tts_executor
         elif synth is not None or engine is not None:
@@ -288,6 +318,14 @@ class NarratorService:
         self._fsm.transition(STARTING)  # NOT_RUNNING → STARTING
         PID_FILE.write_text(str(os.getpid()))
         self._fsm.transition(RUNNING)  # STARTING → RUNNING (pid file written)
+        missed = getattr(self, "_missed", None)
+        if missed is not None:
+            try:
+                settled = missed.settle_held(REASON_RESTART)
+                if settled:
+                    _log(f"missed: {settled} line(s) were still held when the last daemon stopped; now on the missed list")
+            except Exception as exc:  # noqa: BLE001
+                _log(f"missed list settle error: {exc!r}")
         signal.signal(signal.SIGTERM, self._on_signal)
         signal.signal(signal.SIGINT, self._on_signal)
         _log(f"started pid={os.getpid()} provider={self._config['provider']}")
@@ -440,8 +478,9 @@ class NarratorService:
             if source_hash:
                 source_hash = str(source_hash).strip().lower()
             session_id = payload.get("session_id")
-            voice_id = str(payload.get("voice_id", DEFAULT_VOICE_ID))
+            voice_id = str(payload.get("voice_id") or DEFAULT_VOICE_ID)
             speed = float(payload.get("speed", DEFAULT_SPEED))
+            missed_id, hold = _replay_flags(payload)
 
             cached_wav: Optional[Path] = None
             if source_hash and len(source_hash) == 64 and all(c in "0123456789abcdef" for c in source_hash):
@@ -460,6 +499,8 @@ class NarratorService:
                     session_id=session_id,
                     voice_id=voice_id,
                     speed=speed,
+                    missed_id=missed_id,
+                    hold=hold,
                 )
                 cache_hit = True
             else:
@@ -470,6 +511,8 @@ class NarratorService:
                     session_id=session_id,
                     voice_id=voice_id,
                     speed=speed,
+                    missed_id=missed_id,
+                    hold=hold,
                 )
                 cache_hit = False
 
@@ -526,11 +569,14 @@ class NarratorService:
                     }
             priority = int(payload.get("priority", Priority.EXPLICIT_MCP))
             session_id = payload.get("session_id")
+            missed_id, hold = _replay_flags(payload)
             q_item = QueueItem(
                 priority=priority,
                 payload=str(wav_path),
                 source_hash=source_hash,
                 session_id=session_id,
+                missed_id=missed_id,
+                hold=hold,
             )
 
             if priority == Priority.EXPLICIT_MCP:
@@ -568,6 +614,7 @@ class NarratorService:
                 "total_dropped_phases": self._dropped_phases,
                 "uptime_seconds": round(time.time() - getattr(self, "_start_time", time.time()), 2),
                 "sound_yield": hold if isinstance(hold, dict) else None,
+                "missed": self._missed_counts(),
             }
 
         return {
@@ -1002,7 +1049,11 @@ class NarratorService:
                         else:
                             self._engine_state = "PLAYING"
                         try:
-                            self._sink.play(phase)
+                            self._play_item(
+                                Path(phase),
+                                item_obj if isinstance(item_obj, QueueItem) else None,
+                                text="",
+                            )
                         except Exception as exc:  # noqa: BLE001
                             _log(f"play_cache error: {exc!r}")
                         finally:
@@ -1017,7 +1068,13 @@ class NarratorService:
                     s_hash = getattr(item_obj, "source_hash", None)
                     v_id = getattr(item_obj, "voice_id", None)
                     spd = getattr(item_obj, "speed", None)
-                    self._speak(phase, source_hash=s_hash, voice_id=v_id, speed=spd)
+                    self._speak(
+                        phase,
+                        source_hash=s_hash,
+                        voice_id=v_id,
+                        speed=spd,
+                        item=item_obj if isinstance(item_obj, QueueItem) else None,
+                    )
                 elif isinstance(phase, dict):
                     _log(f"Dict received in worker: {phase}")
                     if phase.get("type") == "Stop":
@@ -1074,6 +1131,158 @@ class NarratorService:
                     self._preempted = False
                     self._interrupted = False
 
+    # -- missed list and sound-yield bookkeeping ---------------------------------
+
+    def _missed_counts(self) -> Optional[dict[str, int]]:
+        missed = getattr(self, "_missed", None)
+        if missed is None:
+            return None
+        try:
+            return missed.counts()
+        except Exception:  # noqa: BLE001
+            return None
+
+    def _max_wait_seconds(self) -> float:
+        gate = getattr(self, "_yield_gate", None)
+        if gate is not None:
+            try:
+                return float(gate.settings().max_wait_seconds)
+            except Exception:  # noqa: BLE001
+                pass
+        return DEFAULT_MAX_WAIT_SECONDS
+
+    def _stale_backlog(self, item: QueueItem) -> tuple[bool, float]:
+        """A line is stale backlog when a hold ended after it was queued (it
+        sat behind the other sound) and it is now older than the longest
+        wait. Such a line goes to the missed list instead of playing late;
+        a line that is merely old because the queue was busy still plays."""
+        queued = float(getattr(item, "enqueued_at", None) or time.time())
+        age = max(0.0, time.time() - queued)
+        ended = getattr(self, "_last_hold_ended_at", None)
+        if ended is None or ended < queued:
+            return False, age
+        return age > self._max_wait_seconds(), age
+
+    def _note_hold_ended(self, outcome: Any) -> None:
+        if outcome is not None and float(getattr(outcome, "waited_seconds", 0.0) or 0.0) > 0:
+            self._last_hold_ended_at = time.time()
+
+    def _missed_line(self, text: str, item: Optional[QueueItem], *, existing: Optional[MissedLine] = None) -> MissedLine:
+        if existing is not None:
+            return existing
+        if item is None:
+            return MissedLine(id=new_id(), text=text or "", queued_at=time.time())
+        return MissedLine(
+            id=getattr(item, "missed_id", "") or new_id(),
+            text=text or "",
+            queued_at=float(getattr(item, "enqueued_at", None) or time.time()),
+            priority=int(item.priority),
+            source_hash=item.source_hash,
+            session_id=item.session_id,
+            voice_id=item.voice_id or "",
+            speed=float(item.speed),
+        )
+
+    def _set_aside(
+        self,
+        text: str,
+        item: Optional[QueueItem],
+        *,
+        reason: str,
+        waited: float = 0.0,
+        held_for: tuple[str, ...] = (),
+        existing: Optional[MissedLine] = None,
+    ) -> None:
+        missed = getattr(self, "_missed", None)
+        if missed is None:
+            return
+        try:
+            missed.miss(
+                self._missed_line(text, item, existing=existing),
+                reason=reason,
+                waited_seconds=waited,
+                held_for=held_for,
+            )
+        except Exception as exc:  # noqa: BLE001
+            _log(f"missed list write error: {exc!r}")
+
+    def _sink_play(self, path: Path, **hold_kwargs: Any) -> None:
+        """sink.play with the hold keywords when the sink knows them
+        (NativeAudioSink); a plain play(path) for a sink that does not."""
+        play = self._sink.play
+        takes = getattr(self, "_sink_takes_hold_kwargs", None)
+        if takes is None:
+            try:
+                takes = "on_hold" in inspect.signature(play).parameters
+            except (TypeError, ValueError):
+                takes = False
+            self._sink_takes_hold_kwargs = takes
+        if takes:
+            play(path, **hold_kwargs)
+        else:
+            play(path)
+
+    def _play_item(self, path: Path, item: Optional[QueueItem], *, text: str) -> None:
+        """Play through the sink with the missed-list bookkeeping around the
+        hold: held → on the list as held; longest wait or interrupted while
+        held → stays on the list as missed; played → off the list."""
+        age = 0.0
+        hold = True
+        if item is not None:
+            age = max(0.0, time.time() - float(getattr(item, "enqueued_at", None) or time.time()))
+            hold = bool(getattr(item, "hold", True))
+        held: dict[str, MissedLine] = {}
+        missed = getattr(self, "_missed", None)
+        name = (text or Path(path).name)[:50]
+
+        def on_hold(names: tuple[str, ...]) -> None:
+            if missed is None:
+                return
+            try:
+                held["line"] = missed.hold(self._missed_line(text, item), names)
+            except Exception as exc:  # noqa: BLE001
+                _log(f"missed list write error: {exc!r}")
+
+        try:
+            self._sink_play(path, hold=hold, already_waited=age, on_hold=on_hold)
+        except PlaybackYielded as exc:
+            outcome = exc.outcome
+            self._note_hold_ended(outcome)
+            self._set_aside(
+                text,
+                item,
+                reason=REASON_LONGEST_WAIT,
+                waited=age + outcome.waited_seconds,
+                held_for=tuple(outcome.blockers),
+                existing=held.get("line"),
+            )
+            who = ", ".join(outcome.blockers) or "another app"
+            _log(f"missed: set aside after {outcome.waited_seconds:.0f}s held while {who} played: {name!r}")
+            return
+
+        outcome = getattr(self._sink, "last_hold", None)
+        self._note_hold_ended(outcome)
+        line = held.get("line")
+        if line is not None and getattr(outcome, "status", None) == ABORTED:
+            self._set_aside(
+                text,
+                item,
+                reason=REASON_INTERRUPTED,
+                waited=age + float(outcome.waited_seconds),
+                held_for=tuple(outcome.blockers),
+                existing=line,
+            )
+            _log(f"missed: hold interrupted after {outcome.waited_seconds:.0f}s, set aside: {name!r}")
+            return
+        if missed is not None:
+            try:
+                if line is not None:
+                    missed.remove(line.id)
+                elif item is not None and getattr(item, "missed_id", ""):
+                    missed.remove(item.missed_id)
+            except Exception as exc:  # noqa: BLE001
+                _log(f"missed list write error: {exc!r}")
+
     def _speak(
         self,
         line: str,
@@ -1081,10 +1290,18 @@ class NarratorService:
         *,
         voice_id: Optional[str] = None,
         speed: Optional[float] = None,
+        item: Optional[QueueItem] = None,
     ) -> None:
         line = line.strip()
         if not line:
             return
+
+        if item is not None:
+            stale, age = self._stale_backlog(item)
+            if stale:
+                self._set_aside(line, item, reason=REASON_STALE, waited=age)
+                _log(f"missed: stale backlog ({age:.0f}s old when its turn came), set aside: {line[:50]!r}")
+                return
 
         _log(f"speak: {line} (source_hash={source_hash})")
         self._ensure_tts_initialized()
@@ -1122,7 +1339,7 @@ class NarratorService:
                     else:
                         self._engine_state = "PLAYING"
                     try:
-                        self._sink.play(cached_wav)
+                        self._play_item(cached_wav, item, text=line)
                     finally:
                         if state_lock:
                             with state_lock:
@@ -1207,7 +1424,7 @@ class NarratorService:
                     self._engine_state = "PLAYING"
 
                 _log(f"playing audio ({play_target.stat().st_size} bytes)...")
-                self._sink.play(play_target)
+                self._play_item(play_target, item, text=line)
             else:
                 _log(f"no speakable audio generated for: {line[:50]!r}")
         except Exception as exc:

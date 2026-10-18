@@ -15,14 +15,13 @@ enabled = true
 # or names ("Music", "Spotify"), matched case-insensitively.
 exceptions = []
 
-# Longest a held speech waits for the other sound to stop, in seconds.
+# Longest a held speech waits for the other sound to stop, in seconds,
+# counted from the moment it was asked for. Past it the speech is never
+# dropped: it is set aside on the missed list (`auto-speech missed`, with
+# `--play` to hear it, `--clear` to forget it), and when the sound stops
+# only lines younger than this still play by themselves; older backlog
+# goes to the same list instead of playing late, line by line.
 max_wait_seconds = 180
-
-# What happens when the longest wait passes with the sound still going:
-#   "drop" — the speech is dropped (logged; autoplay audio stays in the
-#            replay cache, so /auto-speech-replay can still play it)
-#   "play" — it plays anyway, over the other sound
-after_max_wait = "drop"
 
 # How often a held speech re-checks whether the other sound has stopped.
 poll_seconds = 0.5

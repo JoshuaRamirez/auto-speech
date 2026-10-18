@@ -3,7 +3,8 @@
 By default auto-speech does not START speaking while some other process
 is producing audio (music, a video, a call). The playback it is about to
 start is held, in queue order, until the other sound stops; past a longest
-wait it is dropped (or, by configuration, played anyway). See ADR-015.
+wait it is set aside as missed (never dropped): the daemon keeps it in
+the missed list for `auto-speech missed` / `missed --play`. See ADR-015.
 
 Detection uses Core Audio's process-object list
 (`kAudioHardwarePropertyProcessObjectList`, with each process's
@@ -27,7 +28,7 @@ Three collaborators, all injectable for tests:
 
 and the SoundYieldGate that combines them. The CLI (`auto-speech yield`),
 the MCP tool (`sound_yield`) and the config file all speak the same
-names: enabled / exceptions / max_wait_seconds / after_max_wait.
+names: enabled / exceptions / max_wait_seconds / poll_seconds.
 """
 
 from __future__ import annotations
@@ -55,8 +56,6 @@ SECTION = "sound_yield"
 DEFAULT_ENABLED = True
 DEFAULT_MAX_WAIT_SECONDS = 180.0
 DEFAULT_POLL_SECONDS = 0.5
-AFTER_MAX_WAIT_CHOICES = ("drop", "play")
-DEFAULT_AFTER_MAX_WAIT = "drop"
 
 OWN_COMMAND_MARKER = "auto-speech"
 MPV_PID_PATH = state_path("auto-speech-mpv.pid")
@@ -64,8 +63,7 @@ MPV_PID_PATH = state_path("auto-speech-mpv.pid")
 # Hold outcomes (HoldOutcome.status).
 CLEAR = "clear"  # nothing else was playing; no hold
 RESUMED = "resumed"  # held, the other sound stopped, play now
-EXPIRED_PLAY = "expired_play"  # held to the longest wait; policy says play anyway
-EXPIRED_DROP = "expired_drop"  # held to the longest wait; policy says drop
+EXPIRED = "expired"  # held to the longest wait; set aside as missed, not played
 ABORTED = "aborted"  # the caller cancelled the hold (interrupt)
 DISABLED = "disabled"  # the behaviour is switched off
 UNAVAILABLE = "unavailable"  # no probe could answer; fail open
@@ -93,7 +91,6 @@ class SoundYieldSettings:
     enabled: bool = DEFAULT_ENABLED
     exceptions: tuple[str, ...] = ()
     max_wait_seconds: float = DEFAULT_MAX_WAIT_SECONDS
-    after_max_wait: str = DEFAULT_AFTER_MAX_WAIT
     poll_seconds: float = DEFAULT_POLL_SECONDS
     config_path: Optional[str] = None
     problems: tuple[str, ...] = ()  # what was ignored while loading, for the doctor/status
@@ -132,29 +129,25 @@ class SoundYieldSettings:
             problems.append(f"[{SECTION}] max_wait_seconds should be a number >= 0, got {max_wait!r}")
             max_wait = DEFAULT_MAX_WAIT_SECONDS
 
-        after = section.get("after_max_wait", DEFAULT_AFTER_MAX_WAIT)
-        if not isinstance(after, str) or after.strip().lower() not in AFTER_MAX_WAIT_CHOICES:
-            problems.append(
-                f"[{SECTION}] after_max_wait must be one of {AFTER_MAX_WAIT_CHOICES}, got {after!r}"
-            )
-            after = DEFAULT_AFTER_MAX_WAIT
-        after = after.strip().lower()
-
         poll = section.get("poll_seconds", DEFAULT_POLL_SECONDS)
         if isinstance(poll, bool) or not isinstance(poll, (int, float)) or poll <= 0:
             problems.append(f"[{SECTION}] poll_seconds should be a number > 0, got {poll!r}")
             poll = DEFAULT_POLL_SECONDS
 
-        known = {"enabled", "exceptions", "max_wait_seconds", "after_max_wait", "poll_seconds"}
+        known = {"enabled", "exceptions", "max_wait_seconds", "poll_seconds"}
         for key in section:
-            if key not in known:
+            if key == "after_max_wait":
+                problems.append(
+                    f"[{SECTION}] after_max_wait is gone since 0.4.0: a held speech is never dropped; "
+                    "past the longest wait it goes to the missed list (ignored)"
+                )
+            elif key not in known:
                 problems.append(f"[{SECTION}] unknown key {key!r} (ignored)")
 
         return cls(
             enabled=enabled,
             exceptions=tuple(exceptions),
             max_wait_seconds=float(max_wait),
-            after_max_wait=after,
             poll_seconds=float(poll),
             config_path=config_path,
             problems=tuple(problems),
@@ -167,7 +160,6 @@ class SoundYieldSettings:
             f"enabled = {'true' if self.enabled else 'false'}\n"
             f"exceptions = [{items}]\n"
             f"max_wait_seconds = {self.max_wait_seconds:g}\n"
-            f'after_max_wait = "{self.after_max_wait}"\n'
             f"poll_seconds = {self.poll_seconds:g}\n"
         )
 
@@ -515,13 +507,13 @@ class Assessment:
 
 @dataclass(frozen=True)
 class HoldOutcome:
-    status: str  # CLEAR | RESUMED | EXPIRED_PLAY | EXPIRED_DROP | ABORTED | DISABLED | UNAVAILABLE
+    status: str  # CLEAR | RESUMED | EXPIRED | ABORTED | DISABLED | UNAVAILABLE
     waited_seconds: float = 0.0
     blockers: tuple[str, ...] = ()
 
     @property
     def may_play(self) -> bool:
-        return self.status in (CLEAR, RESUMED, EXPIRED_PLAY, DISABLED, UNAVAILABLE)
+        return self.status in (CLEAR, RESUMED, DISABLED, UNAVAILABLE)
 
 
 class SoundYieldGate:
@@ -642,9 +634,21 @@ class SoundYieldGate:
 
     # -- waiting ------------------------------------------------------------------
 
-    def wait_until_clear(self, should_abort: Callable[[], bool] | None = None) -> HoldOutcome:
+    def wait_until_clear(
+        self,
+        should_abort: Callable[[], bool] | None = None,
+        *,
+        already_waited: float = 0.0,
+        on_hold: Callable[[tuple[str, ...]], None] | None = None,
+    ) -> HoldOutcome:
         """Block until speech may start. Returns how it ended; the caller
-        decides what to do with EXPIRED_DROP / ABORTED."""
+        decides what to do with EXPIRED / ABORTED.
+
+        `already_waited` is how long this speech has already waited in the
+        queue (behind an earlier hold, say); it counts against the longest
+        wait, so a line is never held past `max_wait_seconds` of age.
+        `on_hold` is called once, with the blockers' names, when a hold
+        begins, so the caller can record the line as held."""
         settings = self._store.load()
         first = self.assess(settings)
         if first.mode == MODE_DISABLED:
@@ -655,10 +659,15 @@ class SoundYieldGate:
             return HoldOutcome(CLEAR)
 
         names = tuple(p.label() for p in first.blockers)
+        already = max(0.0, float(already_waited))
+        budget = max(0.0, settings.max_wait_seconds - already)
+        used = f", {already:.0f}s of it already spent in the queue" if already > 0 else ""
         self._log(
             f"sound-yield: holding speech while {', '.join(names)} plays "
-            f"(max {settings.max_wait_seconds:g}s, then {settings.after_max_wait})"
+            f"(up to {budget:g}s more{used}; then set aside as missed)"
         )
+        if on_hold is not None:
+            on_hold(names)
         started = self._clock()
         last_names = names
         while True:
@@ -667,13 +676,14 @@ class SoundYieldGate:
                 self._log(f"sound-yield: hold aborted after {waited:.1f}s")
                 return HoldOutcome(ABORTED, waited, last_names)
             waited = self._clock() - started
-            if waited >= settings.max_wait_seconds:
-                if settings.after_max_wait == "play":
-                    self._log(f"sound-yield: longest wait ({settings.max_wait_seconds:g}s) reached; playing anyway")
-                    return HoldOutcome(EXPIRED_PLAY, waited, last_names)
-                self._log(f"sound-yield: longest wait ({settings.max_wait_seconds:g}s) reached; dropping this speech")
-                return HoldOutcome(EXPIRED_DROP, waited, last_names)
-            self._sleep(min(settings.poll_seconds, max(0.0, settings.max_wait_seconds - waited)))
+            budget = max(0.0, settings.max_wait_seconds - already)
+            if waited >= budget:
+                self._log(
+                    f"sound-yield: longest wait ({settings.max_wait_seconds:g}s) reached; "
+                    "setting this speech aside as missed"
+                )
+                return HoldOutcome(EXPIRED, waited, last_names)
+            self._sleep(min(settings.poll_seconds, max(0.0, budget - waited)))
             # Re-read settings each poll so `yield off` / `yield add` release a hold in progress.
             settings = self._store.load()
             current = self.assess(settings)
@@ -706,12 +716,11 @@ def _pid_alive(pid: int) -> bool:
 def format_settings(settings: SoundYieldSettings) -> str:
     state = "ON — speech holds while another app plays sound" if settings.enabled else "OFF — speech plays over other apps' sound"
     exceptions = ", ".join(settings.exceptions) if settings.exceptions else "none"
-    after = "play anyway" if settings.after_max_wait == "play" else "drop it"
     where = settings.config_path or "defaults (no config file yet)"
     lines = [
         f"sound yield: {state}",
         f"exceptions (apps whose sound does not hold speech): {exceptions}",
-        f"longest hold: {settings.max_wait_seconds:g} s, then {after}",
+        f"longest hold: {settings.max_wait_seconds:g} s, then set aside as missed (auto-speech missed)",
         f"config: {where}",
     ]
     for problem in settings.problems:
@@ -739,8 +748,7 @@ def format_assessment(assessment: Assessment) -> str:
         for p in assessment.own:
             lines.append(f"playing: {p.label()} — auto-speech's own, does not hold")
         if assessment.hold:
-            after = "play anyway" if s.after_max_wait == "play" else "drop it"
-            lines.append(f"speech would HOLD (up to {s.max_wait_seconds:g} s, then {after})")
+            lines.append(f"speech would HOLD (up to {s.max_wait_seconds:g} s, then set aside as missed)")
         else:
             lines.append("speech would play now")
     if assessment.mode == MODE_DEVICE_FALLBACK:

@@ -12,7 +12,9 @@ the sound stops. The **exception list** names apps whose sound does not hold
 speech, by bundle id (`com.apple.Music`) or name (`Music`, `Spotify`). `off`
 switches the behaviour off; `on` restores it. `check` says who is playing
 right now and whether speech would hold. The same verbs exist in the MCP tool
-`sound_yield` and the file `~/.config/auto-speech/sound-yield.toml`.
+`sound_yield` and the file `~/.config/auto-speech/sound-yield.toml`. A held
+line is never dropped: past the longest wait it goes to the missed list
+(`/auto-speech-missed`).
 
 ## Execution
 

@@ -51,11 +51,12 @@ from daemon_client import DaemonClient, Priority
 from doctor import Doctor
 from message_selector import MessageSelector
 from mpv_ipc import MpvIpc
+from missed_speech import ACTIONS as MISSED_ACTIONS, run_action as run_missed_action
 from sound_yield import ACTIONS as SOUND_YIELD_ACTIONS, run_action as run_sound_yield_action
 from transcript_locator import TranscriptLocator
 
 SERVER_NAME = "auto-speech"
-SERVER_VERSION = "0.3.0"
+SERVER_VERSION = "0.4.0"
 SUPPORTED_PROTOCOLS = ("2025-06-18", "2025-03-26", "2024-11-05")
 MAX_CHARS = 20000  # matches web_server's /api/synthesize cap
 
@@ -292,6 +293,32 @@ SOUND_YIELD_TOOL = {
     },
 }
 
+MISSED_TOOL = {
+    "name": "missed",
+    "title": "Speech held or set aside while another app played sound",
+    "description": (
+        "A line auto-speech held for another app's sound is never dropped. "
+        "While it waits it is 'held'; past the longest wait, or when it "
+        "turns out to be stale backlog once the sound stops, it is 'missed' "
+        "and stays on this list until it plays. 'list' (default) shows the "
+        "lines, oldest first; 'play' replays the missed ones in that order, "
+        "over any other sound, and each leaves the list once it has played; "
+        "'clear' forgets them all. Same verbs as `auto-speech missed`, "
+        "`missed --play`, `missed --clear`."
+    ),
+    "inputSchema": {
+        "type": "object",
+        "properties": {
+            "action": {
+                "type": "string",
+                "enum": list(MISSED_ACTIONS),
+                "description": "list | play | clear (default list)",
+            },
+        },
+        "additionalProperties": False,
+    },
+}
+
 DOCTOR_TOOL = {
     "name": "doctor",
     "title": "Run system health checks and diagnostics",
@@ -325,6 +352,7 @@ ALL_TOOLS = [
     PLAYBACK_CONTROL_TOOL,
     SESSION_CONFIGURE_TOOL,
     SOUND_YIELD_TOOL,
+    MISSED_TOOL,
     DOCTOR_TOOL,
 ]
 
@@ -391,6 +419,7 @@ class McpServer:
         is_mpv_alive=None,
         sound_yield_store=None,
         sound_yield_gate=None,
+        missed_list=None,
     ) -> None:
         self._home = Path(home) if home is not None else Path(os.path.expanduser("~"))
         self._spawn = spawner
@@ -431,6 +460,7 @@ class McpServer:
         self._is_mpv_alive_fn = is_mpv_alive
         self._sound_yield_store = sound_yield_store
         self._sound_yield_gate = sound_yield_gate
+        self._missed_list = missed_list
 
     def _is_mpv_socket_alive(self) -> bool:
         if self._is_mpv_alive_fn is not None:
@@ -510,6 +540,7 @@ class McpServer:
             "playback_control": self._call_playback_control,
             "session_configure": self._call_session_configure,
             "sound_yield": self._call_sound_yield,
+            "missed": self._call_missed,
             "doctor": self._call_doctor,
         }
 
@@ -1306,6 +1337,22 @@ class McpServer:
             )
         except Exception as exc:  # noqa: BLE001
             return _ok(req_id, _tool_result(f"sound_yield failed: {exc}", is_error=True))
+        return _ok(req_id, _tool_result(result.text, is_error=not result.ok))
+
+    def _call_missed(self, req_id: Any, args: dict) -> dict:
+        action = args.get("action", "list")
+        if not isinstance(action, str) or action.strip().lower() not in MISSED_ACTIONS:
+            return _ok(
+                req_id,
+                _tool_result(
+                    f"invalid action: {action!r} (expected {', '.join(MISSED_ACTIONS)})",
+                    is_error=True,
+                ),
+            )
+        try:
+            result = run_missed_action(action, missed=self._missed_list, client=self._client)
+        except Exception as exc:  # noqa: BLE001
+            return _ok(req_id, _tool_result(f"missed failed: {exc}", is_error=True))
         return _ok(req_id, _tool_result(result.text, is_error=not result.ok))
 
     def _call_doctor(self, req_id: Any, args: dict) -> dict:

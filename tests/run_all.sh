@@ -37,8 +37,10 @@ fi
 STATE_DIR="$(mktemp -d /tmp/auto-speech-tests.XXXXXX)"
 export AUTO_SPEECH_TMP_ROOT="$STATE_DIR"
 export AUTO_SPEECH_DAEMON_SOCK="$STATE_DIR/auto-speech-daemon.sock"
+export AUTO_SPEECH_MISSED_FILE="$STATE_DIR/missed.json"
 echo "[isolation] AUTO_SPEECH_TMP_ROOT=$STATE_DIR"
 echo "[isolation] AUTO_SPEECH_DAEMON_SOCK=$AUTO_SPEECH_DAEMON_SOCK"
+echo "[isolation] AUTO_SPEECH_MISSED_FILE=$AUTO_SPEECH_MISSED_FILE"
 cleanup_state_dir() {
     local pid
     pid="$(cat "$STATE_DIR/auto-speech-narrator-daemon.pid" 2>/dev/null || true)"
@@ -111,6 +113,7 @@ CHEAP=(
     test_apple_say_engine.py
     test_native_audio_sink.py
     test_sound_yield.py
+    test_missed_speech.py
     test_speak_client.py
     test_cli_dispatcher.py
 )
