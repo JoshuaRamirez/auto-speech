@@ -28,6 +28,8 @@ import time
 import wave
 from datetime import datetime, timezone
 from pathlib import Path
+
+from state_paths import state_path
 from typing import Any, Optional
 
 # Daemon runs a UNIX domain socket server (socket.AF_UNIX) via unix_ipc_server._DaemonSocketServer
@@ -57,12 +59,12 @@ from tts_engine import TTSEngine
 from voice_profile import VoiceProfile
 from voice_profile_store import VoiceProfileStore
 
-EVENTS_LOG = Path("/tmp/auto-speech-narrator-events.jsonl")
-PID_FILE = Path("/tmp/auto-speech-narrator-daemon.pid")
-LOG_FILE = Path("/tmp/auto-speech-narrator-daemon.log")
-DEPTH_FILE = Path("/tmp/auto-speech-narration-depth")
-WATERMARK_FILE = Path("/tmp/auto-speech-narrator-daemon.watermark")
-DEFAULT_SOCKET_PATH = Path("/tmp/auto-speech-daemon.sock")
+EVENTS_LOG = state_path("auto-speech-narrator-events.jsonl")
+PID_FILE = state_path("auto-speech-narrator-daemon.pid")
+LOG_FILE = state_path("auto-speech-narrator-daemon.log")
+DEPTH_FILE = state_path("auto-speech-narration-depth")
+WATERMARK_FILE = state_path("auto-speech-narrator-daemon.watermark")
+DEFAULT_SOCKET_PATH = state_path("auto-speech-daemon.sock")
 SOCKET_FILE = Path(os.environ.get("AUTO_SPEECH_DAEMON_SOCK", str(DEFAULT_SOCKET_PATH)))
 
 POLL_INTERVAL_S = 0.25
@@ -765,7 +767,7 @@ class NarratorService:
                 # Immediately interrupt any currently playing audio and purge lower queues!
                 self._handle_p1_interrupt()
                 try:
-                    mpv_pid_file = Path("/tmp/auto-speech-mpv.pid")
+                    mpv_pid_file = state_path("auto-speech-mpv.pid")
                     if mpv_pid_file.is_file():
                         global_pid = int(mpv_pid_file.read_text().strip())
                         if _pid_is_mpv(global_pid):

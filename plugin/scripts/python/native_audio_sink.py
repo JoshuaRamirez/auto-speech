@@ -16,6 +16,8 @@ import sys
 import threading
 import time
 from pathlib import Path
+
+from state_paths import state_path
 from typing import Any, Callable
 
 from sound_yield import (
@@ -34,7 +36,7 @@ if "unittest" in sys.modules:
 
 logger = logging.getLogger(__name__)
 
-MPV_PID_PATH = Path("/tmp/auto-speech-mpv.pid")
+MPV_PID_PATH = state_path("auto-speech-mpv.pid")
 
 
 class AudioSinkError(RuntimeError):

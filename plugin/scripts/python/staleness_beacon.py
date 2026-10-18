@@ -19,6 +19,8 @@ from __future__ import annotations
 
 from pathlib import Path
 
+from state_paths import state_path
+
 from state_machine import StateMachine
 
 FRESH = "fresh"
@@ -29,7 +31,7 @@ _LEGAL_NEXT: dict[str, set[str]] = {
     STALE: set(),
 }
 
-BEACON_DEFAULT = "/tmp/auto-speech-last-stop"
+BEACON_DEFAULT = str(state_path("auto-speech-last-stop"))
 
 # The start mtime arrives as a decimal STRING from the hook (`stat -f %Fm`)
 # and is compared against Python's float st_mtime for the same file. The two
