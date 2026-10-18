@@ -23,6 +23,7 @@ from mpv_ipc import MpvIpc, MpvIpcError
 from native_audio_sink import AudioSinkError, NativeAudioSink
 from narrator_config import load_config as load_narrator_config
 from self_update import needs_sync
+from sound_yield import run_action as run_sound_yield_action
 from speak import send_speech_request
 
 EXIT_OK = 0
@@ -628,6 +629,19 @@ def handle_narrate(args: argparse.Namespace) -> int:
     return EXIT_INVALID_INPUT
 
 
+def handle_yield(args: argparse.Namespace, store: Any | None = None, gate: Any | None = None) -> int:
+    """`auto-speech yield <status|on|off|add|remove|clear|check> [apps…]`:
+    the sound-yield switch and exception list (same verbs as the MCP tool)."""
+    action = getattr(args, "yield_action", None) or "status"
+    apps = getattr(args, "apps", None) or []
+    result = run_sound_yield_action(action, apps, store=store, gate=gate)
+    if not result.ok:
+        print(result.text, file=sys.stderr)
+        return EXIT_INVALID_INPUT
+    print(result.text)
+    return EXIT_OK
+
+
 def handle_hook(args: argparse.Namespace) -> int:
     action = getattr(args, "hook_action", None)
     if not action:
@@ -991,6 +1005,23 @@ def build_parser() -> argparse.ArgumentParser:
         help="Config action: show | path | edit.",
     )
 
+    # 8b. yield (sound yield: hold speech while another app plays sound)
+    p_sy = subparsers.add_parser(
+        "yield",
+        aliases=["sound-yield"],
+        help="Hold speech while another app plays sound: switch, exception list, live check.",
+    )
+    sub_sy = p_sy.add_subparsers(dest="yield_action", metavar="<action>")
+    sub_sy.add_parser("status", help="Show the switch, the exception list and the longest hold.")
+    sub_sy.add_parser("on", help="Hold speech while another app plays sound (default).")
+    sub_sy.add_parser("off", help="Never hold: speech plays over other apps' sound.")
+    p_sy_add = sub_sy.add_parser("add", help="Add apps whose sound does not hold speech.")
+    p_sy_add.add_argument("apps", nargs="+", help="Bundle ids (com.apple.Music) or names (Music).")
+    p_sy_rm = sub_sy.add_parser("remove", help="Remove apps from the exception list.")
+    p_sy_rm.add_argument("apps", nargs="+", help="Bundle ids or names to remove.")
+    sub_sy.add_parser("clear", help="Empty the exception list.")
+    sub_sy.add_parser("check", help="Say who is playing sound now and whether speech would hold.")
+
     # 9. hook
     p_hk = subparsers.add_parser("hook", help="Lifecycle hook execution.")
     sub_hk = p_hk.add_subparsers(dest="hook_action", metavar="<action>")
@@ -1068,6 +1099,8 @@ def main(
             return handle_autoplay(args)
         elif args.subcommand == "narrate":
             return handle_narrate(args)
+        elif args.subcommand in ("yield", "sound-yield"):
+            return handle_yield(args)
         elif args.subcommand == "hook":
             return handle_hook(args)
         elif args.subcommand == "doctor":

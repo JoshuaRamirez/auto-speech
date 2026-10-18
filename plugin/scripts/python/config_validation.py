@@ -17,7 +17,7 @@ from pathlib import Path
 @dataclass(frozen=True)
 class Field:
     name: str
-    kind: str  # "str" | "int" | "number" | "enum"
+    kind: str  # "str" | "int" | "number" | "enum" | "bool" | "str_list"
     allowed: tuple = ()  # for kind == "enum"
     minimum: float | None = None  # inclusive lower bound for numeric kinds
 
@@ -41,6 +41,16 @@ NARRATOR_FIELDS = (
     Field("min_events_per_phase", "int", minimum=1),
     Field("max_queue_depth", "int", minimum=1),
     Field("ollama_host", "str"),
+)
+
+
+# Mirrors the keys read by sound_yield.SoundYieldSettings.from_mapping.
+SOUND_YIELD_FIELDS = (
+    Field("enabled", "bool"),
+    Field("exceptions", "str_list"),
+    Field("max_wait_seconds", "number", minimum=0),
+    Field("after_max_wait", "enum", allowed=("drop", "play")),
+    Field("poll_seconds", "number", minimum=0),
 )
 
 
@@ -87,6 +97,12 @@ def validate_section(section: dict, fields: tuple[Field, ...], section_name: str
                 problems.append(f"[{section_name}] {f.name} must be >= {f.minimum:g}, got {val}")
         elif f.kind == "enum" and (not isinstance(val, str) or val.lower() not in f.allowed):
             problems.append(f"[{section_name}] {f.name} must be one of {f.allowed}, got {val!r}")
+        elif f.kind == "bool" and not isinstance(val, bool):
+            problems.append(f"[{section_name}] {f.name} should be true or false, got {val!r}")
+        elif f.kind == "str_list" and (
+            not isinstance(val, list) or any(not isinstance(x, str) for x in val)
+        ):
+            problems.append(f"[{section_name}] {f.name} should be a list of strings, got {val!r}")
 
     return problems
 
@@ -109,8 +125,9 @@ def validate_toml_file(path: Path, section_name: str, fields: tuple[Field, ...])
 
 
 def validate_user_configs(config_dir: Path) -> list[str]:
-    """All problems across the user's autoplay.toml and narrator.toml."""
+    """All problems across the user's autoplay.toml, narrator.toml and sound-yield.toml."""
     problems: list[str] = []
     problems += validate_toml_file(config_dir / "autoplay.toml", "autoplay", AUTOPLAY_FIELDS)
     problems += validate_toml_file(config_dir / "narrator.toml", "narrator", NARRATOR_FIELDS)
+    problems += validate_toml_file(config_dir / "sound-yield.toml", "sound_yield", SOUND_YIELD_FIELDS)
     return problems

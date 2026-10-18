@@ -748,6 +748,54 @@ def format_assessment(assessment: Assessment) -> str:
     return "\n".join(lines)
 
 
+ACTIONS = ("status", "on", "off", "add", "remove", "clear", "check")
+
+
+@dataclass(frozen=True)
+class ActionResult:
+    ok: bool
+    text: str
+
+
+def run_action(
+    action: str | None,
+    apps: Iterable[str] = (),
+    *,
+    store: SoundYieldStore | None = None,
+    gate: SoundYieldGate | None = None,
+) -> ActionResult:
+    """One verb for the CLI (`auto-speech yield <action> [apps…]`) and the
+    MCP tool (`sound_yield(action, apps)`), so both say the same thing."""
+    store = store or SoundYieldStore()
+    action = (action or "status").strip().lower()
+    apps = [str(a).strip() for a in apps if str(a).strip()]
+    if action not in ACTIONS:
+        return ActionResult(False, f"yield: unknown action {action!r} (expected {' | '.join(ACTIONS)})")
+    if action == "status":
+        return ActionResult(True, format_settings(store.load()))
+    if action in ("on", "off"):
+        settings = store.set_enabled(action == "on")
+        return ActionResult(True, format_settings(settings))
+    if action == "add":
+        if not apps:
+            return ActionResult(False, "yield add: name at least one app (bundle id like com.apple.Music, or name like Music)")
+        settings, added = store.add_exceptions(apps)
+        head = f"added: {', '.join(added)}" if added else "added: nothing new (already on the list)"
+        return ActionResult(True, head + "\n" + format_settings(settings))
+    if action == "remove":
+        if not apps:
+            return ActionResult(False, "yield remove: name at least one app to remove")
+        settings, removed = store.remove_exceptions(apps)
+        head = f"removed: {', '.join(removed)}" if removed else "removed: nothing (not on the list)"
+        return ActionResult(True, head + "\n" + format_settings(settings))
+    if action == "clear":
+        settings = store.clear_exceptions()
+        return ActionResult(True, "exceptions cleared\n" + format_settings(settings))
+    # check
+    gate = gate or SoundYieldGate(store=store)
+    return ActionResult(True, format_assessment(gate.assess()))
+
+
 if __name__ == "__main__":
     gate = SoundYieldGate()
     print(format_settings(gate.settings()))
