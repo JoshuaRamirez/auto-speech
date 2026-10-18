@@ -21,6 +21,12 @@ SRC = Path(__file__).resolve().parents[1] / "plugin" / "scripts" / "python"
 if str(SRC) not in sys.path:
     sys.path.insert(0, str(SRC))
 
+# Isolation: never touch the live service's files when run standalone; the
+# runner (tests/run_all.sh) sets AUTO_SPEECH_TMP_ROOT itself.
+os.environ.setdefault("AUTO_SPEECH_TMP_ROOT", tempfile.mkdtemp(prefix="auto-speech-tests-"))
+
+from state_paths import state_path  # noqa: E402
+
 import cli  # noqa: E402
 from cache_entry import CacheEntry  # noqa: E402
 from daemon_client import DaemonResponse, Priority  # noqa: E402
@@ -934,7 +940,7 @@ class TestCliHook(BaseCliTestCase):
         marker.parent.mkdir(parents=True, exist_ok=True)
         marker.touch()
 
-        events_file = Path("/tmp/auto-speech-narrator-events.jsonl")
+        events_file = state_path("auto-speech-narrator-events.jsonl")
         events_file.unlink(missing_ok=True)
 
         with (
@@ -956,7 +962,7 @@ class TestCliHook(BaseCliTestCase):
         marker.parent.mkdir(parents=True, exist_ok=True)
         marker.touch()
 
-        events_file = Path("/tmp/auto-speech-narrator-events.jsonl")
+        events_file = state_path("auto-speech-narrator-events.jsonl")
         events_file.unlink(missing_ok=True)
 
         with (
@@ -970,7 +976,7 @@ class TestCliHook(BaseCliTestCase):
 
     def test_hook_narrator_unenrolled_session_bails_early(self) -> None:
         payload = json.dumps({"session_id": "unenrolled", "hook_event_name": "PreToolUse"})
-        events_file = Path("/tmp/auto-speech-narrator-events.jsonl")
+        events_file = state_path("auto-speech-narrator-events.jsonl")
         events_file.unlink(missing_ok=True)
 
         with mock.patch("sys.stdin", io.StringIO(payload)):
@@ -980,7 +986,7 @@ class TestCliHook(BaseCliTestCase):
 
     def test_hook_narrator_non_dict_json_payloads_bail_cleanly(self) -> None:
         """Narrator hook must safely handle non-dict JSON and exit 0."""
-        events_file = Path("/tmp/auto-speech-narrator-events.jsonl")
+        events_file = state_path("auto-speech-narrator-events.jsonl")
         events_file.unlink(missing_ok=True)
 
         non_dict_payloads = [
@@ -1005,7 +1011,7 @@ class TestCliHook(BaseCliTestCase):
 
     def test_hook_narrator_missing_keys_bails_cleanly(self) -> None:
         """Narrator hook with empty dict or missing session_id must exit 0."""
-        events_file = Path("/tmp/auto-speech-narrator-events.jsonl")
+        events_file = state_path("auto-speech-narrator-events.jsonl")
         events_file.unlink(missing_ok=True)
 
         payloads = [
