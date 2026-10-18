@@ -290,8 +290,162 @@ class TestNativeAudioSink(unittest.TestCase):
             wav_path.unlink(missing_ok=True)
 
 
+
+
+class _ScriptedGate:
+    """A sound-yield gate whose outcome is scripted; records abort probes."""
+
+    def __init__(self, outcome, *, abort_after: int | None = None):
+        self.outcome = outcome
+        self.abort_after = abort_after
+        self.calls = 0
+
+    def wait_until_clear(self, should_abort=None):
+        from sound_yield import ABORTED, HoldOutcome
+
+        self.calls += 1
+        if self.abort_after is not None and should_abort is not None:
+            for _ in range(self.abort_after):
+                if should_abort():
+                    return HoldOutcome(ABORTED, 0.5, ("Music",))
+            return HoldOutcome(ABORTED, 1.0, ("Music",))
+        return self.outcome
+
+
+class TestNativeAudioSinkSoundYield(unittest.TestCase):
+    """The sink consults the gate before mpv starts; the gate is injected,
+    so the audio layer is fully mocked here."""
+
+    def _mpv(self):
+        proc = mock.MagicMock()
+        proc.communicate.return_value = (b"", b"")
+        proc.returncode = 0
+        proc.pid = 4321
+        proc.poll.return_value = 0
+        return proc
+
+    def test_clear_outcome_plays(self) -> None:
+        from sound_yield import CLEAR, HoldOutcome
+
+        wav = _make_silent_wav(0.05)
+        gate = _ScriptedGate(HoldOutcome(CLEAR))
+        try:
+            with mock.patch("shutil.which", return_value="/usr/bin/mpv"), mock.patch(
+                "subprocess.Popen", return_value=self._mpv()
+            ) as popen:
+                NativeAudioSink(sound_yield=gate).play(wav)
+            self.assertEqual(gate.calls, 1)
+            popen.assert_called_once()
+        finally:
+            wav.unlink(missing_ok=True)
+
+    def test_resumed_outcome_plays_and_records_the_hold(self) -> None:
+        from sound_yield import RESUMED, HoldOutcome
+
+        wav = _make_silent_wav(0.05)
+        gate = _ScriptedGate(HoldOutcome(RESUMED, 3.5, ("Music (pid 1)",)))
+        try:
+            with mock.patch("shutil.which", return_value="/usr/bin/mpv"), mock.patch(
+                "subprocess.Popen", return_value=self._mpv()
+            ) as popen:
+                sink = NativeAudioSink(sound_yield=gate)
+                sink.play(wav)
+            popen.assert_called_once()
+            self.assertEqual(sink.hold_status["last_hold"]["status"], RESUMED)
+            self.assertEqual(sink.hold_status["last_hold"]["blockers"], ["Music (pid 1)"])
+            self.assertFalse(sink.hold_status["holding"])
+        finally:
+            wav.unlink(missing_ok=True)
+
+    def test_expired_drop_raises_playback_yielded_and_never_starts_mpv(self) -> None:
+        from native_audio_sink import AudioSinkError, PlaybackYielded
+        from sound_yield import EXPIRED_DROP, HoldOutcome
+
+        wav = _make_silent_wav(0.05)
+        gate = _ScriptedGate(HoldOutcome(EXPIRED_DROP, 180.0, ("Spotify (pid 2)",)))
+        try:
+            with mock.patch("shutil.which", return_value="/usr/bin/mpv"), mock.patch(
+                "subprocess.Popen", return_value=self._mpv()
+            ) as popen:
+                with self.assertRaises(PlaybackYielded) as ctx:
+                    NativeAudioSink(sound_yield=gate).play(wav)
+            popen.assert_not_called()
+            self.assertIn("held 180s while Spotify (pid 2) played sound", str(ctx.exception))
+            self.assertIsInstance(ctx.exception, AudioSinkError)
+        finally:
+            wav.unlink(missing_ok=True)
+
+    def test_expired_play_outcome_plays(self) -> None:
+        from sound_yield import EXPIRED_PLAY, HoldOutcome
+
+        wav = _make_silent_wav(0.05)
+        try:
+            with mock.patch("shutil.which", return_value="/usr/bin/mpv"), mock.patch(
+                "subprocess.Popen", return_value=self._mpv()
+            ) as popen:
+                NativeAudioSink(sound_yield=_ScriptedGate(HoldOutcome(EXPIRED_PLAY, 180.0))).play(wav)
+            popen.assert_called_once()
+        finally:
+            wav.unlink(missing_ok=True)
+
+    def test_interrupt_releases_a_held_playback_quietly(self) -> None:
+        wav = _make_silent_wav(0.05)
+        gate = _ScriptedGate(None, abort_after=50)
+        try:
+            with mock.patch("shutil.which", return_value="/usr/bin/mpv"), mock.patch(
+                "subprocess.Popen", return_value=self._mpv()
+            ) as popen:
+                sink = NativeAudioSink(sound_yield=gate)
+                sink.interrupt()  # before the hold: cleared at hold start, so no effect
+                t = threading.Thread(target=lambda: sink.play(wav))
+                # Abort on the 10th probe by flipping the sink's own abort event.
+                probes = {"n": 0}
+                real_abort = sink._hold_abort.is_set
+
+                def counting_abort():
+                    probes["n"] += 1
+                    if probes["n"] == 10:
+                        sink.interrupt()
+                    return real_abort()
+
+                sink._hold_abort.is_set = counting_abort  # type: ignore[method-assign]
+                t.start()
+                t.join(timeout=5)
+            self.assertFalse(t.is_alive())
+            popen.assert_not_called()
+            self.assertTrue(sink.was_interrupted)
+            self.assertEqual(sink.hold_status["last_hold"]["status"], "aborted")
+        finally:
+            wav.unlink(missing_ok=True)
+
+    def test_no_gate_never_consults_anything(self) -> None:
+        wav = _make_silent_wav(0.05)
+        try:
+            with mock.patch("shutil.which", return_value="/usr/bin/mpv"), mock.patch(
+                "subprocess.Popen", return_value=self._mpv()
+            ) as popen:
+                sink = NativeAudioSink(sound_yield=False)
+                sink.play(wav)
+            popen.assert_called_once()
+            self.assertIsNone(sink.hold_status["last_hold"])
+        finally:
+            wav.unlink(missing_ok=True)
+
+    def test_default_gate_comes_from_the_factory(self) -> None:
+        sentinel = _ScriptedGate(None)
+        with mock.patch.object(native_audio_sink, "DEFAULT_SOUND_YIELD_FACTORY", lambda: sentinel):
+            self.assertIs(NativeAudioSink()._sound_yield, sentinel)
+        self.assertIsNone(NativeAudioSink()._sound_yield)  # this file's hermetic rebind
+
+
 def main() -> int:
-    suite = unittest.TestLoader().loadTestsFromTestCase(TestNativeAudioSink)
+    loader = unittest.TestLoader()
+    suite = unittest.TestSuite(
+        [
+            loader.loadTestsFromTestCase(TestNativeAudioSink),
+            loader.loadTestsFromTestCase(TestNativeAudioSinkSoundYield),
+        ]
+    )
     runner = unittest.TextTestRunner(verbosity=2)
     result = runner.run(suite)
     return 0 if result.wasSuccessful() else 1
