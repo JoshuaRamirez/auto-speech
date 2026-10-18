@@ -77,7 +77,7 @@ sync with it:
 
 ## Configuration & env-var precedence
 
-User config lives in `~/.config/auto-speech/{autoplay,narrator}.toml`
+User config lives in `~/.config/auto-speech/{autoplay,narrator,sound-yield}.toml`
 (copy from the `*.toml.example` files). A typo never crashes the tool — it
 falls back to defaults — but `/auto-speech-doctor` surfaces it as a WARN.
 
@@ -94,6 +94,13 @@ Config file search order (first found wins): `$AUTO_SPEECH_AUTOPLAY_CONFIG`
 / `$AUTO_SPEECH_NARRATOR_CONFIG` → `~/.config/auto-speech/*.toml` → the shipped
 `config/*.toml.example`.
 
+Sound yield (`[sound_yield]` in `sound-yield.toml`, or
+`$AUTO_SPEECH_SOUND_YIELD_CONFIG`) has no env-var overrides; `auto-speech
+yield …` and the MCP tool `sound_yield` write the same file, and the daemon
+re-reads it on every hold poll, so no restart is needed. Keys: `enabled`
+(true), `exceptions` ([]), `max_wait_seconds` (180), `after_max_wait`
+(`drop` | `play`), `poll_seconds` (0.5).
+
 ## Muting & scoping
 
 - **One session only:** `/auto-speech-scope solo` makes only the current
@@ -104,6 +111,13 @@ Config file search order (first found wins): `$AUTO_SPEECH_AUTOPLAY_CONFIG`
 - **This session off:** `/auto-speech-autoplay-off` (withdraws enrollment).
 - **Everything off:** `touch ~/.claude/auto-speech.disabled` (global mute);
   `/auto-speech-autoplay-on` clears it.
+- **Another app is playing sound:** speech holds by default and plays when
+  the sound stops (`auto-speech yield status`). `auto-speech yield add
+  Music` lets that app's sound through; `auto-speech yield off` turns the
+  hold off; `auto-speech yield check` says who is playing now. A hold and
+  its outcome are logged in `/tmp/auto-speech-narrator-daemon.log`
+  (`sound-yield: …`), and the daemon's `status` reply (DaemonClient)
+  carries `sound_yield.holding` and the last hold's outcome.
 
 ## Troubleshooting
 
