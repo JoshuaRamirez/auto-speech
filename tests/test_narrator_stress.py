@@ -32,6 +32,11 @@ sys.path.insert(0, str(PROJECT_ROOT))
 sys.path.insert(0, str(PLUGIN_PYTHON))
 
 import narrator_service  # noqa: E402
+import native_audio_sink  # noqa: E402
+
+# Hermetic: these tests drive a real NativeAudioSink against a mocked mpv;
+# no sound-yield gate, so they never read Core Audio or hold.
+native_audio_sink.DEFAULT_SOUND_YIELD_FACTORY = lambda: None
 from native_audio_sink import NativeAudioSink, PlaybackError  # noqa: E402
 from tts_engine import TTSGenerationError  # noqa: E402
 from voice_profile import VoiceProfile  # noqa: E402
