@@ -6,6 +6,8 @@
 
 set -uo pipefail
 
+# Runtime state directory; the test runner points this at a private dir.
+STATE_DIR="${AUTO_SPEECH_TMP_ROOT:-/tmp}"
 SESSION_ID="${CLAUDE_CODE_SESSION_ID:-}"
 ENROLL_DIR="$HOME/.claude/auto-speech-autoplay-enabled"
 SESSION_MARKER="$ENROLL_DIR/${SESSION_ID:-NO_SESSION_ID}"
@@ -67,7 +69,7 @@ else
 fi
 
 # Recent autoplay log tail
-LOG=/tmp/auto-speech-autoplay.log
+LOG="$STATE_DIR/auto-speech-autoplay.log"
 if [[ -f "$LOG" ]]; then
     echo "  log tail:"
     tail -n 4 "$LOG" | sed 's/^/    /'

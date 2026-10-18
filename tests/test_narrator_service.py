@@ -26,6 +26,12 @@ from unittest.mock import MagicMock, patch
 SRC = Path(__file__).resolve().parents[1] / "plugin" / "scripts" / "python"
 sys.path.insert(0, str(SRC))
 
+# Isolation: never touch the live service's files when run standalone; the
+# runner (tests/run_all.sh) sets AUTO_SPEECH_TMP_ROOT itself.
+os.environ.setdefault("AUTO_SPEECH_TMP_ROOT", tempfile.mkdtemp(prefix="auto-speech-tests-"))
+
+from state_paths import state_path  # noqa: E402
+
 import narrator_service
 
 
@@ -570,7 +576,7 @@ def test_user_prompt_submit_preserves_autoplay_playback_and_queue() -> None:
 
     session_id = "test-session-autoplay-preservation"
     fake_mpv_pid = 88888
-    mpv_pid_file = Path("/tmp/auto-speech-mpv.pid")
+    mpv_pid_file = state_path("auto-speech-mpv.pid")
     mpv_pid_file.write_text(str(fake_mpv_pid))
 
     try:
@@ -648,7 +654,7 @@ def test_user_prompt_submit_does_not_kill_non_mpv_pid() -> None:
         (sessions_dir / session_id).touch()
 
         fake_pid = 77777
-        mpv_pid_file = Path("/tmp/auto-speech-mpv.pid")
+        mpv_pid_file = state_path("auto-speech-mpv.pid")
         mpv_pid_file.write_text(str(fake_pid))
 
         chunk = (
@@ -692,7 +698,7 @@ def test_user_prompt_submit_kills_and_unlinks_mpv_pid() -> None:
         (sessions_dir / session_id).touch()
 
         fake_pid = 88888
-        mpv_pid_file = Path("/tmp/auto-speech-mpv.pid")
+        mpv_pid_file = state_path("auto-speech-mpv.pid")
         mpv_pid_file.write_text(str(fake_pid))
 
         chunk = (

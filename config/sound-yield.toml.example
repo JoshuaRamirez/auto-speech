@@ -1,0 +1,28 @@
+# auto-speech sound yield: hold speech while another app plays sound.
+#
+# Copy to ~/.config/auto-speech/sound-yield.toml and edit, or point
+# AUTO_SPEECH_SOUND_YIELD_CONFIG=/path/to/file.toml at a custom one.
+# `auto-speech yield …` and the MCP tool `sound_yield` write this same
+# file, with the same names. Defaults shown.
+
+[sound_yield]
+# The switch. true: speech does not start while another app is playing
+# sound; it waits in the queue and plays once the sound stops.
+# false: speech plays over whatever else is playing.
+enabled = true
+
+# Apps whose sound does NOT hold speech: bundle ids ("com.apple.Music")
+# or names ("Music", "Spotify"), matched case-insensitively.
+exceptions = []
+
+# Longest a held speech waits for the other sound to stop, in seconds.
+max_wait_seconds = 180
+
+# What happens when the longest wait passes with the sound still going:
+#   "drop" — the speech is dropped (logged; autoplay audio stays in the
+#            replay cache, so /auto-speech-replay can still play it)
+#   "play" — it plays anyway, over the other sound
+after_max_wait = "drop"
+
+# How often a held speech re-checks whether the other sound has stopped.
+poll_seconds = 0.5

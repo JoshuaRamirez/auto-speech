@@ -14,8 +14,10 @@
 
 set -uo pipefail
 
-EVENTS_LOG="/tmp/auto-speech-narrator-events.jsonl"
-ERR_LOG="/tmp/auto-speech-narrator-hook.err"
+# Runtime state directory; the test runner points this at a private dir.
+STATE_DIR="${AUTO_SPEECH_TMP_ROOT:-/tmp}"
+EVENTS_LOG="$STATE_DIR/auto-speech-narrator-events.jsonl"
+ERR_LOG="$STATE_DIR/auto-speech-narrator-hook.err"
 
 # Always consume stdin so Claude Code's hook payload doesn't break the pipe.
 PAYLOAD="$(cat)"
@@ -61,7 +63,7 @@ fi
 # /auto-speech-narrate-on once, comes back hours later, and hears
 # silence with no obvious diagnostic.
 SHELL_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-PID_FILE="/tmp/auto-speech-narrator-daemon.pid"
+PID_FILE="$STATE_DIR/auto-speech-narrator-daemon.pid"
 DAEMON_ALIVE=0
 if [[ -f "$SHELL_DIR/daemon_pid.sh" ]]; then
     # shellcheck source=daemon_pid.sh

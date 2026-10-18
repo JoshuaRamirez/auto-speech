@@ -31,6 +31,8 @@ import sys
 import time
 from datetime import UTC, datetime
 from pathlib import Path
+
+from state_paths import state_path
 from typing import Any
 
 from autoplay_gate import AutoplayGate
@@ -59,10 +61,10 @@ SPEAK = _PLUGIN_SCRIPTS_DIR / "python" / "speak.py"
 CLI_REWRITE = _PLUGIN_SCRIPTS_DIR / "python" / "cli_rewrite.py"
 VENV = _PROJECT_ROOT / ".venv"
 
-NARRATION_DEPTH_FILE = Path("/tmp/auto-speech-narration-depth")
-NARRATION_DAEMON_PID_FILE = Path("/tmp/auto-speech-narrator-daemon.pid")
-MPV_PID_PATH = Path("/tmp/auto-speech-mpv.pid")
-CLAUDE_STDERR_LOG = Path("/tmp/auto-speech-claude-stderr.log")
+NARRATION_DEPTH_FILE = state_path("auto-speech-narration-depth")
+NARRATION_DAEMON_PID_FILE = state_path("auto-speech-narrator-daemon.pid")
+MPV_PID_PATH = state_path("auto-speech-mpv.pid")
+CLAUDE_STDERR_LOG = state_path("auto-speech-claude-stderr.log")
 
 
 def _int_env(name: str, default: int) -> int:

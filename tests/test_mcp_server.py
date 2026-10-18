@@ -5,7 +5,7 @@ audio hardware, real worker processes, or host system markers are touched.
 
 Covers:
   - Protocol initialization, protocol version negotiation, ping, and notifications
-  - tools/list advertises all six tools with complete schemas
+  - tools/list advertises all seven tools with complete schemas
   - speak tool (100% backward compatibility, parameter validation, global mute, fallbacks)
   - autoplay_turn tool (extraction, min-len check, caching hash, rewriting, fallbacks, mute)
   - narrate_event tool (parameter validation, enrollment gating, daemon check, JSONL logging)
@@ -112,7 +112,7 @@ def test_ping() -> None:
     assert s.handle_line(_req("ping"))["result"] == {}
 
 
-def test_tools_list_advertises_all_six_tools() -> None:
+def test_tools_list_advertises_all_seven_tools() -> None:
     s, _ = _server()
     tools = s.handle_line(_req("tools/list"))["result"]["tools"]
     tool_names = [t["name"] for t in tools]
@@ -122,6 +122,7 @@ def test_tools_list_advertises_all_six_tools() -> None:
         "narrate_event",
         "playback_control",
         "session_configure",
+        "sound_yield",
         "doctor",
     ]
     assert tool_names == expected_names
@@ -1179,13 +1180,115 @@ def test_doctor_unhealthy_sets_is_error_true() -> None:
     assert data["healthy"] is False
 
 
+# Group 8: sound_yield
+
+
+class _FakeYieldGate:
+    def __init__(self, assessment):
+        self._a = assessment
+
+    def assess(self):
+        return self._a
+
+
+def _yield_server():
+    from sound_yield import SoundYieldStore
+
+    tmp = Path(tempfile.mkdtemp(prefix="auto-speech-mcp-yield-"))
+    store = SoundYieldStore(tmp / "sound-yield.toml")
+    srv, _ = _server(sound_yield_store=store)
+    return srv, store, tmp
+
+
+def test_sound_yield_requires_a_known_action() -> None:
+    srv, _, _ = _yield_server()
+    res = _call_tool(srv, "sound_yield", {})
+    assert res["result"]["isError"] is True
+    assert "invalid action" in res["result"]["content"][0]["text"]
+    res = _call_tool(srv, "sound_yield", {"action": "mute"})
+    assert res["result"]["isError"] is True
+    assert "status, on, off, add, remove, clear, check" in res["result"]["content"][0]["text"]
+    res = _call_tool(srv, "sound_yield", {"action": "add", "apps": [1, 2]})
+    assert res["result"]["isError"] is True
+    assert "list of strings" in res["result"]["content"][0]["text"]
+
+
+def test_sound_yield_status_defaults_without_a_config_file() -> None:
+    srv, _, _ = _yield_server()
+    res = _call_tool(srv, "sound_yield", {"action": "status"})
+    text = res["result"]["content"][0]["text"]
+    assert res["result"]["isError"] is False
+    assert "sound yield: ON" in text
+    assert "exceptions (apps whose sound does not hold speech): none" in text
+    assert "longest hold: 180 s, then drop it" in text
+    assert "defaults (no config file yet)" in text
+
+
+def test_sound_yield_on_off_add_remove_clear_write_the_shared_config() -> None:
+    srv, store, tmp = _yield_server()
+    res = _call_tool(srv, "sound_yield", {"action": "off"})
+    assert "sound yield: OFF" in res["result"]["content"][0]["text"]
+    assert store.load().enabled is False
+
+    res = _call_tool(srv, "sound_yield", {"action": "add", "apps": ["Music", "com.spotify.client", "music"]})
+    text = res["result"]["content"][0]["text"]
+    assert text.startswith("added: Music, com.spotify.client")
+    assert store.load().exceptions == ("Music", "com.spotify.client")
+    cfg = (tmp / "sound-yield.toml").read_text()
+    assert 'exceptions = ["Music", "com.spotify.client"]' in cfg
+    assert "enabled = false" in cfg
+
+    res = _call_tool(srv, "sound_yield", {"action": "add"})
+    assert res["result"]["isError"] is True
+    assert "name at least one app" in res["result"]["content"][0]["text"]
+
+    res = _call_tool(srv, "sound_yield", {"action": "remove", "apps": "MUSIC"})
+    assert res["result"]["content"][0]["text"].startswith("removed: Music")
+    assert store.load().exceptions == ("com.spotify.client",)
+
+    res = _call_tool(srv, "sound_yield", {"action": "clear"})
+    assert res["result"]["content"][0]["text"].startswith("exceptions cleared")
+    assert store.load().exceptions == ()
+
+    res = _call_tool(srv, "sound_yield", {"action": "on"})
+    assert "sound yield: ON" in res["result"]["content"][0]["text"]
+    assert store.load().enabled is True
+
+
+def test_sound_yield_check_reports_the_live_assessment() -> None:
+    from sound_yield import MODE_PROCESS_LIST, Assessment, AudioProcess, SoundYieldSettings, SoundYieldStore
+
+    tmp = Path(tempfile.mkdtemp(prefix="auto-speech-mcp-yield-"))
+    store = SoundYieldStore(tmp / "sound-yield.toml")
+    music = AudioProcess(pid=501, bundle_id="com.apple.Music", name="Music")
+    gate = _FakeYieldGate(
+        Assessment(hold=True, mode=MODE_PROCESS_LIST, settings=SoundYieldSettings(), blockers=[music])
+    )
+    srv, _ = _server(sound_yield_store=store, sound_yield_gate=gate)
+    res = _call_tool(srv, "sound_yield", {"action": "check"})
+    text = res["result"]["content"][0]["text"]
+    assert res["result"]["isError"] is False
+    assert "playing: Music (com.apple.Music) (pid 501) — holds speech" in text
+    assert "speech would HOLD (up to 180 s, then drop it)" in text
+
+
+def test_sound_yield_tool_schema() -> None:
+    s, _ = _server()
+    tools = {t["name"]: t for t in s.handle_line(_req("tools/list"))["result"]["tools"]}
+    schema = tools["sound_yield"]["inputSchema"]
+    assert schema["required"] == ["action"]
+    assert schema["properties"]["action"]["enum"] == ["status", "on", "off", "add", "remove", "clear", "check"]
+    assert schema["properties"]["apps"]["items"] == {"type": "string"}
+    assert schema["additionalProperties"] is False
+
+
 TESTS = [
     # Group 1: Protocol & Advertisement
     test_initialize_echoes_supported_protocol,
     test_initialize_unknown_protocol_falls_back_to_latest,
     test_notification_gets_no_response,
     test_ping,
-    test_tools_list_advertises_all_six_tools,
+    test_tools_list_advertises_all_seven_tools,
     # Group 2: Backward Compatibility of speak
     test_speak_queues_text_verbatim,
     test_speak_rejects_bad_text,
@@ -1245,6 +1348,12 @@ TESTS = [
     test_doctor_text_report_healthy,
     test_doctor_json_report_healthy,
     test_doctor_unhealthy_sets_is_error_true,
+    # Group 8: sound_yield
+    test_sound_yield_requires_a_known_action,
+    test_sound_yield_status_defaults_without_a_config_file,
+    test_sound_yield_on_off_add_remove_clear_write_the_shared_config,
+    test_sound_yield_check_reports_the_live_assessment,
+    test_sound_yield_tool_schema,
 ]
 
 

@@ -26,7 +26,7 @@ ok()   { ran=$((ran+1)); printf '  ok  %s\n' "$1"; }
 fail() { ran=$((ran+1)); failures=$((failures+1)); printf '  FAIL %s: %s\n' "$1" "$2"; }
 
 # Ensure shared events log file exists so wc -l does not emit errors
-touch /tmp/auto-speech-narrator-events.jsonl 2>/dev/null || true
+touch "${AUTO_SPEECH_TMP_ROOT:-/tmp}/auto-speech-narrator-events.jsonl" 2>/dev/null || true
 
 # ---- Hook anchors ----
 grep -q 'narrator_pid_is_ours' "$HOOK" || fail "anchor:narrator-hook-pid-guard" "hook does not use narrator_pid_is_ours"
@@ -54,7 +54,7 @@ run_hook_case() {
         touch "$tmp_home/.claude/auto-speech-narrate-sessions/$sid_to_mark"
     fi
 
-    local lines_before; lines_before=$(wc -l < /tmp/auto-speech-narrator-events.jsonl 2>/dev/null || echo 0)
+    local lines_before; lines_before=$(wc -l < "${AUTO_SPEECH_TMP_ROOT:-/tmp}/auto-speech-narrator-events.jsonl" 2>/dev/null || echo 0)
 
     local payload="{}"
     if [[ -n "$payload_session" ]]; then
@@ -73,7 +73,7 @@ run_hook_case() {
     env_args+=( "HOME=$tmp_home" )
 
     echo "$payload" | env "${env_args[@]}" bash "$HOOK"
-    local lines_after; lines_after=$(wc -l < /tmp/auto-speech-narrator-events.jsonl 2>/dev/null || echo 0)
+    local lines_after; lines_after=$(wc -l < "${AUTO_SPEECH_TMP_ROOT:-/tmp}/auto-speech-narrator-events.jsonl" 2>/dev/null || echo 0)
     local delta=$((lines_after - lines_before))
 
     if [[ "$delta" -eq "$expected_delta" ]]; then
@@ -102,9 +102,9 @@ run_custom_case() {
         touch "$tmp_home/.claude/auto-speech.disabled"
     fi
 
-    local lines_before; lines_before=$(wc -l < /tmp/auto-speech-narrator-events.jsonl 2>/dev/null || echo 0)
+    local lines_before; lines_before=$(wc -l < "${AUTO_SPEECH_TMP_ROOT:-/tmp}/auto-speech-narrator-events.jsonl" 2>/dev/null || echo 0)
     printf '%s' "$payload" | env -u CLAUDE_CODE_SESSION_ID -u AUTO_SPEECH_SUPPRESS_HOOKS "HOME=$tmp_home" bash "$HOOK" 2>/dev/null || true
-    local lines_after; lines_after=$(wc -l < /tmp/auto-speech-narrator-events.jsonl 2>/dev/null || echo 0)
+    local lines_after; lines_after=$(wc -l < "${AUTO_SPEECH_TMP_ROOT:-/tmp}/auto-speech-narrator-events.jsonl" 2>/dev/null || echo 0)
     local delta=$((lines_after - lines_before))
 
     if [[ "$delta" -eq "$expected_delta" ]]; then

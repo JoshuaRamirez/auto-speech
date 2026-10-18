@@ -4,17 +4,19 @@
 
 set -uo pipefail
 
+# Runtime state directory; the test runner points this at a private dir.
+STATE_DIR="${AUTO_SPEECH_TMP_ROOT:-/tmp}"
 PLUGIN_SCRIPTS_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 PROJECT_ROOT="$(cd "$PLUGIN_SCRIPTS_DIR/../.." && pwd)"
 VENV="$PROJECT_ROOT/.venv"
 SERVICE="$PLUGIN_SCRIPTS_DIR/python/narrator_service.py"
-PID_FILE="/tmp/auto-speech-narrator-daemon.pid"
+PID_FILE="$STATE_DIR/auto-speech-narrator-daemon.pid"
 # Structured log: owned and rotated in-process by auto_speech_log
 # (RotatingFileHandler). The daemon's RAW stdio (tracebacks, MLX progress)
 # goes to a SEPARATE .out file so it doesn't write to LOG_FILE and defeat
 # that rotation. The .out is rotated here, pre-spawn.
-LOG_FILE="/tmp/auto-speech-narrator-daemon.log"
-OUT_FILE="/tmp/auto-speech-narrator-daemon.out"
+LOG_FILE="$STATE_DIR/auto-speech-narrator-daemon.log"
+OUT_FILE="$STATE_DIR/auto-speech-narrator-daemon.out"
 
 # shellcheck source=log_rotate.sh
 source "$PLUGIN_SCRIPTS_DIR/shell/log_rotate.sh"

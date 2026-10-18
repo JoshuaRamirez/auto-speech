@@ -99,6 +99,34 @@ def test_validate_user_configs_aggregates() -> None:
         assert any("max_queue_depth must be >= 1" in p for p in problems)
 
 
+def test_valid_sound_yield_section_clean() -> None:
+    section = {
+        "enabled": True,
+        "exceptions": ["Music", "com.spotify.client"],
+        "max_wait_seconds": 180,
+        "after_max_wait": "drop",
+        "poll_seconds": 0.5,
+    }
+    assert cv.validate_section(section, cv.SOUND_YIELD_FIELDS, "sound_yield") == []
+
+
+def test_sound_yield_bad_values_flagged() -> None:
+    section = {"enabled": "yes", "exceptions": "Music", "after_max_wait": "ignore", "max_wait_seconds": -3}
+    problems = cv.validate_section(section, cv.SOUND_YIELD_FIELDS, "sound_yield")
+    assert any("enabled should be true or false" in p for p in problems)
+    assert any("exceptions should be a list of strings" in p for p in problems)
+    assert any("after_max_wait must be one of" in p for p in problems)
+    assert any("max_wait_seconds must be >= 0" in p for p in problems)
+
+
+def test_validate_user_configs_includes_sound_yield() -> None:
+    with tempfile.TemporaryDirectory() as d:
+        cfg = Path(d)
+        (cfg / "sound-yield.toml").write_text("[sound_yield]\nenabled = 1\n", encoding="utf-8")
+        problems = cv.validate_user_configs(cfg)
+        assert any("[sound_yield] enabled should be true or false" in p for p in problems)
+
+
 def main() -> int:
     tests = [
         test_valid_autoplay_section_clean,
@@ -112,6 +140,9 @@ def main() -> int:
         test_toml_file_missing_is_clean,
         test_toml_file_malformed_is_one_problem,
         test_validate_user_configs_aggregates,
+        test_valid_sound_yield_section_clean,
+        test_sound_yield_bad_values_flagged,
+        test_validate_user_configs_includes_sound_yield,
     ]
     for t in tests:
         t()

@@ -23,6 +23,10 @@ SRC = Path(__file__).resolve().parents[1] / "plugin" / "scripts" / "python"
 if str(SRC) not in sys.path:
     sys.path.insert(0, str(SRC))
 
+# Isolation: never touch the live service's files when run standalone; the
+# runner (tests/run_all.sh) sets AUTO_SPEECH_TMP_ROOT itself.
+os.environ.setdefault("AUTO_SPEECH_TMP_ROOT", tempfile.mkdtemp(prefix="auto-speech-tests-"))
+
 import speak  # noqa: E402
 
 
@@ -184,10 +188,14 @@ class TestSpeakClientSocketResolution(unittest.TestCase):
     """Unit tests for daemon socket path resolution."""
 
     def test_default_socket_path(self) -> None:
-        """When AUTO_SPEECH_DAEMON_SOCK is not set, defaults to /tmp/auto-speech-daemon.sock."""
+        """When AUTO_SPEECH_DAEMON_SOCK is not set, defaults to the state
+        directory's auto-speech-daemon.sock (AUTO_SPEECH_TMP_ROOT, /tmp live)."""
+        expected = Path(speak.DEFAULT_SOCKET_PATH)  # resolved at import under AUTO_SPEECH_TMP_ROOT
         with mock.patch.dict(os.environ, {}, clear=True):
             sock_path = speak.get_socket_path()
-            self.assertEqual(sock_path, Path("/tmp/auto-speech-daemon.sock"))
+        self.assertEqual(sock_path, expected)
+        self.assertEqual(sock_path.name, "auto-speech-daemon.sock")
+        self.assertEqual(sock_path.parent, Path(os.environ["AUTO_SPEECH_TMP_ROOT"]))
 
     def test_environment_variable_override(self) -> None:
         """When AUTO_SPEECH_DAEMON_SOCK is set, it overrides the default socket path."""

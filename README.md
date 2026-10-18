@@ -56,7 +56,7 @@ The default install exposes 8 curated commands:
 | `/auto-speech-scope [all\|solo]` | read ALL sessions, or only THIS one |
 | `/auto-speech-doctor [json]` | health check; exits non-zero when unhealthy |
 
-13 more (playback transport, narrator controls, autoplay-status, update)
+14 more (playback transport, narrator controls, autoplay-status, yield, update)
 live in `plugin/commands-extra/` — install with
 `bash setup/install-plugin.sh --with-extras`. Every command is prefixed
 `auto-speech-` so nothing collides with Claude Code built-ins or other
@@ -93,8 +93,10 @@ The read shape is set via `/auto-speech-autoplay-mode` (or
 
 ## MCP server: `speak`
 
-A small stdio MCP server with one tool, `speak(text)`, which says the
-words it gets aloud with the local Kokoro voice. It reads them exactly as
+A stdio MCP server whose first tool, `speak(text)`, says the words it
+gets aloud with the local Kokoro voice (the others: `autoplay_turn`,
+`narrate_event`, `playback_control`, `session_configure`, `sound_yield`,
+`doctor`). It reads them exactly as
 written: no transcript lookup, no LLM rewrite, no summary. So the caller
 should write text the way it should sound.
 
@@ -111,6 +113,41 @@ so it never cuts off another playback, and speaks. Repeated calls are
 spoken in order. The global mute (`~/.claude/auto-speech.disabled`)
 silences it too. Text is capped at 20,000 characters, and worker logs go
 to `/tmp/auto-speech-say.log`. Remove it with `bash setup/uninstall-mcp.sh`.
+
+## Yielding to other apps' sound
+
+By default auto-speech **does not start speaking while another app is
+playing sound**: music, a video, a call. The speech keeps its place in the
+queue and plays once the other sound stops. If the sound goes on past the
+longest hold (180 s) the speech is dropped and logged; autoplay audio is
+still in the replay cache (`/auto-speech-replay`). Detection reads Core
+Audio's process list (which processes are running output), needs no
+permission, and never captures audio. auto-speech's own playback never
+counts.
+
+An **exception list** names apps whose sound does not hold speech, by
+bundle id or name. The switch and the list have the same verbs in the
+CLI, the MCP tool and the config file:
+
+```bash
+auto-speech yield status                 # switch, exception list, longest hold
+auto-speech yield add Music Spotify      # these apps' sound does not hold speech
+auto-speech yield remove Spotify
+auto-speech yield clear
+auto-speech yield off                    # speech plays over other apps' sound
+auto-speech yield on                     # default
+auto-speech yield check                  # who is playing right now; would speech hold?
+```
+
+MCP: `sound_yield(action="add", apps=["com.apple.Music"])`, same actions.
+Config: `~/.config/auto-speech/sound-yield.toml`, section `[sound_yield]`
+with `enabled`, `exceptions`, `max_wait_seconds`, `after_max_wait`
+(`drop` or `play`) and `poll_seconds`; see
+`config/sound-yield.toml.example`. A change takes effect at the next
+playback, or at the next poll of a hold already in progress; no restart.
+The slash command `/auto-speech-yield` (extras) runs the same CLI. The
+reasoning behind the 180 s hold and the drop is in
+[ADR-015](docs/decisions/ADR-015-sound-yield.md).
 
 ## Web app
 
@@ -181,10 +218,14 @@ the repo, the venv, and Homebrew packages. Hook-specific uninstallers
 
 ## Design history
 
+The feature inventory is [FEATURES.md](FEATURES.md); release history is
+[CHANGELOG.md](CHANGELOG.md) with per-version notes in
+[docs/releases/](docs/releases/INDEX.md).
+
 Built through a documented OOAD process — the artifacts ship in-repo:
 [docs/specification/](docs/specification/README.md) (conceptualization →
 analysis → design), [docs/plan/](docs/plan/implementation-plan.md),
-[docs/decisions/](docs/decisions/) (14 ADRs), and
+[docs/decisions/](docs/decisions/) (15 ADRs), and
 [docs/micro-design/](docs/micro-design/) (per-phase class designs).
 Contributor guide: [docs/CONTRIBUTING.md](docs/CONTRIBUTING.md).
 
