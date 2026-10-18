@@ -53,6 +53,10 @@ module that owns it. Release-by-release history is in
 - **Daemon lifecycle**: pid-reuse-safe start/stop scripts, idle shutdown,
   stale marker sweep, size-capped rotating logs (`narrator_state.py`,
   `auto_speech_log.py`).
+- **One runtime state directory** (`AUTO_SPEECH_TMP_ROOT`, default `/tmp`)
+  for the socket, pid files, logs and markers, so tests and development
+  daemons run beside the live service without touching it
+  (`state_paths.py`, v0.3.0).
 
 ## End-of-turn autoplay
 - **Stop-hook autoplay**, off by default, per-session opt-in

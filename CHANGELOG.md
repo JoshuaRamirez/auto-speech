@@ -57,6 +57,18 @@ in `__MERGE__`; `tests/run_all.sh`: __TESTS__. Release notes:
   opt-IN: `/auto-speech-autoplay-status`, `/auto-speech-doctor`,
   `/auto-speech-scope`, and `docs/OPERATIONS.md`. Doctor reports `jq`.
 
+### Fixed
+- **Tests and development daemons can no longer reach the live speech
+  service.** Every runtime path (`/tmp/auto-speech-daemon.sock`, the pid
+  files, logs, markers, the mpv pid) now resolves through
+  `AUTO_SPEECH_TMP_ROOT` (`state_paths.py` in Python, the same variable in
+  the shell scripts; default `/tmp`, so the live daemon and hooks are
+  unchanged). `tests/run_all.sh` exports a private per-run directory and
+  socket, prints them, and stops any daemon a test started there.
+  `tests/test_state_paths.py` proves it. Before this, a suite run could
+  auto-start a worktree daemon on the live socket and send it an
+  interrupt, cutting live speech.
+
 ### Changed
 - `NativeAudioSink` takes a `sound_yield` gate (default on) and raises
   `PlaybackYielded` when a held playback is dropped; tests that drive a
