@@ -98,8 +98,15 @@ Sound yield (`[sound_yield]` in `sound-yield.toml`, or
 `$AUTO_SPEECH_SOUND_YIELD_CONFIG`) has no env-var overrides; `auto-speech
 yield …` and the MCP tool `sound_yield` write the same file, and the daemon
 re-reads it on every hold poll, so no restart is needed. Keys: `enabled`
-(true), `exceptions` ([]), `max_wait_seconds` (180), `after_max_wait`
-(`drop` | `play`), `poll_seconds` (0.5).
+(true), `exceptions` ([]), `max_wait_seconds` (180), `poll_seconds` (0.5).
+`after_max_wait` (v0.3.0) is gone: nothing held is dropped any more.
+
+The missed list, the lines held or set aside while another app played
+sound, is one JSON file: `~/.local/state/auto-speech/missed.json`
+(`$AUTO_SPEECH_MISSED_FILE` overrides it; `tests/run_all.sh` points it into
+the isolated state directory). The daemon writes it; `auto-speech missed`
+reads it, `missed --play` replays through the daemon, `missed --clear`
+empties it under the same file lock.
 
 ## Runtime state and isolation
 
@@ -128,8 +135,13 @@ daemon sets the same variable before `narrator_service_start.sh`.
   Music` lets that app's sound through; `auto-speech yield off` turns the
   hold off; `auto-speech yield check` says who is playing now. A hold and
   its outcome are logged in `/tmp/auto-speech-narrator-daemon.log`
-  (`sound-yield: …`), and the daemon's `status` reply (DaemonClient)
-  carries `sound_yield.holding` and the last hold's outcome.
+  (`sound-yield: …`, `missed: …`), and the daemon's `status` reply
+  (DaemonClient) carries `sound_yield.holding`, the last hold's outcome
+  and `missed` counts (`held`, `missed`).
+- **You listened for a long while:** nothing was dropped. `auto-speech
+  missed` lists what you did not hear, oldest first; `missed --play`
+  replays it in that order over any other sound; `missed --clear` forgets
+  it. Lines still held play by themselves when the sound stops.
 
 ## Troubleshooting
 

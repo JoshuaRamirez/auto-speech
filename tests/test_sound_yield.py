@@ -21,8 +21,7 @@ from sound_yield import (  # noqa: E402
     ABORTED,
     CLEAR,
     DISABLED,
-    EXPIRED_DROP,
-    EXPIRED_PLAY,
+    EXPIRED,
     MODE_DEVICE_FALLBACK,
     MODE_DISABLED,
     MODE_PROCESS_LIST,
@@ -145,17 +144,15 @@ class TestSettings(unittest.TestCase):
         self.assertTrue(s.enabled)
         self.assertEqual(s.exceptions, ())
         self.assertEqual(s.max_wait_seconds, 180.0)
-        self.assertEqual(s.after_max_wait, "drop")
         self.assertEqual(s.problems, ())
 
     def test_from_mapping_accepts_valid_values(self):
         s = SoundYieldSettings.from_mapping(
-            {"enabled": False, "exceptions": ["Music", "com.spotify.client"], "max_wait_seconds": 30, "after_max_wait": "PLAY", "poll_seconds": 0.25}
+            {"enabled": False, "exceptions": ["Music", "com.spotify.client"], "max_wait_seconds": 30, "poll_seconds": 0.25}
         )
         self.assertFalse(s.enabled)
         self.assertEqual(s.exceptions, ("Music", "com.spotify.client"))
         self.assertEqual(s.max_wait_seconds, 30.0)
-        self.assertEqual(s.after_max_wait, "play")
         self.assertEqual(s.poll_seconds, 0.25)
         self.assertEqual(s.problems, ())
 
@@ -166,11 +163,11 @@ class TestSettings(unittest.TestCase):
         self.assertTrue(s.enabled)
         self.assertEqual(s.exceptions, ("Music",))  # a lone string is accepted as one entry
         self.assertEqual(s.max_wait_seconds, 180.0)
-        self.assertEqual(s.after_max_wait, "drop")
         self.assertEqual(s.poll_seconds, 0.5)
         joined = "\n".join(s.problems)
         for key in ("enabled", "max_wait_seconds", "after_max_wait", "poll_seconds", "bogus"):
             self.assertIn(key, joined)
+        self.assertIn("after_max_wait is gone since 0.4.0", joined)  # the old drop/play switch is named, not just "unknown"
 
     def test_from_mapping_dedupes_exceptions_case_insensitively(self):
         s = SoundYieldSettings.from_mapping({"exceptions": ["Music", "music", " MUSIC ", "", 7]})
@@ -186,11 +183,12 @@ class TestSettings(unittest.TestCase):
         self.assertFalse(SoundYieldSettings().is_exception(MUSIC))
 
     def test_toml_round_trip(self):
-        s = SoundYieldSettings(enabled=False, exceptions=('Mu"sic', "Spotify"), max_wait_seconds=42.5, after_max_wait="play")
+        s = SoundYieldSettings(enabled=False, exceptions=('Mu"sic', "Spotify"), max_wait_seconds=42.5)
         import tomllib
 
         back = SoundYieldSettings.from_mapping(tomllib.loads(s.to_toml())["sound_yield"])
-        self.assertEqual((back.enabled, back.exceptions, back.max_wait_seconds, back.after_max_wait), (False, ('Mu"sic', "Spotify"), 42.5, "play"))
+        self.assertEqual((back.enabled, back.exceptions, back.max_wait_seconds), (False, ('Mu"sic', "Spotify"), 42.5))
+        self.assertNotIn("after_max_wait", s.to_toml())
 
 
 class TestStore(unittest.TestCase):
@@ -377,24 +375,43 @@ class TestWaitUntilClear(unittest.TestCase):
         self.assertIn("holding speech while Music", logs[0])
         self.assertIn("other sound stopped", logs[-1])
 
-    def test_expires_and_drops_by_default(self):
-        gate, clock = _gate(self.tmp, FakeProbe([[MUSIC]]), config='[sound_yield]\nmax_wait_seconds = 2\n')
+    def test_expires_as_missed_after_the_longest_wait_and_never_plays(self):
+        logs: list[str] = []
+        gate, clock = _gate(self.tmp, FakeProbe([[MUSIC]]), config='[sound_yield]\nmax_wait_seconds = 2\n', log=logs.append)
         out = gate.wait_until_clear()
-        self.assertEqual(out.status, EXPIRED_DROP)
+        self.assertEqual(out.status, EXPIRED)
         self.assertFalse(out.may_play)
         self.assertGreaterEqual(out.waited_seconds, 2.0)
         self.assertEqual(sum(clock.sleeps), 2.0)
+        self.assertIn("then set aside as missed", logs[0])
+        self.assertIn("setting this speech aside as missed", logs[-1])
 
-    def test_expires_and_plays_when_configured(self):
-        gate, _ = _gate(self.tmp, FakeProbe([[MUSIC]]), config='[sound_yield]\nmax_wait_seconds = 1\nafter_max_wait = "play"\n')
-        out = gate.wait_until_clear()
-        self.assertEqual(out.status, EXPIRED_PLAY)
-        self.assertTrue(out.may_play)
+    def test_time_already_spent_in_the_queue_counts_against_the_longest_wait(self):
+        logs: list[str] = []
+        gate, clock = _gate(self.tmp, FakeProbe([[MUSIC]]), config='[sound_yield]\nmax_wait_seconds = 10\n', log=logs.append)
+        out = gate.wait_until_clear(already_waited=8.5)
+        self.assertEqual(out.status, EXPIRED)
+        self.assertAlmostEqual(sum(clock.sleeps), 1.5)  # only the remaining budget is spent
+        self.assertIn("up to 1.5s more, 8s of it already spent in the queue", logs[0])
+        gate2, clock2 = _gate(self.tmp, FakeProbe([[MUSIC]]), config='[sound_yield]\nmax_wait_seconds = 10\n')
+        self.assertEqual(gate2.wait_until_clear(already_waited=30).status, EXPIRED)
+        self.assertEqual(clock2.sleeps, [])  # already past the longest wait: set aside at once
 
-    def test_zero_max_wait_drops_immediately_without_sleeping(self):
+    def test_zero_max_wait_sets_aside_immediately_without_sleeping(self):
         gate, clock = _gate(self.tmp, FakeProbe([[MUSIC]]), config='[sound_yield]\nmax_wait_seconds = 0\n')
-        self.assertEqual(gate.wait_until_clear().status, EXPIRED_DROP)
+        self.assertEqual(gate.wait_until_clear().status, EXPIRED)
         self.assertEqual(clock.sleeps, [])
+
+    def test_on_hold_is_called_once_with_the_blockers_when_a_hold_begins(self):
+        seen: list[tuple[str, ...]] = []
+        gate, _ = _gate(self.tmp, FakeProbe([[MUSIC], [MUSIC], []]))
+        out = gate.wait_until_clear(on_hold=seen.append)
+        self.assertEqual(out.status, RESUMED)
+        self.assertEqual(seen, [("Music (com.apple.Music) (pid 501)",)])
+        gate_idle, _ = _gate(self.tmp, FakeProbe([[]]))
+        seen.clear()
+        gate_idle.wait_until_clear(on_hold=seen.append)
+        self.assertEqual(seen, [])  # no hold, no call
 
     def test_abort_releases_the_hold(self):
         gate, clock = _gate(self.tmp, FakeProbe([[MUSIC]]))
@@ -456,7 +473,7 @@ class TestFormatting(unittest.TestCase):
         text = format_settings(SoundYieldSettings(exceptions=("Music",), config_path="/x/sound-yield.toml", problems=("[sound_yield] unknown key 'q' (ignored)",)))
         self.assertIn("sound yield: ON", text)
         self.assertIn("exceptions (apps whose sound does not hold speech): Music", text)
-        self.assertIn("longest hold: 180 s, then drop it", text)
+        self.assertIn("longest hold: 180 s, then set aside as missed (auto-speech missed)", text)
         self.assertIn("config: /x/sound-yield.toml", text)
         self.assertIn("warning: [sound_yield] unknown key", text)
         self.assertIn("sound yield: OFF", format_settings(SoundYieldSettings(enabled=False)))
@@ -468,7 +485,7 @@ class TestFormatting(unittest.TestCase):
         self.assertIn("playing: Music (com.apple.Music) (pid 501) — holds speech", text)
         self.assertIn("playing: Spotify (com.spotify.client) (pid 502) — on the exception list", text)
         self.assertIn("playing: mpv (pid 777) — auto-speech's own", text)
-        self.assertIn("speech would HOLD (up to 180 s, then drop it)", text)
+        self.assertIn("speech would HOLD (up to 180 s, then set aside as missed)", text)
         self.assertIn("detection: Core Audio process list", text)
         gate_idle, _ = _gate(tmp, FakeProbe([[]]))
         self.assertIn("nothing else is playing sound; speech would play now", format_assessment(gate_idle.assess()))

@@ -49,7 +49,6 @@ SOUND_YIELD_FIELDS = (
     Field("enabled", "bool"),
     Field("exceptions", "str_list"),
     Field("max_wait_seconds", "number", minimum=0),
-    Field("after_max_wait", "enum", allowed=("drop", "play")),
     Field("poll_seconds", "number", minimum=0),
 )
 
