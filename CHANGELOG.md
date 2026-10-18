@@ -13,7 +13,7 @@ The Chrome extension under `chrome-extension/` is versioned independently
 
 Speech yields to other apps' sound, and the CLI and MCP surfaces reach
 parity. Baseline tag `v0.2.0`; commits `e91a3c4..e91ea72 (plus this release-notes commit)` landed on `main`
-by a `--no-ff` merge of `worktree/sound-yield`; `tests/run_all.sh`: 52 test files ran, 0 failed (630 counted unit tests plus the shell suites), under the isolated runner. Release notes:
+by a `--no-ff` merge of `worktree/sound-yield`; `tests/run_all.sh`: 52 test files ran, 0 failed (630 counted unit tests plus the shell suites), under the isolated runner; live check 2026-10-18 16:06 (held 7.1 s behind an afplay tone, then spoke). Release notes:
 [docs/releases/v0.3.0.md](docs/releases/v0.3.0.md).
 
 ### Added
