@@ -723,6 +723,99 @@ class TestCliNarrate(BaseCliTestCase):
         self.assertIn("unknown action delete", stderr.getvalue())
 
 
+class TestCliYield(BaseCliTestCase):
+    """`auto-speech yield …` — the sound-yield switch and exception list.
+    HOME is sandboxed, so the config file lands in the temp home."""
+
+    def _cfg(self) -> Path:
+        return self.home / ".config" / "auto-speech" / "sound-yield.toml"
+
+    def _run(self, *argv: str) -> tuple[int, str, str]:
+        stdout, stderr = io.StringIO(), io.StringIO()
+        with mock.patch("sys.stdout", stdout), mock.patch("sys.stderr", stderr):
+            rc = cli.main(list(argv))
+        return rc, stdout.getvalue(), stderr.getvalue()
+
+    def test_yield_status_defaults(self) -> None:
+        rc, out, _ = self._run("yield", "status")
+        self.assertEqual(rc, 0)
+        self.assertIn("sound yield: ON — speech holds while another app plays sound", out)
+        self.assertIn("exceptions (apps whose sound does not hold speech): none", out)
+        self.assertIn("longest hold: 180 s, then drop it", out)
+        self.assertIn("config: defaults (no config file yet)", out)
+        self.assertFalse(self._cfg().exists())
+
+    def test_yield_without_action_shows_status(self) -> None:
+        rc, out, _ = self._run("yield")
+        self.assertEqual(rc, 0)
+        self.assertIn("sound yield: ON", out)
+
+    def test_yield_off_and_on_write_the_config(self) -> None:
+        rc, out, _ = self._run("yield", "off")
+        self.assertEqual(rc, 0)
+        self.assertIn("sound yield: OFF — speech plays over other apps' sound", out)
+        self.assertIn("enabled = false", self._cfg().read_text())
+        rc, out, _ = self._run("yield", "on")
+        self.assertEqual(rc, 0)
+        self.assertIn("sound yield: ON", out)
+        self.assertIn("enabled = true", self._cfg().read_text())
+
+    def test_yield_add_remove_clear(self) -> None:
+        rc, out, _ = self._run("yield", "add", "Music", "com.spotify.client", "music")
+        self.assertEqual(rc, 0)
+        self.assertTrue(out.startswith("added: Music, com.spotify.client"))
+        self.assertIn('exceptions = ["Music", "com.spotify.client"]', self._cfg().read_text())
+        rc, out, _ = self._run("yield", "add", "COM.SPOTIFY.CLIENT")
+        self.assertEqual(rc, 0)
+        self.assertIn("added: nothing new", out)
+        rc, out, _ = self._run("yield", "remove", "MUSIC", "nope")
+        self.assertEqual(rc, 0)
+        self.assertTrue(out.startswith("removed: Music"))
+        rc, out, _ = self._run("yield", "clear")
+        self.assertEqual(rc, 0)
+        self.assertTrue(out.startswith("exceptions cleared"))
+        self.assertIn("exceptions = []", self._cfg().read_text())
+
+    def test_yield_add_without_apps_is_a_usage_error(self) -> None:
+        rc, _, err = self._run("yield", "add")
+        self.assertEqual(rc, 2)
+        self.assertIn("required: apps", err)
+
+    def test_yield_unknown_action_is_a_usage_error(self) -> None:
+        rc, _, err = self._run("yield", "mute")
+        self.assertEqual(rc, 2)
+
+    def test_sound_yield_alias_routes_the_same(self) -> None:
+        rc, out, _ = self._run("sound-yield", "off")
+        self.assertEqual(rc, 0)
+        self.assertIn("sound yield: OFF", out)
+
+    def test_yield_check_uses_the_gate(self) -> None:
+        from sound_yield import MODE_PROCESS_LIST, Assessment, AudioProcess, SoundYieldSettings
+
+        music = AudioProcess(pid=501, bundle_id="com.apple.Music", name="Music")
+        a = Assessment(hold=True, mode=MODE_PROCESS_LIST, settings=SoundYieldSettings(), blockers=[music])
+        gate = mock.MagicMock()
+        gate.assess.return_value = a
+        stdout = io.StringIO()
+        with mock.patch("sys.stdout", stdout):
+            args = cli.build_parser().parse_args(["yield", "check"])
+            rc = cli.handle_yield(args, gate=gate)
+        self.assertEqual(rc, 0)
+        self.assertIn("playing: Music (com.apple.Music) (pid 501) — holds speech", stdout.getvalue())
+        self.assertIn("speech would HOLD (up to 180 s, then drop it)", stdout.getvalue())
+
+    def test_yield_config_shape_matches_mcp_and_file(self) -> None:
+        import tomllib
+
+        self._run("yield", "off")
+        self._run("yield", "add", "Music")
+        data = tomllib.loads(self._cfg().read_text())["sound_yield"]
+        self.assertEqual(set(data), {"enabled", "exceptions", "max_wait_seconds", "after_max_wait", "poll_seconds"})
+        self.assertEqual(data["enabled"], False)
+        self.assertEqual(data["exceptions"], ["Music"])
+
+
 class TestCliHook(BaseCliTestCase):
     """Tests for `auto-speech hook`."""
 

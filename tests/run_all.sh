@@ -83,6 +83,7 @@ CHEAP=(
     test_daemon_client.py
     test_apple_say_engine.py
     test_native_audio_sink.py
+    test_sound_yield.py
     test_speak_client.py
     test_cli_dispatcher.py
 )
