@@ -2,8 +2,10 @@
 
 Before mpv starts, the sink asks the sound-yield gate whether another app
 is playing sound; if so the playback is held (in queue order) until that
-sound stops, the longest wait passes, or interrupt() is called. See
-sound_yield.py and ADR-015.
+sound stops, the longest wait passes, or interrupt() is called. Past the
+longest wait the playback is set aside (PlaybackYielded), never silently
+dropped: the daemon records it in the missed list. See sound_yield.py,
+missed_speech.py and ADR-015.
 """
 
 from __future__ import annotations
@@ -22,7 +24,7 @@ from typing import Any, Callable
 
 from sound_yield import (
     ABORTED,
-    EXPIRED_DROP,
+    EXPIRED,
     HoldOutcome,
     SoundYieldGate,
 )
@@ -53,14 +55,15 @@ class PlaybackError(AudioSinkError):
 
 class PlaybackYielded(AudioSinkError):
     """Raised when a playback was held for another app's sound up to the
-    longest wait and the policy says drop it. The audio never started."""
+    longest wait. The audio never started; the caller keeps the line (the
+    daemon puts it on the missed list)."""
 
     def __init__(self, path: Path, outcome: HoldOutcome) -> None:
         self.path = path
         self.outcome = outcome
         who = ", ".join(outcome.blockers) or "another app"
         super().__init__(
-            f"playback of {path} dropped: held {outcome.waited_seconds:.0f}s while {who} played sound"
+            f"playback of {path} set aside: held {outcome.waited_seconds:.0f}s while {who} played sound"
         )
 
 
@@ -122,17 +125,32 @@ class NativeAudioSink:
             raise MpvNotInstalledError("mpv not found on PATH. Install with: brew install mpv")
         return binary
 
-    def play(self, wav_path: Path | str, timeout: float | None = None) -> None:
+    def play(
+        self,
+        wav_path: Path | str,
+        timeout: float | None = None,
+        *,
+        hold: bool = True,
+        already_waited: float = 0.0,
+        on_hold: Callable[[tuple[str, ...]], None] | None = None,
+    ) -> None:
         """Plays wav file synchronously via mpv, blocking until playback finishes.
 
         Args:
             wav_path: Path to the WAV file to play.
             timeout: Optional maximum duration in seconds for playback.
+            hold: False skips the sound-yield gate for this playback (an
+                explicit replay of a missed line plays over other sound).
+            already_waited: How long this speech has already waited in the
+                queue; counts against the gate's longest wait.
+            on_hold: Called once, with the blockers' names, when the gate
+                holds this playback.
 
         Raises:
             FileNotFoundError: If the WAV file does not exist.
             MpvNotInstalledError: If mpv is not installed.
             PlaybackError: If mpv terminates with a non-zero exit code and was not interrupted.
+            PlaybackYielded: If the hold reached the longest wait; nothing played.
         """
         path = Path(wav_path)
         if not path.is_file():
@@ -142,7 +160,9 @@ class NativeAudioSink:
 
         # Serializes playback across threads: only one file plays at a time.
         with self._playback_lock:
-            if not self._await_sound_yield(path):
+            if not hold:
+                self._last_hold = None
+            elif not self._await_sound_yield(path, already_waited=already_waited, on_hold=on_hold):
                 return
             with self._state_lock:
                 self._interrupted = False
@@ -193,20 +213,31 @@ class NativeAudioSink:
                 err_msg = stderr.decode("utf-8", errors="replace").strip() if stderr else ""
                 raise PlaybackError(f"mpv exited with code {retcode} for {path}: {err_msg}")
 
-    def _await_sound_yield(self, path: Path) -> bool:
+    def _await_sound_yield(
+        self,
+        path: Path,
+        *,
+        already_waited: float = 0.0,
+        on_hold: Callable[[tuple[str, ...]], None] | None = None,
+    ) -> bool:
         """Hold for another app's sound. True = go ahead and play; False =
         the hold was aborted by interrupt() (return quietly, like an
         interrupted playback). Raises PlaybackYielded when the longest
-        wait passed and the policy is drop."""
+        wait passed: the playback is set aside, not started."""
         gate = self._sound_yield
         if gate is None:
+            self._last_hold = None
             return True
         self._hold_abort.clear()
         with self._state_lock:
             self._holding_since = time.monotonic()
             self._interrupted = False
         try:
-            outcome = gate.wait_until_clear(should_abort=self._hold_abort.is_set)
+            outcome = gate.wait_until_clear(
+                should_abort=self._hold_abort.is_set,
+                already_waited=already_waited,
+                on_hold=on_hold,
+            )
         finally:
             with self._state_lock:
                 self._holding_since = None
@@ -216,9 +247,15 @@ class NativeAudioSink:
                 self._interrupted = True
             logger.info("Playback hold aborted for %s", path)
             return False
-        if outcome.status == EXPIRED_DROP:
+        if outcome.status == EXPIRED:
             raise PlaybackYielded(path, outcome)
         return True
+
+    @property
+    def last_hold(self) -> HoldOutcome | None:
+        """How the most recent playback's hold ended (None when the gate
+        was skipped or the sink has not played yet)."""
+        return self._last_hold
 
     @property
     def hold_status(self) -> dict[str, Any]:

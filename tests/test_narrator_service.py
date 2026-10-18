@@ -29,6 +29,7 @@ sys.path.insert(0, str(SRC))
 # Isolation: never touch the live service's files when run standalone; the
 # runner (tests/run_all.sh) sets AUTO_SPEECH_TMP_ROOT itself.
 os.environ.setdefault("AUTO_SPEECH_TMP_ROOT", tempfile.mkdtemp(prefix="auto-speech-tests-"))
+os.environ.setdefault("AUTO_SPEECH_MISSED_FILE", os.path.join(os.environ["AUTO_SPEECH_TMP_ROOT"], "missed.json"))
 
 from state_paths import state_path  # noqa: E402
 
@@ -959,6 +960,229 @@ def test_play_cache_resets_engine_state_to_idle_on_failure() -> None:
         assert svc._engine_state == "IDLE"
 
 
+# --- missed list: nothing held is ever dropped --------------------------------
+
+
+class _HoldSink:
+    """A sink whose hold outcome is scripted. `outcome.waited_seconds > 0`
+    means a hold happened (on_hold is called with the blockers); `yielded`
+    raises PlaybackYielded like the real sink past the longest wait."""
+
+    def __init__(self, outcome=None, *, yielded: bool = False, names=("ChatGPT (pid 9)",)) -> None:
+        self.outcome = outcome
+        self.yielded = yielded
+        self.names = tuple(names)
+        self.played: list[Path] = []
+        self.calls: list[dict] = []
+        self.last_hold = None
+        self.list_at_hold = None
+
+    def play(self, wav_path, timeout=None, *, hold=True, already_waited=0.0, on_hold=None) -> None:
+        self.calls.append({"hold": hold, "already_waited": already_waited})
+        if not hold:
+            self.last_hold = None
+            self.played.append(Path(wav_path))
+            return
+        if self.outcome is not None and self.outcome.waited_seconds > 0 and on_hold is not None:
+            on_hold(self.names)
+        if self.yielded:
+            from native_audio_sink import PlaybackYielded
+
+            raise PlaybackYielded(Path(wav_path), self.outcome)
+        self.last_hold = self.outcome
+        from sound_yield import ABORTED
+
+        if self.outcome is None or self.outcome.status != ABORTED:
+            self.played.append(Path(wav_path))
+
+    def interrupt(self) -> None:
+        pass
+
+
+def _missed_service(sink, *, max_wait: float = 180.0):
+    from missed_speech import MissedList
+    from voice_profile import VoiceProfile
+
+    svc = narrator_service.NarratorService.__new__(narrator_service.NarratorService)
+    svc._config = {}
+    svc._sink = sink
+    svc._synth = _MockSynthesizer(should_succeed=True)
+    svc._profile = VoiceProfile("test_voice", 1.0, 15.0, "2026-10-03T00:00:00Z", 100)
+    svc._engine = None
+    svc._state_lock = threading.Lock()
+    svc._engine_state = "IDLE"
+    svc._interrupted = False
+    svc._preempted = False
+    svc._missed = MissedList(Path(tempfile.mkdtemp(prefix="auto-speech-missed-")) / "missed.json")
+    gate = MagicMock()
+    gate.settings.return_value = MagicMock(max_wait_seconds=max_wait)
+    svc._yield_gate = gate
+    svc._last_hold_ended_at = None
+    svc._sink_takes_hold_kwargs = None
+    return svc
+
+
+def _item(text: str, *, age: float = 0.0, **kw):
+    from priority_arbiter import QueueItem
+
+    kw.setdefault("priority", 3)
+    return QueueItem(payload=text, enqueued_at=time.time() - age, **kw)
+
+
+def test_held_line_is_listed_while_held_and_cleared_once_played() -> None:
+    from missed_speech import HELD
+    from sound_yield import RESUMED, HoldOutcome
+
+    sink = _HoldSink(HoldOutcome(RESUMED, 7.0, ("ChatGPT (pid 9)",)))
+    svc = _missed_service(sink)
+    seen: dict = {}
+
+    real_hold = svc._missed.hold
+
+    def spy_hold(line, names):
+        got = real_hold(line, names)
+        seen["during"] = svc._missed.load()
+        return got
+
+    svc._missed.hold = spy_hold
+    svc._speak("The build is green.", item=_item("The build is green.", age=3.0))
+
+    [held] = seen["during"]
+    assert (held.status, held.text, held.held_for) == (HELD, "The build is green.", ("ChatGPT (pid 9)",))
+    assert len(sink.played) == 1
+    assert svc._missed.load() == [], "a played line leaves the list"
+    assert sink.calls[0]["hold"] is True
+    assert 2.5 < sink.calls[0]["already_waited"] < 4.0, "queue age reaches the sink"
+    assert svc._last_hold_ended_at is not None
+
+
+def test_longest_wait_sets_the_line_aside_as_missed_never_dropped() -> None:
+    from missed_speech import MISSED, REASON_LONGEST_WAIT
+    from sound_yield import EXPIRED, HoldOutcome
+
+    sink = _HoldSink(HoldOutcome(EXPIRED, 180.0, ("ChatGPT (pid 9)",)), yielded=True)
+    svc = _missed_service(sink)
+    svc._speak("You have mail.", item=_item("You have mail.", priority=4, voice_id="af_bella", speed=1.2))
+
+    assert sink.played == []
+    [m] = svc._missed.load()
+    assert (m.status, m.reason, m.text, m.held_for) == (MISSED, REASON_LONGEST_WAIT, "You have mail.", ("ChatGPT (pid 9)",))
+    assert m.waited_seconds >= 180.0
+    assert (m.priority, m.voice_id, m.speed) == (4, "af_bella", 1.2)
+    assert svc._missed.counts() == {"held": 0, "missed": 1}
+
+
+def test_interrupt_during_a_hold_keeps_the_line_as_missed() -> None:
+    from missed_speech import MISSED, REASON_INTERRUPTED
+    from sound_yield import ABORTED, HoldOutcome
+
+    sink = _HoldSink(HoldOutcome(ABORTED, 12.0, ("Music (pid 5)",)))
+    svc = _missed_service(sink)
+    svc._speak("Interrupted line.", item=_item("Interrupted line."))
+
+    assert sink.played == []
+    [m] = svc._missed.load()
+    assert (m.status, m.reason, m.held_for) == (MISSED, REASON_INTERRUPTED, ("Music (pid 5)",))
+
+
+def test_stale_backlog_after_a_hold_is_set_aside_without_synthesis() -> None:
+    from missed_speech import MISSED, REASON_STALE
+    from sound_yield import CLEAR, HoldOutcome
+
+    sink = _HoldSink(HoldOutcome(CLEAR))
+    svc = _missed_service(sink, max_wait=180.0)
+    svc._last_hold_ended_at = time.time()  # a hold just ended; the queue behind it is backlog
+    svc._speak("Old news.", item=_item("Old news.", age=200.0))
+    svc._speak("Fresh line.", item=_item("Fresh line.", age=20.0))
+
+    assert svc._synth.synthesized == [("Fresh line.", svc._synth.synthesized[0][1])]
+    assert [p.name.startswith("narrator_") for p in sink.played] == [True]
+    [m] = svc._missed.load()
+    assert (m.status, m.reason, m.text) == (MISSED, REASON_STALE, "Old news.")
+    assert m.waited_seconds >= 200.0
+
+
+def test_an_old_line_still_plays_when_no_hold_touched_it() -> None:
+    from sound_yield import CLEAR, HoldOutcome
+
+    sink = _HoldSink(HoldOutcome(CLEAR))
+    svc = _missed_service(sink)
+    svc._last_hold_ended_at = None
+    svc._speak("Slow queue, no music.", item=_item("Slow queue, no music.", age=400.0))
+    assert len(sink.played) == 1
+    assert svc._missed.load() == []
+
+    # A hold that ended BEFORE the line was queued does not make it backlog either.
+    svc._last_hold_ended_at = time.time() - 1000.0
+    svc._speak("Queued after the hold.", item=_item("Queued after the hold.", age=400.0))
+    assert len(sink.played) == 2
+    assert svc._missed.load() == []
+
+
+def test_replay_of_a_missed_line_plays_over_other_sound_and_clears_it() -> None:
+    from missed_speech import MISSED, MissedLine
+
+    sink = _HoldSink(None)
+    svc = _missed_service(sink)
+    svc._missed.upsert(MissedLine(id="aa11", text="Again.", queued_at=time.time() - 900, status=MISSED))
+    svc._last_hold_ended_at = time.time()  # even with a hold just ended, a replay is never stale
+    svc._speak("Again.", item=_item("Again.", age=0.0, missed_id="aa11", hold=False))
+
+    assert len(sink.played) == 1
+    assert sink.calls[0]["hold"] is False
+    assert svc._missed.load() == []
+
+
+def test_speak_with_a_plain_sink_and_no_item_still_works() -> None:
+    sink = _MockSink()  # play(wav_path) only: no hold keywords
+    svc = _missed_service(sink)
+    svc._speak("Plain.")
+    assert len(sink.played) == 1
+    assert svc._missed.load() == []
+
+
+def test_dispatch_json_carries_the_replay_flags_into_the_queue_item() -> None:
+    from priority_arbiter import PriorityArbiter, QueueProxyFacade
+
+    svc = narrator_service.NarratorService.__new__(narrator_service.NarratorService)
+    svc._max_queue = 8
+    svc._priority_arbiter = PriorityArbiter(maxsize=8)
+    svc.__dict__["_queue_proxy"] = QueueProxyFacade(svc._priority_arbiter, maxsize=8)
+    svc._dropped_phases = 0
+    svc._cache = MagicMock()
+    svc._cache.lookup.return_value = None
+    svc._state_lock = threading.Lock()
+    svc._last_event_ts = time.time()
+
+    resp = svc.dispatch_json({"action": "speak", "text": "Again.", "priority": 3, "missed_id": "aa11", "hold": False})
+    assert resp["status"] == "queued"
+    item = svc._priority_arbiter.dequeue(block=False, unwrap=False)
+    assert (item.payload, item.missed_id, item.hold) == ("Again.", "aa11", False)
+
+    svc.dispatch_json({"action": "speak", "text": "Ordinary.", "priority": 3, "hold": "no"})
+    item = svc._priority_arbiter.dequeue(block=False, unwrap=False)
+    assert (item.missed_id, item.hold) == ("", True), "a non-boolean hold is ignored; absent id is empty"
+
+
+def test_status_reply_counts_the_missed_list() -> None:
+    from missed_speech import MISSED, MissedLine
+    from priority_arbiter import PriorityArbiter
+
+    svc = narrator_service.NarratorService.__new__(narrator_service.NarratorService)
+    svc._priority_arbiter = PriorityArbiter(maxsize=8)
+    svc._sink = _MockSink()
+    svc._engine_state = "IDLE"
+    svc._active_priority = None
+    svc._dropped_phases = 0
+    svc._start_time = time.time()
+    svc._missed = narrator_service.MissedList(Path(tempfile.mkdtemp(prefix="auto-speech-missed-")) / "missed.json")
+    svc._missed.upsert(MissedLine(id="a", text="x", queued_at=time.time(), status=MISSED))
+    svc._missed.hold(MissedLine(id="b", text="y", queued_at=time.time()), ("Music",))
+
+    resp = svc.dispatch_json({"action": "status"})
+    assert resp["missed"] == {"held": 1, "missed": 1}
+
+
 def test_tail_events_idle_shutdown_deferred_when_busy() -> None:
     svc = narrator_service.NarratorService.__new__(narrator_service.NarratorService)
     svc._idle_shutdown = 1.0
@@ -1047,6 +1271,15 @@ def main() -> int:
         test_p2_mcp_speak_queues_without_interrupting_active_playback,
         test_play_cache_falls_back_to_full_wav_when_meta_missing,
         test_play_cache_resets_engine_state_to_idle_on_failure,
+    test_held_line_is_listed_while_held_and_cleared_once_played,
+    test_longest_wait_sets_the_line_aside_as_missed_never_dropped,
+    test_interrupt_during_a_hold_keeps_the_line_as_missed,
+    test_stale_backlog_after_a_hold_is_set_aside_without_synthesis,
+    test_an_old_line_still_plays_when_no_hold_touched_it,
+    test_replay_of_a_missed_line_plays_over_other_sound_and_clears_it,
+    test_speak_with_a_plain_sink_and_no_item_still_works,
+    test_dispatch_json_carries_the_replay_flags_into_the_queue_item,
+    test_status_reply_counts_the_missed_list,
         test_tail_events_idle_shutdown_deferred_when_busy,
         test_stop_event_flushes_classifier_with_session_id,
     ]

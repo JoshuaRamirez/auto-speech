@@ -114,19 +114,28 @@ class DaemonClient:
         priority: Priority = Priority.EXPLICIT_MCP,
         source_hash: Optional[str] = None,
         session_id: Optional[str] = None,
-        voice_id: str = DEFAULT_VOICE_ID,
+        voice_id: str | None = DEFAULT_VOICE_ID,
         speed: float = DEFAULT_SPEED,
+        missed_id: Optional[str] = None,
+        hold: bool = True,
     ) -> DaemonResponse:
-        """Submits speech request to daemon priority queue (defaults mirror config_constants.py)."""
+        """Submits speech request to daemon priority queue (defaults mirror config_constants.py).
+
+        `missed_id` names the missed-list line this replays (the daemon
+        clears it once played); `hold=False` plays over other apps' sound."""
         payload: dict[str, Any] = {
             "action": "speak",
             "text": text,
             "priority": int(priority),
             "source_hash": source_hash,
             "session_id": session_id,
-            "voice_id": voice_id,
+            "voice_id": voice_id or DEFAULT_VOICE_ID,
             "speed": speed,
         }
+        if missed_id:
+            payload["missed_id"] = missed_id
+        if not hold:
+            payload["hold"] = False
         return self._send_request(payload)
 
     def play_cache(
@@ -135,6 +144,8 @@ class DaemonClient:
         *,
         priority: Priority = Priority.EXPLICIT_MCP,
         session_id: Optional[str] = None,
+        missed_id: Optional[str] = None,
+        hold: bool = True,
     ) -> DaemonResponse:
         """Plays pre-cached audio immediately by source hash."""
         payload: dict[str, Any] = {
@@ -143,6 +154,10 @@ class DaemonClient:
             "priority": int(priority),
             "session_id": session_id,
         }
+        if missed_id:
+            payload["missed_id"] = missed_id
+        if not hold:
+            payload["hold"] = False
         return self._send_request(payload)
 
     def interrupt(self, session_id: Optional[str] = None) -> DaemonResponse:
