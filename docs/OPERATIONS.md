@@ -101,6 +101,18 @@ re-reads it on every hold poll, so no restart is needed. Keys: `enabled`
 (true), `exceptions` ([]), `max_wait_seconds` (180), `after_max_wait`
 (`drop` | `play`), `poll_seconds` (0.5).
 
+## Runtime state and isolation
+
+Every runtime file lives in one directory: the daemon socket
+`auto-speech-daemon.sock`, the daemon pid, log and watermark, the narrator
+events file, the mpv pid, the autoplay beacon and now-playing markers, the
+say-worker log. The directory is `AUTO_SPEECH_TMP_ROOT`, default `/tmp`.
+The live daemon and the hooks never set it. `tests/run_all.sh` sets it to a
+private per-run directory (and `AUTO_SPEECH_DAEMON_SOCK` inside it), prints
+both, and stops any daemon a test started there, so a test run cannot
+reach the live service. A development checkout that must run its own
+daemon sets the same variable before `narrator_service_start.sh`.
+
 ## Muting & scoping
 
 - **One session only:** `/auto-speech-scope solo` makes only the current
