@@ -4,6 +4,7 @@ One file per released version; earlier files are never rewritten.
 
 | Version | Date | Headline |
 |---|---|---|
+| [v0.4.0](v0.4.0.md) | 2026-10-18 | Nothing held is ever dropped: the missed list, `missed` / `missed --play` / `missed --clear`, MCP `missed` |
 | [v0.3.0](v0.3.0.md) | 2026-10-18 | Speech yields to other apps' sound; `yield` / `sound_yield` / `[sound_yield]` |
 | v0.2.0 | 2026-08-12 | Autoplay works and is opt-in per session (see [CHANGELOG](../../CHANGELOG.md#020---2026-08-12)) |
 | v0.1.0 | — | First release (see [CHANGELOG](../../CHANGELOG.md)) |

@@ -35,7 +35,7 @@ Optional extras:
 bash setup/install-bootstrap-hook.sh   # SessionStart self-update (uv sync when uv.lock changes)
 bash setup/install-narrator-hooks.sh   # real-time narration hooks (see Narration)
 bash setup/install-mcp.sh              # `speak` MCP tool: say any words aloud (see MCP server)
-bash setup/install-plugin.sh --with-extras   # + 13 extra slash commands
+bash setup/install-plugin.sh --with-extras   # + 15 extra slash commands
 ```
 
 Every script is idempotent — safe to re-run. Step 4 is what makes the
@@ -56,7 +56,7 @@ The default install exposes 8 curated commands:
 | `/auto-speech-scope [all\|solo]` | read ALL sessions, or only THIS one |
 | `/auto-speech-doctor [json]` | health check; exits non-zero when unhealthy |
 
-14 more (playback transport, narrator controls, autoplay-status, yield, update)
+15 more (playback transport, narrator controls, autoplay-status, yield, missed, update)
 live in `plugin/commands-extra/` — install with
 `bash setup/install-plugin.sh --with-extras`. Every command is prefixed
 `auto-speech-` so nothing collides with Claude Code built-ins or other
@@ -95,7 +95,7 @@ The read shape is set via `/auto-speech-autoplay-mode` (or
 
 A stdio MCP server whose first tool, `speak(text)`, says the words it
 gets aloud with the local Kokoro voice (the others: `autoplay_turn`,
-`narrate_event`, `playback_control`, `session_configure`, `sound_yield`,
+`narrate_event`, `playback_control`, `session_configure`, `sound_yield`, `missed`,
 `doctor`). It reads them exactly as
 written: no transcript lookup, no LLM rewrite, no summary. So the caller
 should write text the way it should sound.
@@ -118,12 +118,25 @@ to `/tmp/auto-speech-say.log`. Remove it with `bash setup/uninstall-mcp.sh`.
 
 By default auto-speech **does not start speaking while another app is
 playing sound**: music, a video, a call. The speech keeps its place in the
-queue and plays once the other sound stops. If the sound goes on past the
-longest hold (180 s) the speech is dropped and logged; autoplay audio is
-still in the replay cache (`/auto-speech-replay`). Detection reads Core
-Audio's process list (which processes are running output), needs no
-permission, and never captures audio. auto-speech's own playback never
-counts.
+queue and plays once the other sound stops. **Nothing held is ever
+dropped.** If the sound goes on past the longest wait (180 s, counted from
+when the line was asked for) the line is set aside on the **missed list**;
+and when the sound stops, only lines younger than that still play by
+themselves, so a long listen does not end in a stale backlog read out line
+by line. Detection reads Core Audio's process list (which processes are
+running output), needs no permission, and never captures audio.
+auto-speech's own playback never counts.
+
+```bash
+auto-speech missed                       # what you have not heard, oldest first
+auto-speech missed --play                # replay the missed lines in that order, over any other sound
+auto-speech missed --clear               # forget them
+```
+
+Each replayed line leaves the list once it has played; lines still held
+play by themselves when the sound stops. MCP: `missed(action="list" |
+"play" | "clear")`, same text. The list is one file,
+`~/.local/state/auto-speech/missed.json`.
 
 An **exception list** names apps whose sound does not hold speech, by
 bundle id or name. The switch and the list have the same verbs in the
@@ -141,12 +154,12 @@ auto-speech yield check                  # who is playing right now; would speec
 
 MCP: `sound_yield(action="add", apps=["com.apple.Music"])`, same actions.
 Config: `~/.config/auto-speech/sound-yield.toml`, section `[sound_yield]`
-with `enabled`, `exceptions`, `max_wait_seconds`, `after_max_wait`
-(`drop` or `play`) and `poll_seconds`; see
+with `enabled`, `exceptions`, `max_wait_seconds` and `poll_seconds`; see
 `config/sound-yield.toml.example`. A change takes effect at the next
 playback, or at the next poll of a hold already in progress; no restart.
-The slash command `/auto-speech-yield` (extras) runs the same CLI. The
-reasoning behind the 180 s hold and the drop is in
+The slash commands `/auto-speech-yield` and `/auto-speech-missed` (extras)
+run the same CLI. The reasoning behind the 180 s wait, the missed list
+and the replay order is in
 [ADR-015](docs/decisions/ADR-015-sound-yield.md).
 
 ## Web app
