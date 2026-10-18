@@ -48,6 +48,7 @@ from narrator_state import (
     NarratorStateMachine,
 )
 from narrator_summarizer import Summarizer, load_summarizer
+from sound_yield import SoundYieldGate
 from priority_arbiter import Priority, PriorityArbiter, QueueItem, QueueProxyFacade
 from unix_ipc_server import _DaemonSocketServer
 from tts_executor import TTSExecutor
@@ -257,7 +258,11 @@ class NarratorService:
         self._fsm = NarratorStateMachine()
         self._phases_this_turn = 0
 
-        self._sink: NativeAudioSink = sink if sink is not None else NativeAudioSink()
+        # The default sink holds speech while another app plays sound; its
+        # gate logs to the daemon log so a hold is visible there.
+        self._sink: NativeAudioSink = (
+            sink if sink is not None else NativeAudioSink(sound_yield=SoundYieldGate(log=_log))
+        )
         if tts_executor is not None:
             self._tts_executor = tts_executor
         elif synth is not None or engine is not None:
@@ -549,6 +554,10 @@ class NarratorService:
 
         elif action == "status":
             depths = self._priority_arbiter.depths() if hasattr(self, "_priority_arbiter") else {}
+            try:
+                hold = self._sink.hold_status
+            except Exception:  # noqa: BLE001 — a test sink may not have it
+                hold = None
             return {
                 "status": "ok",
                 "daemon_state": self._engine_state,
@@ -556,6 +565,7 @@ class NarratorService:
                 "queue_depths": depths,
                 "total_dropped_phases": self._dropped_phases,
                 "uptime_seconds": round(time.time() - getattr(self, "_start_time", time.time()), 2),
+                "sound_yield": hold if isinstance(hold, dict) else None,
             }
 
         return {

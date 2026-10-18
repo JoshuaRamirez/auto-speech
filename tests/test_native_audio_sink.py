@@ -17,6 +17,11 @@ from unittest import mock
 SRC = Path(__file__).resolve().parents[1] / "plugin" / "scripts" / "python"
 sys.path.insert(0, str(SRC))
 
+import native_audio_sink  # noqa: E402
+
+# Hermetic: these tests drive a real NativeAudioSink against a mocked mpv;
+# no sound-yield gate, so they never read Core Audio or hold.
+native_audio_sink.DEFAULT_SOUND_YIELD_FACTORY = lambda: None
 from native_audio_sink import (  # noqa: E402
     MpvNotInstalledError,
     NativeAudioSink,
