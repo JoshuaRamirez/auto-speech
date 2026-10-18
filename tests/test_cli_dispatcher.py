@@ -81,7 +81,7 @@ class TestCliHelpAndRouting(BaseCliTestCase):
         with mock.patch("sys.stdout", stdout):
             rc = cli.main(["--version"])
         self.assertEqual(rc, 0)
-        self.assertIn("auto-speech 0.2.0", stdout.getvalue())
+        self.assertIn("auto-speech 0.3.0", stdout.getvalue())
 
     def test_top_level_missing_subcommand_exits_two(self) -> None:
         stderr = io.StringIO()

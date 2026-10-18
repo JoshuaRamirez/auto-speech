@@ -822,7 +822,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--version",
         action="version",
-        version="auto-speech 0.2.0",
+        version="auto-speech 0.3.0",
     )
     subparsers = parser.add_subparsers(
         dest="subcommand",
