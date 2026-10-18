@@ -1,7 +1,7 @@
 """auto-speech MCP server: full lifecycle automation tool suite.
 
 Stdio transport, newline-delimited JSON-RPC 2.0, standard library only.
-Exposes 6 tools:
+Exposes 7 tools:
 
   speak(text)
     Say text aloud verbatim with local Apple neural voice.
@@ -13,6 +13,8 @@ Exposes 6 tools:
     Manage audio playback transport (pause, resume, stop, restart, seek, replay).
   session_configure([session_id, autoplay, narrate, mode, size, scope])
     Configure session enrollment, mode, and scoping.
+  sound_yield(action, [apps])
+    Hold speech while another app plays sound: switch, exception list, live check.
   doctor([as_json])
     Run system health checks and diagnostics.
 
@@ -30,6 +32,8 @@ import subprocess
 import sys
 import time
 from pathlib import Path
+
+from state_paths import state_path
 from typing import Any
 
 from auto_speech_log import rotate_if_oversize
@@ -47,17 +51,18 @@ from daemon_client import DaemonClient, Priority
 from doctor import Doctor
 from message_selector import MessageSelector
 from mpv_ipc import MpvIpc
+from sound_yield import ACTIONS as SOUND_YIELD_ACTIONS, run_action as run_sound_yield_action
 from transcript_locator import TranscriptLocator
 
 SERVER_NAME = "auto-speech"
-SERVER_VERSION = "0.2.0"
+SERVER_VERSION = "0.3.0"
 SUPPORTED_PROTOCOLS = ("2025-06-18", "2025-03-26", "2024-11-05")
 MAX_CHARS = 20000  # matches web_server's /api/synthesize cap
 
 _PYTHON_DIR = Path(__file__).resolve().parent
 _PROJECT_ROOT = Path(__file__).resolve().parents[3]
 SPEAK = _PYTHON_DIR / "speak.py"
-SAY_LOG = Path("/tmp/auto-speech-say.log")
+SAY_LOG = state_path("auto-speech-say.log")
 
 PARSE_ERROR = -32700
 INVALID_REQUEST = -32600
@@ -256,6 +261,37 @@ SESSION_CONFIGURE_TOOL = {
     },
 }
 
+SOUND_YIELD_TOOL = {
+    "name": "sound_yield",
+    "title": "Hold speech while another app plays sound",
+    "description": (
+        "By default auto-speech holds its speech while another app plays "
+        "sound and speaks once that sound stops. 'status' shows the switch, "
+        "the exception list and the longest hold; 'on'/'off' switch the "
+        "behaviour; 'add'/'remove'/'clear' edit the apps whose sound does not "
+        "hold speech (bundle ids like com.apple.Music or names like Music); "
+        "'check' says who is playing right now and whether speech would hold. "
+        "Same verbs as `auto-speech yield` and the [sound_yield] config."
+    ),
+    "inputSchema": {
+        "type": "object",
+        "properties": {
+            "action": {
+                "type": "string",
+                "enum": list(SOUND_YIELD_ACTIONS),
+                "description": "status | on | off | add | remove | clear | check",
+            },
+            "apps": {
+                "type": "array",
+                "items": {"type": "string"},
+                "description": "For add/remove: bundle ids or app names.",
+            },
+        },
+        "required": ["action"],
+        "additionalProperties": False,
+    },
+}
+
 DOCTOR_TOOL = {
     "name": "doctor",
     "title": "Run system health checks and diagnostics",
@@ -288,6 +324,7 @@ ALL_TOOLS = [
     NARRATE_EVENT_TOOL,
     PLAYBACK_CONTROL_TOOL,
     SESSION_CONFIGURE_TOOL,
+    SOUND_YIELD_TOOL,
     DOCTOR_TOOL,
 ]
 
@@ -352,6 +389,8 @@ class McpServer:
         scope: SoloScope | None = None,
         doctor: Doctor | None = None,
         is_mpv_alive=None,
+        sound_yield_store=None,
+        sound_yield_gate=None,
     ) -> None:
         self._home = Path(home) if home is not None else Path(os.path.expanduser("~"))
         self._spawn = spawner
@@ -363,7 +402,7 @@ class McpServer:
 
         ev_log = events_log or narrator_events_file
         self._narrator_events_file = (
-            Path(ev_log) if ev_log is not None else Path("/tmp/auto-speech-narrator-events.jsonl")
+            Path(ev_log) if ev_log is not None else state_path("auto-speech-narrator-events.jsonl")
         )
         self._narrator_sessions_dir = (
             Path(narrator_sessions_dir)
@@ -376,12 +415,12 @@ class McpServer:
 
         sock_p = mpv_sock or mpv_sock_path
         self._mpv_sock_path = (
-            Path(sock_p) if sock_p is not None else Path("/tmp/auto-speech-mpv.sock")
+            Path(sock_p) if sock_p is not None else state_path("auto-speech-mpv.sock")
         )
 
         pid_p = mpv_pid or mpv_pid_path
         self._mpv_pid_path = (
-            Path(pid_p) if pid_p is not None else Path("/tmp/auto-speech-mpv.pid")
+            Path(pid_p) if pid_p is not None else state_path("auto-speech-mpv.pid")
         )
 
         self._mpv_ipc_send = mpv_ipc_sender or MpvIpc.send
@@ -390,6 +429,8 @@ class McpServer:
         self._scope = scope or SoloScope(home=self._home)
         self._doctor = doctor
         self._is_mpv_alive_fn = is_mpv_alive
+        self._sound_yield_store = sound_yield_store
+        self._sound_yield_gate = sound_yield_gate
 
     def _is_mpv_socket_alive(self) -> bool:
         if self._is_mpv_alive_fn is not None:
@@ -468,6 +509,7 @@ class McpServer:
             "narrate_event": self._call_narrate_event,
             "playback_control": self._call_playback_control,
             "session_configure": self._call_session_configure,
+            "sound_yield": self._call_sound_yield,
             "doctor": self._call_doctor,
         }
 
@@ -1242,6 +1284,29 @@ class McpServer:
             results.append(f"mode={cfg.get('mode')} summary_size={cfg.get('summary_size')}")
 
         return _ok(req_id, _tool_result("\n".join(results)))
+
+    def _call_sound_yield(self, req_id: Any, args: dict) -> dict:
+        action = args.get("action")
+        if not isinstance(action, str) or action.strip().lower() not in SOUND_YIELD_ACTIONS:
+            return _ok(
+                req_id,
+                _tool_result(
+                    f"invalid action: {action!r} (expected {', '.join(SOUND_YIELD_ACTIONS)})",
+                    is_error=True,
+                ),
+            )
+        apps = args.get("apps", [])
+        if isinstance(apps, str):
+            apps = [apps]
+        if not isinstance(apps, list) or any(not isinstance(a, str) for a in apps):
+            return _ok(req_id, _tool_result("apps must be a list of strings", is_error=True))
+        try:
+            result = run_sound_yield_action(
+                action, apps, store=self._sound_yield_store, gate=self._sound_yield_gate
+            )
+        except Exception as exc:  # noqa: BLE001
+            return _ok(req_id, _tool_result(f"sound_yield failed: {exc}", is_error=True))
+        return _ok(req_id, _tool_result(result.text, is_error=not result.ok))
 
     def _call_doctor(self, req_id: Any, args: dict) -> dict:
         as_json = bool(args.get("as_json") or args.get("json_format", False))

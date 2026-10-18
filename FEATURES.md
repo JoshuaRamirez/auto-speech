@@ -1,0 +1,112 @@
+# auto-speech — feature catalog
+
+The authoritative inventory of what auto-speech does, by capability
+domain, as of v0.3.0 (2026-10-18). Each entry names the surface and the
+module that owns it. Release-by-release history is in
+[CHANGELOG.md](CHANGELOG.md) and [docs/releases/](docs/releases/INDEX.md).
+
+## Speech synthesis
+- **Local Kokoro TTS on Apple Silicon** via mlx-audio; no cloud, no keys
+  (`tts_engine.py`, `tts_executor.py`, ADR-001).
+- **Fibonacci-scaled buffered playback**: sub-second time-to-first-audio on
+  long text (`chunk_planner.py`, `fibonacci.py`, ADR-002).
+- **Boundary snapping** of chunks to sentence edges (`boundary_snapper.py`,
+  ADR-004).
+- **Resilient synthesis**: a phrase that faults the engine is split and
+  retried; an unspeakable chunk degrades to a gap, never fails the message
+  (`span_splitter.py`, `resilient_synthesizer.py`).
+- **Audio-friendly rewrite** through the user's own `claude` CLI: verbatim
+  (lossless) or summary at small / medium / large (`claude_cli_rewriter.py`,
+  `cli_rewrite.py`, ADR-005, ADR-011).
+- **Apple `say` fallback engine** when the MLX engine is unavailable
+  (`apple_say_engine.py`).
+- **Voice profiles and calibration** (`voice_profile.py`,
+  `voice_profile_store.py`, `calibrator.py`).
+
+## Playback
+- **Single mpv sink**, synchronous, interruptible, with a pid file for
+  transport control (`native_audio_sink.py`, `mpv_ipc.py`, ADR-009).
+- **Speech yields to other apps' sound** (v0.3.0, ADR-015): a playback does
+  not start while another process is outputting audio; it keeps its turn
+  and plays when the sound stops, or is dropped after the longest hold
+  (180 s; `after_max_wait = "play"` to play anyway). Core Audio process
+  list with running-output flag, device running-somewhere fallback; no
+  permission; own playback never counts; `interrupt()` releases a hold
+  (`sound_yield.py`).
+- **Exception list and off switch** for the hold, identical in the CLI
+  (`auto-speech yield`), the MCP tool (`sound_yield`) and
+  `~/.config/auto-speech/sound-yield.toml`; live re-read, no restart.
+- **Transport**: pause, resume, restart, seek (`+N`, `-N`, `N`, `end`), stop
+  (`control.py`, CLI, MCP `playback_control`).
+- **Replay cache**: content-addressed WAVs keyed by source hash; replay the
+  n-th most recent (`cache_store.py`, `replay.py`, ADR-007, ADR-008).
+
+## Queueing and priority
+- **Unified daemon** on a UNIX socket with a 4-tier priority arbiter:
+  P1 user interrupt, P2 explicit MCP/CLI speak, P3 autoplay, P4 narration;
+  P1 barge-in purges P3/P4; P4 sheds oldest when full
+  (`narrator_service.py`, `priority_arbiter.py`, `unix_ipc_server.py`,
+  `daemon_client.py`).
+- **Cross-session FIFO** for autoplay workers: an active playback is never
+  cut off by a newer one; burst coalescing; in-flight dedup
+  (`playback_ticket.py`, `dedup_guard.py`, ADR-006).
+- **Daemon lifecycle**: pid-reuse-safe start/stop scripts, idle shutdown,
+  stale marker sweep, size-capped rotating logs (`narrator_state.py`,
+  `auto_speech_log.py`).
+- **One runtime state directory** (`AUTO_SPEECH_TMP_ROOT`, default `/tmp`)
+  for the socket, pid files, logs and markers, so tests and development
+  daemons run beside the live service without touching it
+  (`state_paths.py`, v0.3.0).
+
+## End-of-turn autoplay
+- **Stop-hook autoplay**, off by default, per-session opt-in
+  (`/auto-speech-autoplay-on|off`), global panic mute at
+  `~/.claude/auto-speech.disabled` (`autoplay_hook.sh`,
+  `autoplay_worker.py`, `autoplay_gate.py`, `autoplay_enrollment.py`,
+  ADR-012).
+- **Scope**: all enrolled sessions, or solo spotlight on one
+  (`autoplay_scope.py`).
+- **Mode**: raw, verbatim, or summary small / medium / large
+  (`autoplay_config.py`, `~/.config/auto-speech/autoplay.toml`).
+- **Transcript selection**: locate the session transcript, pick the n-th
+  most recent assistant turn, skip cron ticks (`transcript_locator.py`,
+  `message_selector.py`, ADR-003).
+
+## Real-time narration (optional)
+- **Phase classifier** over hook events (Explore / Edit / Run / Delegate)
+  and one spoken sentence per phase transition from a local MLX or Ollama
+  LLM, or a mock (`narrator_phase_classifier.py`,
+  `narrator_mlx_summarizer.py`, `narrator_ollama_summarizer.py`).
+- Per-session opt-in; autoplay waits for the narration queue to drain so
+  the two never overlap (`narrator_hook.sh`, `/auto-speech-narrate-*`).
+
+## Surfaces
+- **CLI** `bin/auto-speech` (`cli.py`): `speak`, `replay`, `pause`,
+  `resume`, `restart`, `stop`, `seek`, `autoplay {on,off,status,mode,scope}`,
+  `narrate {on,off,status,stop,config}`, `yield {status,on,off,add,remove,
+  clear,check}`, `hook {stop,narrator,bootstrap}`, `doctor`, `update`.
+- **MCP server** (`mcp_server.py`, stdio JSON-RPC): `speak`,
+  `autoplay_turn`, `narrate_event`, `playback_control`, `session_configure`,
+  `sound_yield`, `doctor` (ADR-014 for the fire-and-forget shape).
+- **Slash commands**: 8 curated (`plugin/commands/`) plus 14 extras
+  (`plugin/commands-extra/`), every one prefixed `auto-speech-`.
+- **Web app** at `http://127.0.0.1:7860` (loopback only): paste-to-speak,
+  transport, replay browser, `/api/synthesize`, `/api/voices`, job status
+  (`web_server.py`, `job_tracker.py`, ADR-010, ADR-013, ADR-014).
+- **Chrome extension** AutoSpeech: speak selection via the local server,
+  browser-voice fallback (`chrome-extension/`, versioned separately).
+
+## Diagnostics and upkeep
+- **Doctor** (`doctor.py`, `/auto-speech-doctor [json]`): binaries, venv,
+  disk, logs, daemon, queue, scope, MCP registration, config validation
+  (autoplay, narrator, sound-yield), venv-vs-lock drift.
+- **Self-update**: SessionStart bootstrap hook runs `uv sync` when
+  `uv.lock` changes (`self_update.py`).
+- **Idempotent installers** for deps, plugin commands, hooks, MCP
+  registration, and uninstallers for each (`setup/`).
+
+## Tests
+- `tests/run_all.sh`: full suite (python + shell + web + heavy),
+  `--hermetic` (stdlib-only subset for CI) and `--web` lanes. The sound-yield
+  gate and the sink hold are tested against a fake audio layer; tests that
+  drive a real sink against a mocked mpv disable the gate.

@@ -81,9 +81,9 @@ FAKE_HOME="$(mktemp -d -t auto-speech-hook-test-XXXXXX)"
 mkdir -p "$FAKE_HOME/.claude"
 PAYLOAD='{"session_id":"test-session-1","transcript_path":"/nonexistent.jsonl"}'
 if HOME="$FAKE_HOME" bash "$HOOK" <<<"$PAYLOAD" >/dev/null 2>&1; then
-    if [[ -e "/tmp/auto-speech-last-stop.test-session-1" ]]; then
+    if [[ -e "${AUTO_SPEECH_TMP_ROOT:-/tmp}/auto-speech-last-stop.test-session-1" ]]; then
         fail "hook-optin" "hook proceeded for a session that never enrolled (beacon written)"
-        rm -f "/tmp/auto-speech-last-stop.test-session-1"
+        rm -f "${AUTO_SPEECH_TMP_ROOT:-/tmp}/auto-speech-last-stop.test-session-1"
     else
         ok "hook-bails-for-unenrolled-session"
     fi
@@ -99,9 +99,9 @@ touch "$FAKE_HOME/.claude/auto-speech-autoplay-enabled/test-session-3"
 PAYLOAD3='{"session_id":"test-session-3","transcript_path":"/nonexistent.jsonl"}'
 if HOME="$FAKE_HOME" AUTO_SPEECH_AUTOPLAY_MIN_LEN=99999999 \
         bash "$HOOK" <<<"$PAYLOAD3" >/dev/null 2>&1; then
-    if [[ -e "/tmp/auto-speech-last-stop.test-session-3" ]]; then
+    if [[ -e "${AUTO_SPEECH_TMP_ROOT:-/tmp}/auto-speech-last-stop.test-session-3" ]]; then
         ok "hook-proceeds-for-enrolled-session"
-        rm -f "/tmp/auto-speech-last-stop.test-session-3"
+        rm -f "${AUTO_SPEECH_TMP_ROOT:-/tmp}/auto-speech-last-stop.test-session-3"
     else
         fail "hook-optin-enrolled" "hook bailed for an ENROLLED session (no beacon)"
     fi
@@ -116,9 +116,9 @@ touch "$FAKE_HOME/.claude/auto-speech.disabled"
 touch "$FAKE_HOME/.claude/auto-speech-autoplay-enabled/test-session-2"
 PAYLOAD2='{"session_id":"test-session-2","transcript_path":"/nonexistent.jsonl"}'
 if HOME="$FAKE_HOME" bash "$HOOK" <<<"$PAYLOAD2" >/dev/null 2>&1; then
-    if [[ -e "/tmp/auto-speech-last-stop.test-session-2" ]]; then
+    if [[ -e "${AUTO_SPEECH_TMP_ROOT:-/tmp}/auto-speech-last-stop.test-session-2" ]]; then
         fail "hook-global-mute" "hook proceeded despite global mute (beacon written)"
-        rm -f "/tmp/auto-speech-last-stop.test-session-2"
+        rm -f "${AUTO_SPEECH_TMP_ROOT:-/tmp}/auto-speech-last-stop.test-session-2"
     else
         ok "hook-bails-on-global-mute"
     fi
@@ -134,9 +134,9 @@ touch "$FAKE_HOME_AG/.claude/auto-speech-autoplay-enabled/conv-1"
 PAYLOAD_AG='{"conversationId":"conv-1","transcriptPath":"/nonexistent.jsonl"}'
 if HOME="$FAKE_HOME_AG" AUTO_SPEECH_AUTOPLAY_MIN_LEN=99999999 \
         bash "$HOOK" <<<"$PAYLOAD_AG" >/dev/null 2>&1; then
-    if [[ -e "/tmp/auto-speech-last-stop.conv-1" ]]; then
+    if [[ -e "${AUTO_SPEECH_TMP_ROOT:-/tmp}/auto-speech-last-stop.conv-1" ]]; then
         ok "hook-proceeds-for-antigravity-session"
-        rm -f "/tmp/auto-speech-last-stop.conv-1"
+        rm -f "${AUTO_SPEECH_TMP_ROOT:-/tmp}/auto-speech-last-stop.conv-1"
     else
         fail "hook-antigravity-enrolled" "hook bailed for enrolled Antigravity session (no beacon)"
     fi
@@ -147,9 +147,9 @@ fi
 # ---- Functional: Antigravity unenrolled session bails ----
 PAYLOAD_AG_UNENROLLED='{"conversationId":"conv-unenrolled","transcriptPath":"/nonexistent.jsonl"}'
 if HOME="$FAKE_HOME_AG" bash "$HOOK" <<<"$PAYLOAD_AG_UNENROLLED" >/dev/null 2>&1; then
-    if [[ -e "/tmp/auto-speech-last-stop.conv-unenrolled" ]]; then
+    if [[ -e "${AUTO_SPEECH_TMP_ROOT:-/tmp}/auto-speech-last-stop.conv-unenrolled" ]]; then
         fail "hook-antigravity-unenrolled" "hook proceeded for unenrolled Antigravity session"
-        rm -f "/tmp/auto-speech-last-stop.conv-unenrolled"
+        rm -f "${AUTO_SPEECH_TMP_ROOT:-/tmp}/auto-speech-last-stop.conv-unenrolled"
     else
         ok "hook-bails-for-antigravity-unenrolled"
     fi
@@ -162,9 +162,9 @@ touch "$FAKE_HOME_AG/.claude/auto-speech.disabled"
 touch "$FAKE_HOME_AG/.claude/auto-speech-autoplay-enabled/conv-muted"
 PAYLOAD_AG_MUTED='{"conversationId":"conv-muted","transcriptPath":"/nonexistent.jsonl"}'
 if HOME="$FAKE_HOME_AG" bash "$HOOK" <<<"$PAYLOAD_AG_MUTED" >/dev/null 2>&1; then
-    if [[ -e "/tmp/auto-speech-last-stop.conv-muted" ]]; then
+    if [[ -e "${AUTO_SPEECH_TMP_ROOT:-/tmp}/auto-speech-last-stop.conv-muted" ]]; then
         fail "hook-antigravity-mute" "hook proceeded for Antigravity despite global mute"
-        rm -f "/tmp/auto-speech-last-stop.conv-muted"
+        rm -f "${AUTO_SPEECH_TMP_ROOT:-/tmp}/auto-speech-last-stop.conv-muted"
     else
         ok "hook-bails-on-antigravity-global-mute"
     fi

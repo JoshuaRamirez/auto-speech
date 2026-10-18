@@ -18,7 +18,7 @@ grep -q 'kill -0 "\$PID"' "$STATUS_SCRIPT" && fail "anchor:bare-kill-zero" "narr
 ok "anchor:narrator-service-status-pid-guard"
 
 # Preserve any active PID file
-PID_FILE="/tmp/auto-speech-narrator-daemon.pid"
+PID_FILE="${AUTO_SPEECH_TMP_ROOT:-/tmp}/auto-speech-narrator-daemon.pid"
 ORIG_PID=""
 if [[ -f "$PID_FILE" ]]; then
     ORIG_PID="$(cat "$PID_FILE" 2>/dev/null || true)"

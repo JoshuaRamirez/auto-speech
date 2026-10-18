@@ -67,13 +67,13 @@ HOME="$SANDBOX" bash "$INSTALL" >/dev/null 2>&1   # restore root file
 # --- extras + idempotency ---------------------------------------------------
 HOME="$SANDBOX" bash "$INSTALL" --with-extras >/dev/null 2>&1
 n="$(find "$SANDBOX/.claude/commands" -name 'auto-speech-*.md' | wc -l | tr -d ' ')"
-if [[ "$n" == "21" ]]; then ok "--with-extras links 21 commands"
-else fail "--with-extras" "expected 21 links, got $n"; fi
+if [[ "$n" == "22" ]]; then ok "--with-extras links 22 commands"
+else fail "--with-extras" "expected 22 links, got $n"; fi
 
 HOME="$SANDBOX" bash "$INSTALL" >/dev/null 2>&1
 n="$(find "$SANDBOX/.claude/commands" -name 'auto-speech-*.md' | wc -l | tr -d ' ')"
-if [[ "$n" == "21" ]]; then ok "plain re-run preserves opted-in extras"
-else fail "extras preservation" "expected 21 links after re-run, got $n"; fi
+if [[ "$n" == "22" ]]; then ok "plain re-run preserves opted-in extras"
+else fail "extras preservation" "expected 22 links after re-run, got $n"; fi
 
 # --- prune tiers ------------------------------------------------------------
 ln -s "$PROJECT_ROOT/plugin/commands/auto-speech-bogus.md" \

@@ -9,7 +9,41 @@ The Chrome extension under `chrome-extension/` is versioned independently
 
 ## [Unreleased]
 
+## [0.3.0] - 2026-10-18
+
+Speech yields to other apps' sound, and the CLI and MCP surfaces reach
+parity. Baseline tag `v0.2.0`; commits `e91a3c4..e91ea72 (plus this release-notes commit)` landed on `main`
+by a `--no-ff` merge of `worktree/sound-yield`; `tests/run_all.sh`: 52 test files ran, 0 failed (630 counted unit tests plus the shell suites), under the isolated runner. Release notes:
+[docs/releases/v0.3.0.md](docs/releases/v0.3.0.md).
+
 ### Added
+- **Speech holds while another app plays sound** (ADR-015). By default a
+  playback does not start while music, a video or a call is coming out of
+  the speakers; it keeps its turn in the queue and plays when the sound
+  stops. Past the longest hold (180 s) it is dropped and logged
+  (`after_max_wait = "play"` plays it anyway). Detection reads Core
+  Audio's process list and each process's running-output flag through
+  ctypes, with the default output device's running-somewhere as fallback:
+  no permission, no audio captured. auto-speech's own playback (its pid,
+  its mpv, anything with `auto-speech` on its command line) never counts.
+  `interrupt()` releases a hold like it stops a playback.
+- **Exception list and off switch, the same in three places.**
+  `auto-speech yield status | on | off | add <apps…> | remove <apps…> |
+  clear | check` (alias `sound-yield`), the MCP tool `sound_yield(action,
+  apps)` and `~/.config/auto-speech/sound-yield.toml` (`[sound_yield]`:
+  `enabled`, `exceptions`, `max_wait_seconds`, `after_max_wait`,
+  `poll_seconds`) share one action runner and one file. The daemon
+  re-reads the file on every hold poll, so `yield off` or `yield add`
+  releases a hold already in progress. `/auto-speech-yield` slash command
+  (extras). `/auto-speech-doctor` validates the file. The daemon `status`
+  reply reports `sound_yield.holding` and the last hold.
+- `FEATURES.md` (feature catalog) and `docs/releases/` (per-version
+  release notes with an index).
+- **Unified `auto-speech` CLI dispatcher** (`bin/auto-speech`): speak,
+  replay, pause, resume, restart, stop, seek, autoplay, narrate, yield,
+  hook, doctor, update.
+- **Expanded MCP server**: `speak`, `autoplay_turn`, `narrate_event`,
+  `playback_control`, `session_configure`, `sound_yield`, `doctor`.
 - **`speak` MCP server.** A stdio MCP server
   (`plugin/scripts/shell/run_mcp.sh`) with one tool, `speak(text)`, that
   says the words it gets aloud, verbatim. It returns as soon as the words
@@ -22,6 +56,25 @@ The Chrome extension under `chrome-extension/` is versioned independently
 - Leftover 0.1.0 opt-OUT copy on current surfaces now matches 0.2.0
   opt-IN: `/auto-speech-autoplay-status`, `/auto-speech-doctor`,
   `/auto-speech-scope`, and `docs/OPERATIONS.md`. Doctor reports `jq`.
+
+### Fixed
+- **Tests and development daemons can no longer reach the live speech
+  service.** Every runtime path (`/tmp/auto-speech-daemon.sock`, the pid
+  files, logs, markers, the mpv pid) now resolves through
+  `AUTO_SPEECH_TMP_ROOT` (`state_paths.py` in Python, the same variable in
+  the shell scripts; default `/tmp`, so the live daemon and hooks are
+  unchanged). `tests/run_all.sh` exports a private per-run directory and
+  socket, prints them, and stops any daemon a test started there.
+  `tests/test_state_paths.py` proves it. Before this, a suite run could
+  auto-start a worktree daemon on the live socket and send it an
+  interrupt, cutting live speech.
+
+### Changed
+- `NativeAudioSink` takes a `sound_yield` gate (default on) and raises
+  `PlaybackYielded` when a held playback is dropped; tests that drive a
+  real sink against a mocked mpv rebind `DEFAULT_SOUND_YIELD_FACTORY`.
+- Version strings: `auto-speech --version` and the MCP `serverInfo` report
+  0.3.0.
 
 ## [0.2.0] - 2026-08-12
 

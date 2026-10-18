@@ -29,6 +29,26 @@ elif [[ "${1:-}" == "--web" ]]; then
     shift
 fi
 
+# Isolation: every test process gets its own runtime state directory, so no
+# test can reach the LIVE daemon's socket (/tmp/auto-speech-daemon.sock),
+# its pid file, its log, the mpv pid file or the autoplay markers. Code
+# resolves all of those through AUTO_SPEECH_TMP_ROOT (state_paths.py);
+# a daemon a test auto-starts lands in here too and is stopped at exit.
+STATE_DIR="$(mktemp -d /tmp/auto-speech-tests.XXXXXX)"
+export AUTO_SPEECH_TMP_ROOT="$STATE_DIR"
+export AUTO_SPEECH_DAEMON_SOCK="$STATE_DIR/auto-speech-daemon.sock"
+echo "[isolation] AUTO_SPEECH_TMP_ROOT=$STATE_DIR"
+echo "[isolation] AUTO_SPEECH_DAEMON_SOCK=$AUTO_SPEECH_DAEMON_SOCK"
+cleanup_state_dir() {
+    local pid
+    pid="$(cat "$STATE_DIR/auto-speech-narrator-daemon.pid" 2>/dev/null || true)"
+    if [[ -n "$pid" ]] && ps -o command= -p "$pid" 2>/dev/null | grep -q narrator_service.py; then
+        kill "$pid" 2>/dev/null || true
+    fi
+    rm -rf "$STATE_DIR"
+}
+trap cleanup_state_dir EXIT
+
 PYTHON="${AUTO_SPEECH_TEST_PYTHON:-$VENV/bin/python}"
 if [[ ! -x "$PYTHON" ]]; then
     echo "error: python interpreter not found at $PYTHON" >&2
@@ -49,6 +69,7 @@ NEEDS_DEPS=(
 
 # Cheap unit tests first — failures here usually indicate a wider problem.
 CHEAP=(
+    test_state_paths.py
     test_state_machine.py
     test_auto_speech_log.py
     test_doctor.py
@@ -83,6 +104,7 @@ CHEAP=(
     test_daemon_client.py
     test_apple_say_engine.py
     test_native_audio_sink.py
+    test_sound_yield.py
     test_speak_client.py
     test_cli_dispatcher.py
 )

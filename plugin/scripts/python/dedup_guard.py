@@ -23,11 +23,13 @@ import os
 import time
 from pathlib import Path
 
-NOW_PLAYING_MARKER = Path("/tmp/auto-speech-now-playing-hash")
-NOW_PLAYING_LOCK = Path("/tmp/auto-speech-now-playing.lock")
+from state_paths import state_path
+
+NOW_PLAYING_MARKER = state_path("auto-speech-now-playing-hash")
+NOW_PLAYING_LOCK = state_path("auto-speech-now-playing.lock")
 AGE_CAP_SECONDS = 120
 BURST_WINDOW_SECONDS = 5.0
-MPV_PID_PATH = Path("/tmp/auto-speech-mpv.pid")
+MPV_PID_PATH = state_path("auto-speech-mpv.pid")
 
 
 def _pid_alive(pid: int) -> bool:
