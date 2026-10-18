@@ -42,6 +42,8 @@ import time
 import tomllib
 from dataclasses import dataclass, field, replace
 from pathlib import Path
+
+from state_paths import state_path
 from typing import Callable, Iterable, Optional
 
 logger = logging.getLogger(__name__)
@@ -57,7 +59,7 @@ AFTER_MAX_WAIT_CHOICES = ("drop", "play")
 DEFAULT_AFTER_MAX_WAIT = "drop"
 
 OWN_COMMAND_MARKER = "auto-speech"
-MPV_PID_PATH = Path("/tmp/auto-speech-mpv.pid")
+MPV_PID_PATH = state_path("auto-speech-mpv.pid")
 
 # Hold outcomes (HoldOutcome.status).
 CLEAR = "clear"  # nothing else was playing; no hold

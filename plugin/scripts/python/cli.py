@@ -10,6 +10,8 @@ import subprocess
 import sys
 import time
 from pathlib import Path
+
+from state_paths import state_path
 from typing import Any
 
 from autoplay_config import load_config as load_autoplay_config
@@ -36,7 +38,7 @@ EXIT_BAD_ARG = 4
 EXIT_PLAYBACK_FAIL = 6
 EXIT_INTERRUPTED = 130
 
-MPV_SOCK_PATH = Path("/tmp/auto-speech-mpv.sock")
+MPV_SOCK_PATH = state_path("auto-speech-mpv.sock")
 
 
 def _project_root() -> Path:
@@ -49,7 +51,7 @@ def _default_cache_root() -> Path:
 
 
 def _get_daemon_socket_path() -> Path:
-    return Path(os.environ.get("AUTO_SPEECH_DAEMON_SOCK", "/tmp/auto-speech-daemon.sock"))
+    return Path(os.environ.get("AUTO_SPEECH_DAEMON_SOCK", str(state_path("auto-speech-daemon.sock"))))
 
 
 def _is_mpv_socket_alive() -> bool:
@@ -62,7 +64,7 @@ def _is_mpv_socket_alive() -> bool:
 def _has_active_session() -> bool:
     if _is_mpv_socket_alive():
         return True
-    mpv_pid_file = Path("/tmp/auto-speech-mpv.pid")
+    mpv_pid_file = state_path("auto-speech-mpv.pid")
     if mpv_pid_file.is_file():
         try:
             pid = int(mpv_pid_file.read_text().strip())
@@ -383,7 +385,7 @@ def handle_stop(_args: argparse.Namespace) -> int:
         except Exception:
             pass
 
-    mpv_pid_file = Path("/tmp/auto-speech-mpv.pid")
+    mpv_pid_file = state_path("auto-speech-mpv.pid")
     if mpv_pid_file.is_file():
         try:
             pid = int(mpv_pid_file.read_text().strip())
@@ -755,7 +757,7 @@ def handle_hook(args: argparse.Namespace) -> int:
             "event": event,
             "payload": payload,
         }
-        events_log = Path("/tmp/auto-speech-narrator-events.jsonl")
+        events_log = state_path("auto-speech-narrator-events.jsonl")
         try:
             with open(events_log, "a", encoding="utf-8") as f:
                 f.write(json.dumps(record) + "\n")

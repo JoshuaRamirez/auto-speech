@@ -7,10 +7,12 @@
 
 set -uo pipefail
 
+# Runtime state directory; the test runner points this at a private dir.
+STATE_DIR="${AUTO_SPEECH_TMP_ROOT:-/tmp}"
 PLUGIN_SCRIPTS_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 WORKER="$PLUGIN_SCRIPTS_DIR/shell/autoplay_worker.sh"
 DISABLED_MARKER="$HOME/.claude/auto-speech.disabled"
-LOG="/tmp/auto-speech-autoplay.log"
+LOG="$STATE_DIR/auto-speech-autoplay.log"
 
 # Size-cap the shared autoplay log. The detached worker prints to stdout,
 # which the spawn below redirects onto $LOG; workers are ephemeral, so
@@ -22,7 +24,7 @@ source "$PLUGIN_SCRIPTS_DIR/shell/log_rotate.sh"
 # the SAME session. Per-session-keyed so a Stop in session B doesn't
 # false-stale session A's in-flight worker during the cross-session
 # playback queue wait.
-BEACON_DEFAULT="/tmp/auto-speech-last-stop"
+BEACON_DEFAULT="$STATE_DIR/auto-speech-last-stop"
 
 # Capture the hook payload. Claude Code passes a JSON document with
 # {session_id, transcript_path, cwd, hook_event_name, ...}; we want the
@@ -85,7 +87,7 @@ if [[ -z "$SESSION_ID" ]] || [[ ! -e "$SESSION_ENROLL_DIR/$SESSION_ID" ]]; then
 fi
 
 # Ensure audio daemon is running if it exited due to idle timeout
-PID_FILE="/tmp/auto-speech-narrator-daemon.pid"
+PID_FILE="$STATE_DIR/auto-speech-narrator-daemon.pid"
 DAEMON_ALIVE=0
 if [[ -f "$PLUGIN_SCRIPTS_DIR/shell/daemon_pid.sh" ]]; then
     # shellcheck source=daemon_pid.sh

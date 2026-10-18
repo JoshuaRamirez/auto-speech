@@ -3,9 +3,11 @@
 
 set -uo pipefail
 
-PID_FILE="/tmp/auto-speech-narrator-daemon.pid"
-DEPTH_FILE="/tmp/auto-speech-narration-depth"
-LOG_FILE="/tmp/auto-speech-narrator-daemon.log"
+# Runtime state directory; the test runner points this at a private dir.
+STATE_DIR="${AUTO_SPEECH_TMP_ROOT:-/tmp}"
+PID_FILE="$STATE_DIR/auto-speech-narrator-daemon.pid"
+DEPTH_FILE="$STATE_DIR/auto-speech-narration-depth"
+LOG_FILE="$STATE_DIR/auto-speech-narrator-daemon.log"
 SESSION_ID="${CLAUDE_CODE_SESSION_ID:-}"
 MARKER_DIR="$HOME/.claude/auto-speech-narrate-sessions"
 SESSION_MARKER="$MARKER_DIR/${SESSION_ID:-NO_SESSION_ID}"

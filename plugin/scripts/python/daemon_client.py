@@ -14,11 +14,13 @@ import time
 from dataclasses import dataclass
 from enum import IntEnum
 from pathlib import Path
+
+from state_paths import state_path
 from typing import Any, Optional
 
 from config_constants import DEFAULT_SPEED, DEFAULT_VOICE_ID
 
-DEFAULT_SOCKET_PATH = Path("/tmp/auto-speech-daemon.sock")
+DEFAULT_SOCKET_PATH = state_path("auto-speech-daemon.sock")
 
 
 class Priority(IntEnum):

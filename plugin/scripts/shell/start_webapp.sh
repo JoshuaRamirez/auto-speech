@@ -15,12 +15,14 @@
 
 set -uo pipefail
 
+# Runtime state directory; the test runner points this at a private dir.
+STATE_DIR="${AUTO_SPEECH_TMP_ROOT:-/tmp}"
 PLUGIN_SCRIPTS_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 RUNSERVER="$PLUGIN_SCRIPTS_DIR/shell/run_server.sh"
 # shellcheck source=log_rotate.sh
 source "$PLUGIN_SCRIPTS_DIR/shell/log_rotate.sh"
-PIDFILE="/tmp/auto-speech-webapp.pid"
-LOG="/tmp/auto-speech-webapp.log"
+PIDFILE="$STATE_DIR/auto-speech-webapp.pid"
+LOG="$STATE_DIR/auto-speech-webapp.log"
 URL="http://127.0.0.1:7860/"
 STARTUP_DEADLINE_TICKS=20      # 20 × 0.5 s = 10 s
 STARTUP_TICK_SECONDS=0.5

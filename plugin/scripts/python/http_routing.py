@@ -13,6 +13,8 @@ import traceback
 import wave
 from datetime import datetime, timezone
 from pathlib import Path
+
+from state_paths import state_path
 from typing import Any
 
 from flask import Flask, Response, jsonify, render_template, request
@@ -77,7 +79,7 @@ def _job_to_dict(job) -> dict | None:
     }
 
 def _send_daemon_socket_request(payload: dict[str, Any], timeout: float = 2.0) -> dict[str, Any] | None:
-    socket_path = Path(os.environ.get("AUTO_SPEECH_DAEMON_SOCK", "/tmp/auto-speech-daemon.sock"))
+    socket_path = Path(os.environ.get("AUTO_SPEECH_DAEMON_SOCK", str(state_path("auto-speech-daemon.sock"))))
     if not socket_path.is_socket():
         return None
     try:

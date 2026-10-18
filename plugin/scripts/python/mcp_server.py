@@ -32,6 +32,8 @@ import subprocess
 import sys
 import time
 from pathlib import Path
+
+from state_paths import state_path
 from typing import Any
 
 from auto_speech_log import rotate_if_oversize
@@ -60,7 +62,7 @@ MAX_CHARS = 20000  # matches web_server's /api/synthesize cap
 _PYTHON_DIR = Path(__file__).resolve().parent
 _PROJECT_ROOT = Path(__file__).resolve().parents[3]
 SPEAK = _PYTHON_DIR / "speak.py"
-SAY_LOG = Path("/tmp/auto-speech-say.log")
+SAY_LOG = state_path("auto-speech-say.log")
 
 PARSE_ERROR = -32700
 INVALID_REQUEST = -32600
@@ -400,7 +402,7 @@ class McpServer:
 
         ev_log = events_log or narrator_events_file
         self._narrator_events_file = (
-            Path(ev_log) if ev_log is not None else Path("/tmp/auto-speech-narrator-events.jsonl")
+            Path(ev_log) if ev_log is not None else state_path("auto-speech-narrator-events.jsonl")
         )
         self._narrator_sessions_dir = (
             Path(narrator_sessions_dir)
@@ -413,12 +415,12 @@ class McpServer:
 
         sock_p = mpv_sock or mpv_sock_path
         self._mpv_sock_path = (
-            Path(sock_p) if sock_p is not None else Path("/tmp/auto-speech-mpv.sock")
+            Path(sock_p) if sock_p is not None else state_path("auto-speech-mpv.sock")
         )
 
         pid_p = mpv_pid or mpv_pid_path
         self._mpv_pid_path = (
-            Path(pid_p) if pid_p is not None else Path("/tmp/auto-speech-mpv.pid")
+            Path(pid_p) if pid_p is not None else state_path("auto-speech-mpv.pid")
         )
 
         self._mpv_ipc_send = mpv_ipc_sender or MpvIpc.send

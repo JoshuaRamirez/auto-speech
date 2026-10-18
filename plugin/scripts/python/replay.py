@@ -6,6 +6,8 @@ import argparse
 import os
 import sys
 from pathlib import Path
+
+from state_paths import state_path
 from typing import Any
 
 from cache_store import CacheStore
@@ -17,7 +19,7 @@ EXIT_NO_CACHE_ENTRY = 2
 EXIT_PLAYBACK_FAIL = 6
 EXIT_INTERRUPTED = 130
 
-DEFAULT_SOCKET_PATH = Path("/tmp/auto-speech-daemon.sock")
+DEFAULT_SOCKET_PATH = state_path("auto-speech-daemon.sock")
 
 
 def _default_cache_root() -> Path:
