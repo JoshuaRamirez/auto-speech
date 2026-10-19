@@ -9,6 +9,42 @@ The Chrome extension under `chrome-extension/` is versioned independently
 
 ## [Unreleased]
 
+## [0.6.0] - 2026-10-18
+
+Sound holds speech only when a player app makes it. Baseline tag `v0.5.0`;
+commits `3632f1a` (tests first), `44161b4` (gate, CLI, MCP, config),
+COMMIT_DOCS (tests, version, docs) plus merge MERGE_SHA, landed on `main`
+by a `--no-ff` merge of `feat/players-list`; `tests/run_all.sh`: 55
+test files ran, 0 failed, under the isolated runner. Release notes:
+[docs/releases/v0.6.0.md](docs/releases/v0.6.0.md).
+
+### Changed
+- **An unknown app's open stream never holds speech** (ADR-017). Core
+  Audio's running-output flag is true for a stream that carries silence as
+  much as for music, and on 2026-10-18 an editor's helper with a silent
+  open stream held every line for an afternoon (fourteen lines to the
+  missed list, none heard). Now a running app holds speech only when it is
+  on the **players list**: Music, TV, Podcasts, QuickTime Player, Safari
+  and its WebKit GPU process, FaceTime, Spotify, VLC, IINA, mpv, afplay,
+  ffplay, Chrome, Arc, Edge, Firefox and its media process, Brave, Zoom,
+  Teams, the ChatGPT app, the Claude app, plus whatever is added. A bundle
+  id covers its helpers (`com.google.Chrome` covers
+  `com.google.Chrome.helper`); the exception list still subtracts; the
+  device fallback still holds for anything and says the lists cannot
+  apply there. The output level was not used: reading it needs a Core
+  Audio process tap, which captures audio and asks for the System Audio
+  Recording permission, both outside the standing limits.
+
+### Added
+- `auto-speech yield hold-for players|any`, `player-add <apps…>`,
+  `player-remove <apps…>` (`Chrome` removes `com.google.Chrome`),
+  `player-reset`; MCP `sound_yield` with the same actions; `[sound_yield]
+  hold_for` (`players`, the default, or `any`, the 0.3.0–0.5.0 rule) and
+  `players` (the full list; absent means the built-in defaults). `yield
+  status` shows the rule and the list; `yield check` names every running
+  app with the reason it does or does not hold ("not on the players
+  list"). Config validation knows both keys (`config_validation.py`).
+
 ## [0.5.0] - 2026-10-18
 
 The desk is named only when the speaker changes. Baseline tag `v0.4.0`;

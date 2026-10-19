@@ -1279,6 +1279,34 @@ def test_sound_yield_on_off_add_remove_clear_write_the_shared_config() -> None:
     assert store.load().enabled is True
 
 
+def test_sound_yield_player_verbs_and_hold_for_write_the_shared_config() -> None:
+    srv, store, _ = _yield_server()
+
+    def text(res):
+        return res["result"]["content"][0]["text"]
+
+    res = _call_tool(srv, "sound_yield", {"action": "status"})
+    assert "holds for: players only" in text(res)
+    assert "players (apps whose sound holds speech): com.apple.Music" in text(res)
+    res = _call_tool(srv, "sound_yield", {"action": "player-add", "apps": ["com.google.antigravity"]})
+    assert text(res).startswith("players added: com.google.antigravity")
+    assert "com.google.antigravity" in store.load().players
+    res = _call_tool(srv, "sound_yield", {"action": "player-remove", "apps": "Chrome"})
+    assert text(res).startswith("players removed: com.google.Chrome")
+    assert "com.google.Chrome" not in store.load().players
+    res = _call_tool(srv, "sound_yield", {"action": "player-reset"})
+    assert text(res).startswith("players reset to the defaults")
+    assert "com.google.Chrome" in store.load().players
+    res = _call_tool(srv, "sound_yield", {"action": "hold-for", "apps": ["any"]})
+    assert res["result"]["isError"] is False
+    assert store.load().hold_for == "any"
+    assert "holds for: any app" in text(res)
+    res = _call_tool(srv, "sound_yield", {"action": "hold-for", "apps": ["sometimes"]})
+    assert res["result"]["isError"] is True
+    res = _call_tool(srv, "sound_yield", {"action": "player-add"})
+    assert res["result"]["isError"] is True
+
+
 def test_sound_yield_check_reports_the_live_assessment() -> None:
     from sound_yield import MODE_PROCESS_LIST, Assessment, AudioProcess, SoundYieldSettings, SoundYieldStore
 
@@ -1454,7 +1482,10 @@ def test_sound_yield_tool_schema() -> None:
     tools = {t["name"]: t for t in s.handle_line(_req("tools/list"))["result"]["tools"]}
     schema = tools["sound_yield"]["inputSchema"]
     assert schema["required"] == ["action"]
-    assert schema["properties"]["action"]["enum"] == ["status", "on", "off", "add", "remove", "clear", "check"]
+    assert schema["properties"]["action"]["enum"] == [
+        "status", "on", "off", "add", "remove", "clear", "check",
+        "hold-for", "player-add", "player-remove", "player-reset",
+    ]
     assert schema["properties"]["apps"]["items"] == {"type": "string"}
     assert schema["additionalProperties"] is False
 
@@ -1529,7 +1560,8 @@ TESTS = [
     test_sound_yield_requires_a_known_action,
     test_sound_yield_status_defaults_without_a_config_file,
     test_sound_yield_on_off_add_remove_clear_write_the_shared_config,
-    test_sound_yield_check_reports_the_live_assessment,
+    test_sound_yield_player_verbs_and_hold_for_write_the_shared_config,
+        test_sound_yield_check_reports_the_live_assessment,
     test_sound_yield_tool_schema,
     test_missed_requires_a_known_action,
     test_missed_list_is_the_default_and_matches_the_cli_text,
