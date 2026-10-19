@@ -1183,6 +1183,29 @@ def test_status_reply_counts_the_missed_list() -> None:
     assert resp["missed"] == {"held": 1, "missed": 1}
 
 
+def test_dispatch_json_reads_a_command_key_like_action() -> None:
+    """The 17:51 line: {"command":"status"} is a status request, not speech."""
+    from priority_arbiter import PriorityArbiter
+
+    svc = narrator_service.NarratorService.__new__(narrator_service.NarratorService)
+    svc._priority_arbiter = PriorityArbiter(maxsize=8)
+    svc._sink = _MockSink()
+    svc._engine_state = "IDLE"
+    svc._active_priority = None
+    svc._dropped_phases = 0
+    svc._start_time = time.time()
+    svc._missed = narrator_service.MissedList(Path(tempfile.mkdtemp(prefix="auto-speech-missed-")) / "missed.json")
+
+    resp = svc.dispatch_json({"command": "status"})
+    assert resp["status"] == "ok", resp
+    assert resp["daemon_state"] == "IDLE"
+    assert resp["missed"] == {"held": 0, "missed": 0}
+
+    resp = svc.dispatch_json({"command": "dance"})
+    assert resp["error_code"] == "INVALID_ACTION"
+    assert svc._priority_arbiter.depths() == {"p1_interrupt": 0, "p2_mcp": 0, "p3_autoplay": 0, "p4_narration": 0}
+
+
 def test_tail_events_idle_shutdown_deferred_when_busy() -> None:
     svc = narrator_service.NarratorService.__new__(narrator_service.NarratorService)
     svc._idle_shutdown = 1.0
@@ -1280,6 +1303,7 @@ def main() -> int:
     test_speak_with_a_plain_sink_and_no_item_still_works,
     test_dispatch_json_carries_the_replay_flags_into_the_queue_item,
     test_status_reply_counts_the_missed_list,
+    test_dispatch_json_reads_a_command_key_like_action,
         test_tail_events_idle_shutdown_deferred_when_busy,
         test_stop_event_flushes_classifier_with_session_id,
     ]
