@@ -28,6 +28,8 @@ AUTOPLAY_FIELDS = (
     Field("summary_size", "enum", allowed=("small", "medium", "large")),
     Field("coalesce_seconds", "number", minimum=0),
     Field("narration_wait_max_seconds", "number", minimum=0),
+    Field("bypass_llm", "bool"),
+    Field("bypass_rewrite", "bool"),  # the older name autoplay_config still reads
 )
 
 # Mirrors the keys read by narrator_config.load_config.
