@@ -13,7 +13,7 @@ The Chrome extension under `chrome-extension/` is versioned independently
 
 Sound holds speech only when a player app makes it. Baseline tag `v0.5.0`;
 commits `3632f1a` (tests first), `44161b4` (gate, CLI, MCP, config),
-COMMIT_DOCS (tests, version, docs) plus merge MERGE_SHA, landed on `main`
+403bd3b (tests, version, docs) plus merge 1d48c78, landed on `main`
 by a `--no-ff` merge of `feat/players-list`; `tests/run_all.sh`: 55
 test files ran, 0 failed, under the isolated runner. Release notes:
 [docs/releases/v0.6.0.md](docs/releases/v0.6.0.md).
