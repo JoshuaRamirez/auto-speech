@@ -136,6 +136,7 @@ EXTRAS=(
     "auto-speech-narrate-config.md"
     "auto-speech-yield.md"
     "auto-speech-missed.md"
+    "auto-speech-speaker.md"
 )
 
 # Prune stale auto-speech-* command symlinks. Two tiers, both scoped to

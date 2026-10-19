@@ -77,7 +77,7 @@ sync with it:
 
 ## Configuration & env-var precedence
 
-User config lives in `~/.config/auto-speech/{autoplay,narrator,sound-yield}.toml`
+User config lives in `~/.config/auto-speech/{autoplay,narrator,sound-yield,speaker}.toml`
 (copy from the `*.toml.example` files). A typo never crashes the tool — it
 falls back to defaults — but `/auto-speech-doctor` surfaces it as a WARN.
 

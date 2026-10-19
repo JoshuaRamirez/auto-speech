@@ -1,7 +1,7 @@
 # auto-speech — feature catalog
 
 The authoritative inventory of what auto-speech does, by capability
-domain, as of v0.4.0 (2026-10-18). Each entry names the surface and the
+domain, as of v0.5.0 (2026-10-18). Each entry names the surface and the
 module that owns it. Release-by-release history is in
 [CHANGELOG.md](CHANGELOG.md) and [docs/releases/](docs/releases/INDEX.md).
 
@@ -48,6 +48,21 @@ module that owns it. Release-by-release history is in
   (`control.py`, CLI, MCP `playback_control`).
 - **Replay cache**: content-addressed WAVs keyed by source hash; replay the
   n-th most recent (`cache_store.py`, `replay.py`, ADR-007, ADR-008).
+
+## Who is talking
+- **The desk is named only when the speaker changes** (v0.5.0, ADR-016):
+  a line opens with "<desk> here," only when its session differs from the
+  last one heard, or after a quiet gap (15 min default). Names come from
+  the desk agents' notes (`session:` → `name:` or the note's file name;
+  personal notes never read in; `[speaker.names]` wins); a session no note
+  names is "Another desk"; a line that names itself is not doubled; a line
+  set aside while held never moves the speaker; cached audio gets a
+  "<name> here." clip in front. Every `speak` path carries its session
+  (CLI and `speak.py` from `CLAUDE_CODE_SESSION_ID`, MCP from the call or
+  its own environment, narration from its hook events). Same verbs in
+  `auto-speech speaker`, the MCP tool `speaker`, slash command
+  `/auto-speech-speaker` and `~/.config/auto-speech/speaker.toml`
+  (`speaker.py`).
 
 ## Queueing and priority
 - **Unified daemon** on a UNIX socket with a 4-tier priority arbiter:
