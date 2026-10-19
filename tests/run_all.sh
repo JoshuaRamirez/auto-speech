@@ -114,6 +114,7 @@ CHEAP=(
     test_native_audio_sink.py
     test_sound_yield.py
     test_missed_speech.py
+    test_speaker.py
     test_speak_client.py
     test_cli_dispatcher.py
     test_ipc_command_key.py
