@@ -48,6 +48,8 @@ NARRATOR_FIELDS = (
 SOUND_YIELD_FIELDS = (
     Field("enabled", "bool"),
     Field("exceptions", "str_list"),
+    Field("hold_for", "enum", allowed=("players", "any")),
+    Field("players", "str_list"),
     Field("max_wait_seconds", "number", minimum=0),
     Field("poll_seconds", "number", minimum=0),
 )

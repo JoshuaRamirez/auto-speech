@@ -624,7 +624,7 @@ class TestPlayersList(unittest.TestCase):
         gate, _ = _gate(self.tmp, FakeProbe(process_list_available=False, device=True))
         a = gate.assess()
         self.assertTrue(a.hold)
-        self.assertIn("players list cannot apply", format_assessment(a))
+        self.assertIn("the players list and exceptions cannot apply", format_assessment(a))
 
 
 if __name__ == "__main__":

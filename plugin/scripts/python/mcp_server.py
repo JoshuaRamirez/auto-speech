@@ -281,11 +281,15 @@ SOUND_YIELD_TOOL = {
     "name": "sound_yield",
     "title": "Hold speech while another app plays sound",
     "description": (
-        "By default auto-speech holds its speech while another app plays "
-        "sound and speaks once that sound stops. 'status' shows the switch, "
-        "the exception list and the longest hold; 'on'/'off' switch the "
-        "behaviour; 'add'/'remove'/'clear' edit the apps whose sound does not "
-        "hold speech (bundle ids like com.apple.Music or names like Music); "
+        "By default auto-speech holds its speech while a player app (Music, "
+        "Spotify, a browser, Zoom, the ChatGPT app, ...) plays sound and speaks "
+        "once that sound stops; an unknown app's open stream never holds. "
+        "'status' shows the switch, the rule, the players list, the exception "
+        "list and the longest hold; 'on'/'off' switch the behaviour; "
+        "'hold-for' with apps=['players'] or ['any'] sets whose sound holds; "
+        "'player-add'/'player-remove'/'player-reset' edit the players list; "
+        "'add'/'remove'/'clear' edit the exceptions, apps whose sound never "
+        "holds (bundle ids like com.apple.Music or names like Music); "
         "'check' says who is playing right now and whether speech would hold. "
         "Same verbs as `auto-speech yield` and the [sound_yield] config."
     ),
@@ -295,12 +299,12 @@ SOUND_YIELD_TOOL = {
             "action": {
                 "type": "string",
                 "enum": list(SOUND_YIELD_ACTIONS),
-                "description": "status | on | off | add | remove | clear | check",
+                "description": "status | on | off | add | remove | clear | check | hold-for | player-add | player-remove | player-reset",
             },
             "apps": {
                 "type": "array",
                 "items": {"type": "string"},
-                "description": "For add/remove: bundle ids or app names.",
+                "description": "For add/remove/player-add/player-remove: bundle ids or app names; for hold-for: [\"players\"] or [\"any\"].",
             },
         },
         "required": ["action"],

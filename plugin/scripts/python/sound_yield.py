@@ -57,6 +57,45 @@ DEFAULT_ENABLED = True
 DEFAULT_MAX_WAIT_SECONDS = 180.0
 DEFAULT_POLL_SECONDS = 0.5
 
+# Whose sound holds speech (ADR-017). "players": only apps on the players
+# list; an unknown app's open stream never holds, because Core Audio can say
+# that a process is running output but not whether that output is silent.
+# "any": every app except the exceptions (the rule before 0.6.0).
+HOLD_FOR_PLAYERS = "players"
+HOLD_FOR_ANY = "any"
+HOLD_FOR = (HOLD_FOR_PLAYERS, HOLD_FOR_ANY)
+DEFAULT_HOLD_FOR = HOLD_FOR_PLAYERS
+
+# Apps that play sound a person listens to. A bundle id matches itself and
+# its helpers ("com.google.Chrome" covers "com.google.Chrome.helper"); a bare
+# name matches a process name or a bundle id's last component.
+DEFAULT_PLAYERS = (
+    "com.apple.Music",
+    "com.apple.TV",
+    "com.apple.podcasts",
+    "com.apple.QuickTimePlayerX",
+    "com.apple.Safari",
+    "com.apple.WebKit.GPU",  # Safari and other WebKit apps play media here
+    "com.apple.FaceTime",
+    "com.spotify.client",
+    "org.videolan.vlc",
+    "com.colliderli.iina",
+    "io.mpv",
+    "mpv",
+    "afplay",
+    "ffplay",
+    "com.google.Chrome",
+    "company.thebrowser.Browser",  # Arc
+    "com.microsoft.edgemac",
+    "org.mozilla.firefox",
+    "org.mozilla.plugincontainer",  # Firefox plays media here
+    "com.brave.Browser",
+    "us.zoom.xos",
+    "com.microsoft.teams2",
+    "com.openai.chat",
+    "com.anthropic.claudefordesktop",
+)
+
 OWN_COMMAND_MARKER = "auto-speech"
 MPV_PID_PATH = state_path("auto-speech-mpv.pid")
 
@@ -90,6 +129,8 @@ class SoundYieldSettings:
 
     enabled: bool = DEFAULT_ENABLED
     exceptions: tuple[str, ...] = ()
+    hold_for: str = DEFAULT_HOLD_FOR
+    players: tuple[str, ...] = DEFAULT_PLAYERS
     max_wait_seconds: float = DEFAULT_MAX_WAIT_SECONDS
     poll_seconds: float = DEFAULT_POLL_SECONDS
     config_path: Optional[str] = None
@@ -110,19 +151,14 @@ class SoundYieldSettings:
             problems.append(f"[{SECTION}] enabled should be true or false, got {enabled!r}")
             enabled = DEFAULT_ENABLED
 
-        raw_exc = section.get("exceptions", [])
-        exceptions: list[str] = []
-        if isinstance(raw_exc, str):
-            raw_exc = [raw_exc]
-        if not isinstance(raw_exc, list):
-            problems.append(f"[{SECTION}] exceptions should be a list of app names, got {raw_exc!r}")
-            raw_exc = []
-        for item in raw_exc:
-            if not isinstance(item, str) or not item.strip():
-                problems.append(f"[{SECTION}] exceptions entry ignored: {item!r}")
-                continue
-            if _normalize_name(item) not in {_normalize_name(e) for e in exceptions}:
-                exceptions.append(item.strip())
+        exceptions = cls._name_list(section, "exceptions", [], problems)
+        players = cls._name_list(section, "players", list(DEFAULT_PLAYERS), problems)
+
+        hold_for = section.get("hold_for", DEFAULT_HOLD_FOR)
+        if not isinstance(hold_for, str) or hold_for.strip().lower() not in HOLD_FOR:
+            problems.append(f"[{SECTION}] hold_for should be {' or '.join(HOLD_FOR)}, got {hold_for!r}")
+            hold_for = DEFAULT_HOLD_FOR
+        hold_for = hold_for.strip().lower()
 
         max_wait = section.get("max_wait_seconds", DEFAULT_MAX_WAIT_SECONDS)
         if isinstance(max_wait, bool) or not isinstance(max_wait, (int, float)) or max_wait < 0:
@@ -134,7 +170,7 @@ class SoundYieldSettings:
             problems.append(f"[{SECTION}] poll_seconds should be a number > 0, got {poll!r}")
             poll = DEFAULT_POLL_SECONDS
 
-        known = {"enabled", "exceptions", "max_wait_seconds", "poll_seconds"}
+        known = {"enabled", "exceptions", "hold_for", "players", "max_wait_seconds", "poll_seconds"}
         for key in section:
             if key == "after_max_wait":
                 problems.append(
@@ -147,37 +183,78 @@ class SoundYieldSettings:
         return cls(
             enabled=enabled,
             exceptions=tuple(exceptions),
+            hold_for=hold_for,
+            players=tuple(players),
             max_wait_seconds=float(max_wait),
             poll_seconds=float(poll),
             config_path=config_path,
             problems=tuple(problems),
         )
 
+    @staticmethod
+    def _name_list(section: dict, key: str, default: list[str], problems: list[str]) -> list[str]:
+        """A list of app names from the table: one string is one entry; a bad
+        value falls back to `default` and is reported; duplicates (case-
+        insensitive) and blanks are dropped."""
+        raw = section.get(key, None)
+        if raw is None:
+            return list(default)
+        if isinstance(raw, str):
+            raw = [raw]
+        if not isinstance(raw, list):
+            problems.append(f"[{SECTION}] {key} should be a list of app names, got {raw!r}")
+            return list(default)
+        out: list[str] = []
+        seen: set[str] = set()
+        for item in raw:
+            if not isinstance(item, str) or not item.strip():
+                problems.append(f"[{SECTION}] {key} entry ignored: {item!r}")
+                continue
+            if _normalize_name(item) not in seen:
+                seen.add(_normalize_name(item))
+                out.append(item.strip())
+        return out
+
     def to_toml(self) -> str:
-        items = ", ".join(_toml_string(e) for e in self.exceptions)
+        exceptions = ", ".join(_toml_string(e) for e in self.exceptions)
+        players = ", ".join(_toml_string(e) for e in self.players)
         return (
             f"[{SECTION}]\n"
             f"enabled = {'true' if self.enabled else 'false'}\n"
-            f"exceptions = [{items}]\n"
+            f"hold_for = {_toml_string(self.hold_for)}\n"
+            f"players = [{players}]\n"
+            f"exceptions = [{exceptions}]\n"
             f"max_wait_seconds = {self.max_wait_seconds:g}\n"
             f"poll_seconds = {self.poll_seconds:g}\n"
         )
 
     def is_exception(self, proc: "AudioProcess") -> bool:
-        """True when `proc` is on the exception list, matched case-insensitively
-        by bundle id ("com.apple.Music"), by its last component ("Music"), or
-        by process name ("Music", "Spotify")."""
-        if not self.exceptions:
-            return False
-        wanted = {_normalize_name(e) for e in self.exceptions}
-        candidates = set()
-        if proc.bundle_id:
-            bid = _normalize_name(proc.bundle_id)
-            candidates.add(bid)
-            candidates.add(bid.rsplit(".", 1)[-1])
-        if proc.name:
-            candidates.add(_normalize_name(proc.name))
-        return bool(wanted & candidates)
+        """True when `proc` is on the exception list (see `_matches`)."""
+        return _matches(self.exceptions, proc)
+
+    def is_player(self, proc: "AudioProcess") -> bool:
+        """True when `proc` is on the players list (see `_matches`)."""
+        return _matches(self.players, proc)
+
+
+def _matches(entries: Iterable[str], proc: "AudioProcess") -> bool:
+    """Case-insensitive app match: an entry equals the bundle id
+    ("com.apple.Music"), or is a prefix of it at a dot ("com.google.Chrome"
+    covers "com.google.Chrome.helper"), or equals the bundle id's last
+    component ("Music"), or the process name ("Music", "afplay")."""
+    wanted = {_normalize_name(e) for e in entries if e and e.strip()}
+    if not wanted:
+        return False
+    candidates = set()
+    bid = _normalize_name(proc.bundle_id) if proc.bundle_id else ""
+    if bid:
+        candidates.add(bid)
+        candidates.add(bid.rsplit(".", 1)[-1])
+    if proc.name:
+        candidates.add(_normalize_name(proc.name))
+    if wanted & candidates:
+        return True
+    return any(bid.startswith(w + ".") for w in wanted if "." in w) if bid else False
 
 
 def _toml_string(s: str) -> str:
@@ -228,16 +305,7 @@ class SoundYieldStore:
 
     def add_exceptions(self, names: Iterable[str]) -> tuple[SoundYieldSettings, list[str]]:
         current = self.load()
-        have = {_normalize_name(e) for e in current.exceptions}
-        added: list[str] = []
-        merged = list(current.exceptions)
-        for raw in names:
-            name = str(raw).strip()
-            if not name or _normalize_name(name) in have:
-                continue
-            merged.append(name)
-            have.add(_normalize_name(name))
-            added.append(name)
+        merged, added = _merge_names(current.exceptions, names)
         return self.save(replace(current, exceptions=tuple(merged))), added
 
     def remove_exceptions(self, names: Iterable[str]) -> tuple[SoundYieldSettings, list[str]]:
@@ -251,6 +319,62 @@ class SoundYieldStore:
 
     def clear_exceptions(self) -> SoundYieldSettings:
         return self.save(replace(self.load(), exceptions=()))
+
+    def set_hold_for(self, hold_for: str) -> SoundYieldSettings:
+        value = str(hold_for).strip().lower()
+        if value not in HOLD_FOR:
+            raise ValueError(f"hold_for should be {' or '.join(HOLD_FOR)}, got {hold_for!r}")
+        return self.save(replace(self.load(), hold_for=value))
+
+    def add_players(self, names: Iterable[str]) -> tuple[SoundYieldSettings, list[str]]:
+        current = self.load()
+        merged, added = _merge_names(current.players, names)
+        return self.save(replace(current, players=tuple(merged))), added
+
+    def remove_players(self, names: Iterable[str]) -> tuple[SoundYieldSettings, list[str]]:
+        current = self.load()
+        kept, removed = _drop_names(current.players, names)
+        return self.save(replace(current, players=tuple(kept))), removed
+
+    def reset_players(self) -> SoundYieldSettings:
+        return self.save(replace(self.load(), players=DEFAULT_PLAYERS))
+
+
+def _merge_names(have_names: Iterable[str], names: Iterable[str]) -> tuple[list[str], list[str]]:
+    """Add names not already covered: a name is covered when it equals an
+    entry or an entry's last component ("Music" is covered by
+    "com.apple.Music"), case-insensitively."""
+    merged = list(have_names)
+    added: list[str] = []
+
+    def covered(name: str) -> bool:
+        key = _normalize_name(name)
+        for e in merged:
+            have = _normalize_name(e)
+            if key == have or key == have.rsplit(".", 1)[-1]:
+                return True
+        return False
+
+    for raw in names:
+        name = str(raw).strip()
+        if not name or covered(name):
+            continue
+        merged.append(name)
+        added.append(name)
+    return merged, added
+
+
+def _drop_names(have_names: Iterable[str], names: Iterable[str]) -> tuple[list[str], list[str]]:
+    """Drop entries named exactly (case-insensitive) or by a bundle id's last
+    component ("Chrome" drops "com.google.Chrome")."""
+    drop = {_normalize_name(str(n)) for n in names if str(n).strip()}
+    kept: list[str] = []
+    removed: list[str] = []
+    for e in have_names:
+        key = _normalize_name(e)
+        hit = key in drop or key.rsplit(".", 1)[-1] in drop
+        (removed if hit else kept).append(e)
+    return kept, removed
 
 
 # --------------------------------------------------------------------------
@@ -501,6 +625,7 @@ class Assessment:
     settings: SoundYieldSettings
     blockers: list[AudioProcess] = field(default_factory=list)  # other apps that hold speech
     excepted: list[AudioProcess] = field(default_factory=list)  # playing, but on the exception list
+    others: list[AudioProcess] = field(default_factory=list)  # running output, not a player: does not hold
     own: list[AudioProcess] = field(default_factory=list)  # auto-speech's own playback
     note: str = ""
 
@@ -599,6 +724,8 @@ class SoundYieldGate:
                 result.own.append(named)
             elif settings.is_exception(named):
                 result.excepted.append(named)
+            elif settings.hold_for == HOLD_FOR_PLAYERS and not settings.is_player(named):
+                result.others.append(named)
             else:
                 result.blockers.append(named)
         result.hold = bool(result.blockers)
@@ -629,7 +756,7 @@ class SoundYieldGate:
             mode=MODE_DEVICE_FALLBACK,
             settings=settings,
             blockers=[AudioProcess(pid=0, name="another app (device busy)")],
-            note=f"{reason}; exceptions cannot apply in device fallback",
+            note=f"{reason}; the players list and exceptions cannot apply in device fallback",
         )
 
     # -- waiting ------------------------------------------------------------------
@@ -716,9 +843,17 @@ def _pid_alive(pid: int) -> bool:
 def format_settings(settings: SoundYieldSettings) -> str:
     state = "ON — speech holds while another app plays sound" if settings.enabled else "OFF — speech plays over other apps' sound"
     exceptions = ", ".join(settings.exceptions) if settings.exceptions else "none"
+    players = ", ".join(settings.players) if settings.players else "none"
     where = settings.config_path or "defaults (no config file yet)"
+    rule = (
+        "players only (an unknown app's open stream never holds)"
+        if settings.hold_for == HOLD_FOR_PLAYERS
+        else "any app that plays sound, except the exceptions"
+    )
     lines = [
         f"sound yield: {state}",
+        f"holds for: {rule}",
+        f"players (apps whose sound holds speech): {players}",
         f"exceptions (apps whose sound does not hold speech): {exceptions}",
         f"longest hold: {settings.max_wait_seconds:g} s, then set aside as missed (auto-speech missed)",
         f"config: {where}",
@@ -737,7 +872,7 @@ def format_assessment(assessment: Assessment) -> str:
     if assessment.mode == MODE_UNAVAILABLE:
         lines.append(f"no audio probe available ({assessment.note}); speech would play now")
         return "\n".join(lines)
-    playing = assessment.blockers + assessment.excepted + assessment.own
+    playing = assessment.blockers + assessment.excepted + assessment.others + assessment.own
     if not playing:
         lines.append("nothing else is playing sound; speech would play now")
     else:
@@ -745,6 +880,8 @@ def format_assessment(assessment: Assessment) -> str:
             lines.append(f"playing: {p.label()} — holds speech")
         for p in assessment.excepted:
             lines.append(f"playing: {p.label()} — on the exception list, does not hold")
+        for p in assessment.others:
+            lines.append(f"playing: {p.label()} — not on the players list, does not hold")
         for p in assessment.own:
             lines.append(f"playing: {p.label()} — auto-speech's own, does not hold")
         if assessment.hold:
@@ -752,13 +889,19 @@ def format_assessment(assessment: Assessment) -> str:
         else:
             lines.append("speech would play now")
     if assessment.mode == MODE_DEVICE_FALLBACK:
-        lines.append("detection: default output device only (process list unavailable); exceptions cannot apply")
+        lines.append(
+            "detection: default output device only (process list unavailable); "
+            "the players list and exceptions cannot apply"
+        )
     else:
         lines.append("detection: Core Audio process list")
     return "\n".join(lines)
 
 
-ACTIONS = ("status", "on", "off", "add", "remove", "clear", "check")
+ACTIONS = (
+    "status", "on", "off", "add", "remove", "clear", "check",
+    "hold-for", "player-add", "player-remove", "player-reset",
+)
 
 
 @dataclass(frozen=True)
@@ -801,6 +944,25 @@ def run_action(
     if action == "clear":
         settings = store.clear_exceptions()
         return ActionResult(True, "exceptions cleared\n" + format_settings(settings))
+    if action == "hold-for":
+        if len(apps) != 1 or apps[0].lower() not in HOLD_FOR:
+            return ActionResult(False, f"yield hold-for: say {' or '.join(HOLD_FOR)}")
+        return ActionResult(True, format_settings(store.set_hold_for(apps[0])))
+    if action == "player-add":
+        if not apps:
+            return ActionResult(False, "yield player-add: name at least one app (bundle id like com.apple.Music, or name like Music)")
+        settings, added = store.add_players(apps)
+        head = f"players added: {', '.join(added)}" if added else "players added: nothing new (already on the list)"
+        return ActionResult(True, head + "\n" + format_settings(settings))
+    if action == "player-remove":
+        if not apps:
+            return ActionResult(False, "yield player-remove: name at least one app to remove")
+        settings, removed = store.remove_players(apps)
+        head = f"players removed: {', '.join(removed)}" if removed else "players removed: nothing (not on the list)"
+        return ActionResult(True, head + "\n" + format_settings(settings))
+    if action == "player-reset":
+        settings = store.reset_players()
+        return ActionResult(True, "players reset to the defaults\n" + format_settings(settings))
     # check
     gate = gate or SoundYieldGate(store=store)
     return ActionResult(True, format_assessment(gate.assess()))
