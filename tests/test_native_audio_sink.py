@@ -81,6 +81,7 @@ class TestNativeAudioSink(unittest.TestCase):
                         "--no-video",
                         "--keep-open=no",
                         "--idle=no",
+                        "--input-media-keys=no",
                         str(wav_path),
                     ],
                     stdout=subprocess.DEVNULL,
@@ -89,6 +90,29 @@ class TestNativeAudioSink(unittest.TestCase):
                 mock_proc.communicate.assert_called_once()
                 self.assertFalse(sink.was_interrupted)
                 self.assertFalse(sink.is_playing)
+            finally:
+                wav_path.unlink(missing_ok=True)
+
+    def test_mpv_never_takes_the_media_keys(self) -> None:
+        """mpv's --input-media-keys defaults to yes: while a line plays it can
+        claim macOS media keys, so an AirPods Digital Crown press meant for
+        Crown Talk's push-to-talk would pause the speech instead (the
+        Development Desk, 2026-10-19 00:5x)."""
+        wav_path = _make_silent_wav(0.05)
+        mock_proc = mock.MagicMock()
+        mock_proc.communicate.return_value = (b"", b"")
+        mock_proc.returncode = 0
+        mock_proc.poll.return_value = None
+        with (
+            mock.patch("shutil.which", return_value="/opt/homebrew/bin/mpv"),
+            mock.patch("subprocess.Popen", return_value=mock_proc) as mock_popen,
+        ):
+            try:
+                NativeAudioSink().play(wav_path, hold=False)
+                argv = mock_popen.call_args.args[0]
+                self.assertIn("--input-media-keys=no", argv)
+                self.assertNotIn("--input-media-keys=yes", argv)
+                self.assertEqual(argv[-1], str(wav_path))  # the file stays last
             finally:
                 wav_path.unlink(missing_ok=True)
 
