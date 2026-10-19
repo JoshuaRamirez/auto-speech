@@ -145,6 +145,23 @@ def test_validate_user_configs_includes_sound_yield() -> None:
         assert any("[sound_yield] enabled should be true or false" in p for p in problems)
 
 
+def test_autoplay_bypass_llm_is_a_known_key() -> None:
+    """autoplay_config reads bypass_llm (and its older name bypass_rewrite);
+    the validator must know it, or the doctor warns on a valid config
+    (doctor 2026-10-19 01:39: "[autoplay] unknown key bypass_llm (ignored)")."""
+    for key in ("bypass_llm", "bypass_rewrite"):
+        section = {"mode": "summary", "summary_size": "medium", key: False}
+        assert cv.validate_section(section, cv.AUTOPLAY_FIELDS, "autoplay") == [], key
+    problems = cv.validate_section({"bypass_llm": "yes"}, cv.AUTOPLAY_FIELDS, "autoplay")
+    assert any("bypass_llm should be true or false" in p for p in problems), problems
+    with tempfile.TemporaryDirectory() as d:
+        cfg = Path(d)
+        (cfg / "autoplay.toml").write_text(
+            '[autoplay]\nmode = "summary"\nsummary_size = "medium"\nbypass_llm = false\n', encoding="utf-8"
+        )
+        assert cv.validate_user_configs(cfg) == []
+
+
 def main() -> int:
     tests = [
         test_valid_autoplay_section_clean,
@@ -163,6 +180,7 @@ def main() -> int:
         test_speaker_names_must_be_a_table_of_strings,
         test_sound_yield_bad_values_flagged,
         test_validate_user_configs_includes_sound_yield,
+        test_autoplay_bypass_llm_is_a_known_key,
     ]
     for t in tests:
         t()
