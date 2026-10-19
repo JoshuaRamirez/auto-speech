@@ -66,6 +66,12 @@ def load_config() -> dict:
         "min_events_per_phase": int(section.get("min_events_per_phase", 1)),
         "max_queue_depth": int(section.get("max_queue_depth", 32)),
         "ollama_host": section.get("ollama_host"),
+        # Budgets that keep one line from holding the queue forever: a
+        # synthesis may take this many times the line's spoken length (floor
+        # SYNTHESIS_TIMEOUT_FLOOR_SECONDS), and a play may run the clip's
+        # length plus this margin. 0 turns a budget off.
+        "synthesis_timeout_factor": float(section.get("synthesis_timeout_factor", 3.0)),
+        "play_timeout_margin_seconds": float(section.get("play_timeout_margin_seconds", 15.0)),
     }
 
 

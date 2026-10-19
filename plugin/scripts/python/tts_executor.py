@@ -1,7 +1,9 @@
 import os
 import shutil
 import sys
+import threading
 from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import TimeoutError as FutureTimeout
 from typing import Any, Callable, TypeVar
 
 from apple_say_engine import AppleSayEngine
@@ -21,6 +23,15 @@ def get_default_tts_engine() -> Any:
     return TTSEngine()
 
 
+class SynthesisTimeout(RuntimeError):
+    """A synthesis ran past its budget. The worker that ran it is abandoned
+    (it may be stuck inside the model) and a fresh one serves the next call."""
+
+    def __init__(self, seconds: float) -> None:
+        super().__init__(f"synthesis timed out after {seconds:.0f}s")
+        self.seconds = seconds
+
+
 class TTSExecutor:
     """Single-responsibility module for TTS execution.
     
@@ -29,7 +40,13 @@ class TTSExecutor:
     def __init__(self, engine: Any | None = None, synth: ResilientSynthesizer | None = None):
         self._engine = engine if engine is not None else get_default_tts_engine()
         self._synth = synth or ResilientSynthesizer(self._engine)
-        self._executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="tts-worker")
+        self._executor = self._new_executor()
+        self._lock = threading.Lock()
+        self.abandoned = 0   # workers given up on after a timeout (diagnostics)
+
+    @staticmethod
+    def _new_executor() -> ThreadPoolExecutor:
+        return ThreadPoolExecutor(max_workers=1, thread_name_prefix="tts-worker")
         
     def ensure_loaded(self) -> None:
         """Pre-warm the model on the worker thread."""
@@ -38,12 +55,32 @@ class TTSExecutor:
             future = self._executor.submit(load_fn)
             future.result()
         
-    def submit(self, fn: Callable[..., T], *args, **kwargs) -> T:
-        """Run a function on the TTS worker thread and return the result."""
-        return self._executor.submit(fn, *args, **kwargs).result()
+    def submit(self, fn: Callable[..., T], *args, timeout: float | None = None, **kwargs) -> T:
+        """Run a function on the TTS worker thread and return the result.
+
+        With `timeout`, a call that has not returned by then raises
+        SynthesisTimeout and the worker thread is abandoned: the one worker
+        is single-lane, so a call stuck in the model would otherwise hold
+        every later call behind it (the 2026-10-19 hang: five hours silent
+        behind one synthesis). The stuck thread is left to finish or not;
+        a new worker serves the next call at once."""
+        with self._lock:
+            executor = self._executor
+        future = executor.submit(fn, *args, **kwargs)
+        try:
+            return future.result(timeout=timeout)
+        except FutureTimeout:
+            with self._lock:
+                if self._executor is executor:
+                    self._executor = self._new_executor()
+                    self.abandoned += 1
+            executor.shutdown(wait=False, cancel_futures=True)
+            raise SynthesisTimeout(float(timeout or 0.0)) from None
 
     def shutdown(self, wait: bool = True) -> None:
-        self._executor.shutdown(wait=wait)
+        with self._lock:
+            executor = self._executor
+        executor.shutdown(wait=wait)
         
     @property
     def synth(self) -> ResilientSynthesizer:

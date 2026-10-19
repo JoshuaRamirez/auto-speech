@@ -51,6 +51,15 @@ min_events_per_phase = 1
 # logged with a running total. Default 32.
 max_queue_depth = 32
 
+# Budgets that keep one line from holding the queue forever (2026-10-19: one
+# synthesis sat in the model for five hours and nothing after it was heard).
+# A synthesis may take this many times the line's spoken length, never under
+# 30 s; a play may run the clip's length plus this margin. A line past its
+# budget is set aside on the missed list (`auto-speech missed`) and the next
+# plays. 0 turns a budget off.
+synthesis_timeout_factor = 3.0
+play_timeout_margin_seconds = 15.0
+
 # Optional: override the Ollama API host. Only used when provider="ollama".
 # Defaults to AUTO_SPEECH_OLLAMA_HOST env var, then http://127.0.0.1:11434.
 # ollama_host = "http://127.0.0.1:11434"

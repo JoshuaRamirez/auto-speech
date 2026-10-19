@@ -21,7 +21,7 @@ import json
 import os
 import secrets
 import time
-from dataclasses import asdict, dataclass, field, replace
+from dataclasses import asdict, dataclass, replace
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Callable, Iterable, Optional
@@ -36,6 +36,7 @@ REASON_LONGEST_WAIT = "longest wait"
 REASON_STALE = "stale backlog"
 REASON_INTERRUPTED = "interrupted"
 REASON_RESTART = "daemon restarted"
+REASON_TIMEOUT = "timed out"
 
 ACTIONS = ("list", "play", "clear")
 
@@ -277,6 +278,8 @@ def format_lines(lines: list[MissedLine], *, now: float | None = None) -> str:
             why = f"missed: interrupted after {m.waited_seconds:.0f} s held"
         elif m.reason == REASON_RESTART:
             why = "missed: the daemon restarted while it was held"
+        elif m.reason == REASON_TIMEOUT:
+            why = "missed: timed out (its synthesis or playback ran past its budget)"
         else:
             why = "missed"
         out.append(f"  {i}. {when}  {why}")

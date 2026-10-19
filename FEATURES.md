@@ -132,8 +132,16 @@ module that owns it. Release-by-release history is in
 
 ## Diagnostics and upkeep
 - **Doctor** (`doctor.py`, `/auto-speech-doctor [json]`): binaries, venv,
-  disk, logs, daemon, queue, scope, MCP registration, config validation
+  disk, logs, daemon, queue, progress (stalled: a non-empty queue with no
+  step past its budget), scope, MCP registration, config validation
   (autoplay, narrator, sound-yield), venv-vs-lock drift.
+- **Playback cannot hang**: every synthesis runs under a budget sized to
+  the line (`synthesis_timeout_factor` × its spoken length, floor 30 s) and
+  every play under the clip's length plus `play_timeout_margin_seconds`; a
+  line past its budget is set aside on the missed list as "timed out" and
+  the worker moves on, with a stuck synthesis worker abandoned for a fresh
+  one (`tts_executor.py`). The worker stamps each step to
+  `/tmp/auto-speech-narration-progress` for the doctor.
 - **Self-update**: SessionStart bootstrap hook runs `uv sync` when
   `uv.lock` changes (`self_update.py`).
 - **Idempotent installers** for deps, plugin commands, hooks, MCP

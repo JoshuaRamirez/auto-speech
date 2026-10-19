@@ -24,6 +24,7 @@ classifies each as **OK / WARN / FAIL** (any FAIL ⇒ non-zero exit):
 | `logs` | — | a log exceeds the rotation cap (rotation lagging) |
 | `narrator` | — | stale/recycled daemon pid (reclaimed next start) |
 | `queue` | — | narration queue saturated (dropping oldest) |
+| `progress` | — | stalled: the queue is non-empty and the worker has not moved past its step's budget plus 120 s (a reading, not a gate; `auto-speech narrate stop` restarts it) |
 | `config` | — | a user config has an unknown key / bad type / bad enum |
 | `updates` | — | venv out of sync with `uv.lock` (run `bash setup/bootstrap.sh --force`) |
 | `scope`, `autoplay` | — | informational (opt-IN, ALL/SOLO, global mute) |

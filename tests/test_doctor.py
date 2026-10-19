@@ -316,14 +316,73 @@ def test_json_shape_and_exit() -> None:
             "logs",
             "narrator",
             "queue",
+            "progress",
             "scope",
             "autoplay",
             "mcp",
         }
 
 
+# --- progress: the no-progress reading (a WARN, never a FAIL) -----------------
+
+def _stamp(t: Path, at: float, event: str, expected: float | None = None, depth: int = 0) -> None:
+    (t / "auto-speech-narration-depth").write_text(str(depth))
+    (t / "auto-speech-narration-progress").write_text(
+        json.dumps({"at": at, "event": event, "depth": depth, "expected_done_at": expected})
+    )
+
+
+def test_progress_idle_queue_is_ok_even_when_old() -> None:
+    with tempfile.TemporaryDirectory() as h, tempfile.TemporaryDirectory() as t:
+        _stamp(Path(t), at=1000.0, event="done", depth=0)
+        report = _doctor(Path(h), Path(t), now=lambda: 90000.0).run()
+        assert _check(report, "progress").status is Status.OK
+
+
+def test_progress_stalled_warns_but_stays_healthy() -> None:
+    # 2026-10-19: depth 47 and the last step hours old; the doctor said HEALTHY.
+    with tempfile.TemporaryDirectory() as h, tempfile.TemporaryDirectory() as t:
+        _stamp(Path(t), at=1000.0, event="synthesizing", expected=1000.0 + 300.0, depth=47)
+        report = _doctor(Path(h), Path(t), now=lambda: 1000.0 + 5 * 3600, stall_seconds=120).run()
+        c = _check(report, "progress")
+        assert c.status is Status.WARN, c
+        assert "stalled" in c.detail and "depth=47" in c.detail and "synthesizing" in c.detail
+        assert report.healthy is True  # a reading, not a gate
+
+
+def test_progress_within_the_steps_budget_is_ok() -> None:
+    with tempfile.TemporaryDirectory() as h, tempfile.TemporaryDirectory() as t:
+        # A 10-minute clip is playing: 8 minutes in, still inside its budget.
+        _stamp(Path(t), at=1000.0, event="playing", expected=1000.0 + 600.0, depth=3)
+        report = _doctor(Path(h), Path(t), now=lambda: 1000.0 + 480.0, stall_seconds=120).run()
+        assert _check(report, "progress").status is Status.OK
+        # Budget plus the stall window passed: stalled.
+        report = _doctor(Path(h), Path(t), now=lambda: 1000.0 + 600.0 + 121.0, stall_seconds=120).run()
+        assert _check(report, "progress").status is Status.WARN
+
+
+def test_progress_fresh_step_is_ok() -> None:
+    with tempfile.TemporaryDirectory() as h, tempfile.TemporaryDirectory() as t:
+        _stamp(Path(t), at=1000.0, event="taken", depth=5)
+        report = _doctor(Path(h), Path(t), now=lambda: 1030.0, stall_seconds=120).run()
+        assert _check(report, "progress").status is Status.OK
+
+
+def test_progress_missing_stamp_with_a_queue_warns() -> None:
+    with tempfile.TemporaryDirectory() as h, tempfile.TemporaryDirectory() as t:
+        (Path(t) / "auto-speech-narration-depth").write_text("4")
+        report = _doctor(Path(h), Path(t)).run()
+        assert _check(report, "progress").status is Status.WARN
+        assert report.healthy is True
+
+
 def main() -> int:
     tests = [
+        test_progress_idle_queue_is_ok_even_when_old,
+        test_progress_stalled_warns_but_stays_healthy,
+        test_progress_within_the_steps_budget_is_ok,
+        test_progress_fresh_step_is_ok,
+        test_progress_missing_stamp_with_a_queue_warns,
         test_healthy_baseline,
         test_registered_mcp_server_ok,
         test_unregistered_mcp_server_warns,

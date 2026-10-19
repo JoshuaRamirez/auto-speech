@@ -15,6 +15,7 @@ import json
 import os
 import shutil
 import sys
+import time
 from pathlib import Path
 
 from auto_speech_log import max_bytes
@@ -68,6 +69,8 @@ class Doctor:
         lock_path: Path | None = None,
         stamp_path: Path | None = None,
         max_queue_depth: int = 32,
+        stall_seconds: float = 120.0,
+        now=time.time,
         mcp_config_path: Path | None = None,
         mcp_server_script: Path | None = None,
         which=shutil.which,
@@ -85,6 +88,8 @@ class Doctor:
         )
         self._venv_python = Path(venv_python) if venv_python is not None else _default_venv_python()
         self._max_queue_depth = max_queue_depth
+        self._stall_seconds = float(stall_seconds)
+        self._now = now
         # User-scope MCP registrations live in ~/.claude.json under "mcpServers".
         self._mcp_config_path = (
             Path(mcp_config_path) if mcp_config_path is not None else self._home / ".claude.json"
@@ -106,6 +111,7 @@ class Doctor:
         self._check_logs(r)
         self._check_daemon(r)
         self._check_queue(r)
+        self._check_progress(r)
         self._check_scope(r)
         self._check_mcp(r)
         self._check_config(r)
@@ -207,6 +213,48 @@ class Doctor:
             )
         else:
             r.add("queue", Status.OK, f"depth={depth}/{self._max_queue_depth}")
+
+    def _check_progress(self, r: HealthReport) -> None:
+        """A health reading, not a gate (WARN, never FAIL): the narrator is
+        stalled when its queue is non-empty and its worker has not moved
+        past the step's own budget plus stall_seconds. On 2026-10-19 the
+        worker stuck in one synthesis for five hours while the queue sat
+        saturated and this doctor said HEALTHY; this is the reading that
+        was missing. The stamp is read from a file, so it is true even
+        when the daemon itself no longer answers."""
+        depth_file = self._tmp / "auto-speech-narration-depth"
+        try:
+            depth = int(depth_file.read_text().strip())
+        except (OSError, ValueError):
+            depth = 0
+        stamp_file = self._tmp / "auto-speech-narration-progress"
+        try:
+            stamp = json.loads(stamp_file.read_text())
+            at = float(stamp["at"])
+            event = str(stamp.get("event", "?"))
+            expected = stamp.get("expected_done_at")
+            expected = float(expected) if expected is not None else None
+        except (OSError, ValueError, TypeError, KeyError):
+            if depth > 0:
+                r.add("progress", Status.WARN, f"queue depth={depth} but no progress stamp (narrator older than this check, or never ran)")
+            else:
+                r.add("progress", Status.OK, "idle")
+            return
+        now = float(self._now())
+        if depth <= 0:
+            r.add("progress", Status.OK, f"idle (last step '{event}' {max(0.0, now - at):.0f}s ago)")
+            return
+        deadline = max(at + self._stall_seconds, (expected or 0.0) + self._stall_seconds)
+        since = max(0.0, now - at)
+        if now > deadline:
+            r.add(
+                "progress",
+                Status.WARN,
+                f"stalled: queue depth={depth}, no progress for {since:.0f}s (stuck in '{event}'; "
+                f"budget passed {now - deadline:.0f}s ago) — restart the narrator: auto-speech narrate stop",
+            )
+        else:
+            r.add("progress", Status.OK, f"working: depth={depth}, in '{event}' for {since:.0f}s")
 
     def _check_scope(self, r: HealthReport) -> None:
         if (self._home / ".claude" / "auto-speech.disabled").exists():
