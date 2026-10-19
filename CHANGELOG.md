@@ -9,6 +9,14 @@ The Chrome extension under `chrome-extension/` is versioned independently
 
 ## [Unreleased]
 
+### Fixed
+- **auto-speech's mpv no longer claims the media keys.** mpv defaults to
+  `--input-media-keys=yes`, so while a line played it could take the macOS
+  play/pause key, and an AirPods Digital Crown press meant for Crown Talk's
+  push-to-talk paused the speech instead. The sink now starts mpv with
+  `--input-media-keys=no` (`native_audio_sink.py`; test
+  `test_mpv_never_takes_the_media_keys`).
+
 ## [0.6.0] - 2026-10-18
 
 Sound holds speech only when a player app makes it. Baseline tag `v0.5.0`;
