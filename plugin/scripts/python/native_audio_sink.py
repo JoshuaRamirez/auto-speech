@@ -173,6 +173,7 @@ class NativeAudioSink:
                         "--no-video",
                         "--keep-open=no",
                         "--idle=no",
+                        "--input-media-keys=no",  # never claim the macOS media keys (AirPods play/pause belongs to other apps)
                         str(wav_path),
                     ],
                     stdout=subprocess.DEVNULL,
