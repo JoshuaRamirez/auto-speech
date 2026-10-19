@@ -62,7 +62,7 @@ from narrator_state import (
 from narrator_summarizer import Summarizer, load_summarizer
 from sound_yield import ABORTED, DEFAULT_MAX_WAIT_SECONDS, SoundYieldGate
 from priority_arbiter import Priority, PriorityArbiter, QueueItem, QueueProxyFacade
-from unix_ipc_server import _DaemonSocketServer
+from unix_ipc_server import _DaemonSocketServer, control_payload
 from tts_executor import TTSExecutor
 from resilient_synthesizer import ResilientSynthesizer
 from tts_engine import TTSEngine
@@ -466,8 +466,14 @@ class NarratorService:
         self.enqueue_text(text)
 
     def dispatch_json(self, payload: dict[str, Any]) -> dict[str, Any]:
-        """Dispatches structured JSON socket requests (RFC §4.1)."""
-        action = payload.get("action")
+        """Dispatches structured JSON socket requests (RFC §4.1).
+
+        The control is read from "action", or from "command" when that is
+        what names a known control: a caller that writes
+        {"command":"status"} gets the status back, the same as "action".
+        """
+        control = control_payload(payload)
+        action = control["action"] if control is not None else payload.get("action")
         if action == "speak":
             text = str(payload.get("text", "")).strip()
             if not text:

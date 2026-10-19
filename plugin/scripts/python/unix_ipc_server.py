@@ -1,7 +1,9 @@
 """UNIX domain socket IPC server for AutoSpeech daemon.
 
 Provides DualWireRequestHandler supporting:
-  - Wire 1: Line-delimited structured JSON (Sublimated protocol with 'action' discriminator)
+  - Wire 1: Line-delimited structured JSON (Sublimated protocol with 'action' discriminator;
+    a 'command' key naming the same control is read the same way, so a probe such as
+    {"command":"status"} is answered, never spoken — the Desk, 2026-10-18 17:52)
   - Wire 2: Raw UTF-8 stream (Legacy protocol, terminated by EOF/SHUT_WR or newline)
 """
 
@@ -12,6 +14,32 @@ import socket
 import socketserver
 from pathlib import Path
 from typing import Any, Callable, Optional
+
+# The controls the daemon answers on Wire 1. A JSON object names one under
+# "action" (the protocol key) or "command" (what a hand-typed probe tends to
+# use); either is a control request. Anything else that starts with "{" is
+# Wire 2 text and gets spoken, which is what happened on 2026-10-18 17:51.
+CONTROLS: tuple[str, ...] = ("speak", "play_cache", "interrupt", "status")
+CONTROL_KEYS: tuple[str, ...] = ("action", "command")
+
+
+def control_payload(parsed: Any) -> Optional[dict[str, Any]]:
+    """The Wire 1 payload for `parsed`, or None when it is not a control request.
+
+    `parsed` is a control request when it is a dict whose "action" or
+    "command" value is one of CONTROLS. The result always carries the
+    control under "action" (a copy, so the caller's dict is untouched);
+    "action" wins when both keys are present and valid.
+    """
+    if not isinstance(parsed, dict):
+        return None
+    for key in CONTROL_KEYS:
+        value = parsed.get(key)
+        if isinstance(value, str) and value in CONTROLS:
+            payload = dict(parsed)
+            payload["action"] = value
+            return payload
+    return None
 
 
 class DualWireRequestHandler(socketserver.BaseRequestHandler):
@@ -56,15 +84,8 @@ class DualWireRequestHandler(socketserver.BaseRequestHandler):
                         payload = None
                         try:
                             decoded = line.decode("utf-8").strip()
-                            parsed = json.loads(decoded)
-                            if (
-                                isinstance(parsed, dict)
-                                and "action" in parsed
-                                and isinstance(parsed["action"], str)
-                                and parsed["action"] in ("speak", "play_cache", "interrupt", "status")
-                            ):
-                                is_wire1 = True
-                                payload = parsed
+                            payload = control_payload(json.loads(decoded))
+                            is_wire1 = payload is not None
                         except Exception:
                             is_wire1 = False
 
@@ -110,15 +131,8 @@ class DualWireRequestHandler(socketserver.BaseRequestHandler):
             if buffer.lstrip().startswith(b"{"):
                 try:
                     decoded = buffer.decode("utf-8").strip()
-                    parsed = json.loads(decoded)
-                    if (
-                        isinstance(parsed, dict)
-                        and "action" in parsed
-                        and isinstance(parsed["action"], str)
-                        and parsed["action"] in ("speak", "play_cache", "interrupt", "status")
-                    ):
-                        is_wire1 = True
-                        payload = parsed
+                    payload = control_payload(json.loads(decoded))
+                    is_wire1 = payload is not None
                 except Exception:
                     is_wire1 = False
 

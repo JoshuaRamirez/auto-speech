@@ -116,6 +116,7 @@ CHEAP=(
     test_missed_speech.py
     test_speak_client.py
     test_cli_dispatcher.py
+    test_ipc_command_key.py
 )
 
 # Bash-script tests for shell helpers.
