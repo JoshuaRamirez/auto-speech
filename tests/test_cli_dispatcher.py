@@ -87,7 +87,7 @@ class TestCliHelpAndRouting(BaseCliTestCase):
         with mock.patch("sys.stdout", stdout):
             rc = cli.main(["--version"])
         self.assertEqual(rc, 0)
-        self.assertIn("auto-speech 0.5.0", stdout.getvalue())
+        self.assertIn("auto-speech 0.6.0", stdout.getvalue())
 
     def test_top_level_missing_subcommand_exits_two(self) -> None:
         stderr = io.StringIO()
@@ -795,6 +795,37 @@ class TestCliYield(BaseCliTestCase):
         self.assertTrue(out.startswith("exceptions cleared"))
         self.assertIn("exceptions = []", self._cfg().read_text())
 
+    def test_yield_status_names_the_rule_and_the_players(self) -> None:
+        rc, out, _ = self._run("yield", "status")
+        self.assertEqual(rc, 0)
+        self.assertIn("holds for: players only", out)
+        self.assertIn("players (apps whose sound holds speech): com.apple.Music", out)
+
+    def test_yield_player_add_remove_reset_and_hold_for(self) -> None:
+        rc, out, _ = self._run("yield", "player-add", "com.google.antigravity", "Music")
+        self.assertEqual(rc, 0)
+        self.assertTrue(out.startswith("players added: com.google.antigravity"), out)
+        self.assertIn('"com.google.antigravity"', self._cfg().read_text())
+        rc, out, _ = self._run("yield", "player-remove", "Chrome", "nope")
+        self.assertEqual(rc, 0)
+        self.assertTrue(out.startswith("players removed: com.google.Chrome"), out)
+        rc, out, _ = self._run("yield", "player-reset")
+        self.assertEqual(rc, 0)
+        self.assertTrue(out.startswith("players reset to the defaults"), out)
+        self.assertIn('"com.google.Chrome"', self._cfg().read_text())
+        rc, out, _ = self._run("yield", "hold-for", "any")
+        self.assertEqual(rc, 0)
+        self.assertIn("holds for: any app", out)
+        self.assertIn('hold_for = "any"', self._cfg().read_text())
+        rc, _, err = self._run("yield", "hold-for", "sometimes")
+        self.assertEqual(rc, cli.EXIT_INVALID_INPUT)
+        self.assertIn("players or any", err)
+
+    def test_yield_player_add_without_apps_is_a_usage_error(self) -> None:
+        rc, _, err = self._run("yield", "player-add")
+        self.assertEqual(rc, 2)
+        self.assertIn("required: apps", err)
+
     def test_yield_add_without_apps_is_a_usage_error(self) -> None:
         rc, _, err = self._run("yield", "add")
         self.assertEqual(rc, 2)
@@ -830,7 +861,7 @@ class TestCliYield(BaseCliTestCase):
         self._run("yield", "off")
         self._run("yield", "add", "Music")
         data = tomllib.loads(self._cfg().read_text())["sound_yield"]
-        self.assertEqual(set(data), {"enabled", "exceptions", "max_wait_seconds", "poll_seconds"})
+        self.assertEqual(set(data), {"enabled", "hold_for", "players", "exceptions", "max_wait_seconds", "poll_seconds"})
         self.assertEqual(data["enabled"], False)
         self.assertEqual(data["exceptions"], ["Music"])
 

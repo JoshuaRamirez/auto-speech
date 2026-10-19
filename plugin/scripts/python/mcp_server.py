@@ -57,7 +57,7 @@ from speaker import ACTIONS as SPEAKER_ACTIONS, run_action as run_speaker_action
 from transcript_locator import TranscriptLocator
 
 SERVER_NAME = "auto-speech"
-SERVER_VERSION = "0.5.0"
+SERVER_VERSION = "0.6.0"
 SUPPORTED_PROTOCOLS = ("2025-06-18", "2025-03-26", "2024-11-05")
 MAX_CHARS = 20000  # matches web_server's /api/synthesize cap
 

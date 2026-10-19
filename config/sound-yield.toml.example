@@ -11,8 +11,30 @@
 # false: speech plays over whatever else is playing.
 enabled = true
 
-# Apps whose sound does NOT hold speech: bundle ids ("com.apple.Music")
-# or names ("Music", "Spotify"), matched case-insensitively.
+# Whose sound holds speech (ADR-017). "players": only apps on the players
+# list below; an unknown app's open stream never holds, because Core
+# Audio can say that an app is running output but not whether that output
+# is silent (an editor's helper once held every line for an afternoon).
+# "any": every app except the exceptions, the rule before 0.6.0.
+hold_for = "players"
+
+# The players: apps that play sound a person listens to. A bundle id
+# covers its helpers ("com.google.Chrome" covers "com.google.Chrome.helper");
+# a bare name matches a process name or a bundle id's last component.
+# Leave the key out to keep the built-in defaults; `auto-speech yield
+# player-add|player-remove|player-reset` edit them and write the full list.
+players = [
+  "com.apple.Music", "com.apple.TV", "com.apple.podcasts", "com.apple.QuickTimePlayerX",
+  "com.apple.Safari", "com.apple.WebKit.GPU", "com.apple.FaceTime",
+  "com.spotify.client", "org.videolan.vlc", "com.colliderli.iina", "io.mpv", "mpv", "afplay", "ffplay",
+  "com.google.Chrome", "company.thebrowser.Browser", "com.microsoft.edgemac",
+  "org.mozilla.firefox", "org.mozilla.plugincontainer", "com.brave.Browser",
+  "us.zoom.xos", "com.microsoft.teams2", "com.openai.chat", "com.anthropic.claudefordesktop",
+]
+
+# Apps whose sound does NOT hold speech, even when they are players:
+# bundle ids ("com.apple.Music") or names ("Music", "Spotify"), matched
+# case-insensitively; a bundle id covers its helpers.
 exceptions = []
 
 # Longest a held speech waits for the other sound to stop, in seconds,
