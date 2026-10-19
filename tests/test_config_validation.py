@@ -99,6 +99,18 @@ def test_validate_user_configs_aggregates() -> None:
         assert any("max_queue_depth must be >= 1" in p for p in problems)
 
 
+def test_valid_speaker_section_clean() -> None:
+    section = {"enabled": True, "quiet_gap_seconds": 900, "agents_dir": "~/x/Agents", "names": {"sess": "Side Desk"}}
+    assert cv.validate_section(section, cv.SPEAKER_FIELDS, "speaker") == []
+
+
+def test_speaker_names_must_be_a_table_of_strings() -> None:
+    problems = cv.validate_section({"names": {"sess": 3}}, cv.SPEAKER_FIELDS, "speaker")
+    assert len(problems) == 1 and "table of string = string" in problems[0]
+    problems = cv.validate_section({"names": ["a"], "quiet_gap_seconds": -1}, cv.SPEAKER_FIELDS, "speaker")
+    assert len(problems) == 2
+
+
 def test_valid_sound_yield_section_clean() -> None:
     section = {
         "enabled": True,
@@ -140,6 +152,8 @@ def main() -> int:
         test_toml_file_malformed_is_one_problem,
         test_validate_user_configs_aggregates,
         test_valid_sound_yield_section_clean,
+        test_valid_speaker_section_clean,
+        test_speaker_names_must_be_a_table_of_strings,
         test_sound_yield_bad_values_flagged,
         test_validate_user_configs_includes_sound_yield,
     ]

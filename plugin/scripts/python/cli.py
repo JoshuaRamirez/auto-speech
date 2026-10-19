@@ -27,6 +27,7 @@ from narrator_config import load_config as load_narrator_config
 from self_update import needs_sync
 from missed_speech import run_action as run_missed_action
 from sound_yield import run_action as run_sound_yield_action
+from speaker import run_action as run_speaker_action
 from speak import send_speech_request
 
 EXIT_OK = 0
@@ -96,6 +97,9 @@ def handle_speak(
     client: Any | None = None,
     sink: Any | None = None,
 ) -> int:
+    # The daemon names the desk only when the speaker changes (ADR-016), so
+    # every line carries its session: the flag, else the Claude Code shell's.
+    session_id = args.session_id or _env_session_id()
     gate = AutoplayGate()
     if gate.worker_gated_off():
         print(
@@ -145,8 +149,8 @@ def handle_speak(
                     return EXIT_FAILURE
 
             cache_kwargs: dict[str, Any] = {}
-            if args.session_id is not None:
-                cache_kwargs["session_id"] = args.session_id
+            if session_id is not None:
+                cache_kwargs["session_id"] = session_id
             if args.priority != int(Priority.EXPLICIT_MCP):
                 cache_kwargs["priority"] = args.priority
 
@@ -177,7 +181,7 @@ def handle_speak(
             text,
             priority=Priority(args.priority),
             source_hash=args.source_hash,
-            session_id=args.session_id,
+            session_id=session_id,
             voice_id=args.voice if args.voice != "system" else "system",
             speed=args.speed,
         )
@@ -190,8 +194,8 @@ def handle_speak(
             kwargs["socket_path"] = args.socket_path
         if args.source_hash is not None:
             kwargs["source_hash"] = args.source_hash
-        if args.session_id is not None:
-            kwargs["session_id"] = args.session_id
+        if session_id is not None:
+            kwargs["session_id"] = session_id
         if args.priority != int(Priority.EXPLICIT_MCP):
             kwargs["priority"] = args.priority
         rc = send_speech_request(text, **kwargs)
@@ -645,6 +649,30 @@ def handle_yield(args: argparse.Namespace, store: Any | None = None, gate: Any |
     return EXIT_OK
 
 
+def _env_session_id() -> str | None:
+    return os.environ.get("CLAUDE_CODE_SESSION_ID") or os.environ.get("CLAUDE_SESSION_ID") or None
+
+
+def handle_speaker(args: argparse.Namespace, store: Any | None = None, names: Any | None = None) -> int:
+    """`auto-speech speaker <status|on|off|gap|name|forget|who>`: the desk is
+    named only when the speaker changes (same verbs as the MCP tool `speaker`)."""
+    action = getattr(args, "speaker_action", None) or "status"
+    name_words = getattr(args, "name", None) or []
+    result = run_speaker_action(
+        action,
+        seconds=getattr(args, "seconds", None),
+        session_id=getattr(args, "session_id", None) or _env_session_id(),
+        name=" ".join(name_words) if isinstance(name_words, list) else name_words,
+        store=store,
+        names=names,
+    )
+    if not result.ok:
+        print(result.text, file=sys.stderr)
+        return EXIT_INVALID_INPUT
+    print(result.text)
+    return EXIT_OK
+
+
 def handle_missed(args: argparse.Namespace, client: Any | None = None, missed: Any | None = None) -> int:
     """`auto-speech missed [--play | --clear]`: the lines held or set aside
     while another app played sound (same verbs as the MCP tool `missed`)."""
@@ -842,7 +870,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--version",
         action="version",
-        version="auto-speech 0.4.0",
+        version="auto-speech 0.5.0",
     )
     subparsers = parser.add_subparsers(
         dest="subcommand",
@@ -1050,6 +1078,24 @@ def build_parser() -> argparse.ArgumentParser:
     md_mode.add_argument("--play", action="store_true", help="Replay the missed lines, oldest first, over any other sound.")
     md_mode.add_argument("--clear", action="store_true", help="Forget every line on the missed list.")
 
+    p_sp = subparsers.add_parser(
+        "speaker",
+        help="Name the desk ('Master Desk here,') only when the speaker changes or after a quiet gap.",
+    )
+    sub_sp = p_sp.add_subparsers(dest="speaker_action", metavar="<action>")
+    sub_sp.add_parser("status", help="Show the switch, the quiet gap and how many desks are known.")
+    sub_sp.add_parser("on", help="Name the desk when the speaker changes (default).")
+    sub_sp.add_parser("off", help="Never name the desk.")
+    p_sp_gap = sub_sp.add_parser("gap", help="Set the quiet gap after which the same desk names itself again.")
+    p_sp_gap.add_argument("seconds", type=float, help="Seconds (900 = 15 minutes).")
+    p_sp_name = sub_sp.add_parser("name", help="Name a session yourself (wins over the agent notes).")
+    p_sp_name.add_argument("session_id", help="The Claude Code session id.")
+    p_sp_name.add_argument("name", nargs="+", help="What to say for it.")
+    p_sp_forget = sub_sp.add_parser("forget", help="Drop a name set with 'name'.")
+    p_sp_forget.add_argument("session_id", help="The Claude Code session id.")
+    p_sp_who = sub_sp.add_parser("who", help="Say what a session would be announced as.")
+    p_sp_who.add_argument("session_id", nargs="?", default=None, help="Defaults to this shell's session.")
+
     # 9. hook
     p_hk = subparsers.add_parser("hook", help="Lifecycle hook execution.")
     sub_hk = p_hk.add_subparsers(dest="hook_action", metavar="<action>")
@@ -1131,6 +1177,8 @@ def main(
             return handle_yield(args)
         elif args.subcommand == "missed":
             return handle_missed(args, client=client)
+        elif args.subcommand == "speaker":
+            return handle_speaker(args)
         elif args.subcommand == "hook":
             return handle_hook(args)
         elif args.subcommand == "doctor":
