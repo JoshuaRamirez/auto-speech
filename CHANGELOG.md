@@ -9,6 +9,15 @@ The Chrome extension under `chrome-extension/` is versioned independently
 
 ## [Unreleased]
 
+### Fixed
+
+- A JSON line on the daemon socket whose `command` key names a known control
+  (`status`, `speak`, `play_cache`, `interrupt`) is answered the same as
+  `action`. Before, `{"command":"status"}` fell through to the legacy text
+  wire and was spoken aloud (2026-10-18 17:51). `unix_ipc_server.control_payload()`
+  reads either key; `tests/test_ipc_command_key.py` replays the line through a
+  real server on a private socket.
+
 ## [0.4.0] - 2026-10-18
 
 Nothing held is ever dropped: a missed list you can read, replay and clear
