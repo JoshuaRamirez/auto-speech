@@ -45,11 +45,12 @@ from missed_speech import (
     REASON_LONGEST_WAIT,
     REASON_RESTART,
     REASON_STALE,
+    REASON_TIMEOUT,
     MissedLine,
     MissedList,
     new_id,
 )
-from native_audio_sink import NativeAudioSink, PlaybackYielded
+from native_audio_sink import NativeAudioSink, PlaybackError, PlaybackYielded
 from narrator_config import load_config
 from narrator_phase_classifier import Category, Phase, PhaseClassifier
 from narrator_state import (
@@ -65,7 +66,7 @@ from sound_yield import ABORTED, DEFAULT_MAX_WAIT_SECONDS, SoundYieldGate
 from priority_arbiter import Priority, PriorityArbiter, QueueItem, QueueProxyFacade
 from speaker import Announcer, Plan
 from unix_ipc_server import _DaemonSocketServer, control_payload
-from tts_executor import TTSExecutor
+from tts_executor import SynthesisTimeout, TTSExecutor
 from resilient_synthesizer import ResilientSynthesizer
 from tts_engine import TTSEngine
 from voice_profile import VoiceProfile
@@ -75,6 +76,10 @@ EVENTS_LOG = state_path("auto-speech-narrator-events.jsonl")
 PID_FILE = state_path("auto-speech-narrator-daemon.pid")
 LOG_FILE = state_path("auto-speech-narrator-daemon.log")
 DEPTH_FILE = state_path("auto-speech-narration-depth")
+# The worker's last step, for the doctor: {"at", "event", "depth", "expected_done_at"}.
+# A queue that is non-empty while this stands still is a stalled narrator.
+PROGRESS_FILE = state_path("auto-speech-narration-progress")
+SYNTHESIS_TIMEOUT_FLOOR_SECONDS = 30.0
 WATERMARK_FILE = state_path("auto-speech-narrator-daemon.watermark")
 DEFAULT_SOCKET_PATH = state_path("auto-speech-daemon.sock")
 SOCKET_FILE = Path(os.environ.get("AUTO_SPEECH_DAEMON_SOCK", str(DEFAULT_SOCKET_PATH)))
@@ -968,6 +973,62 @@ class NarratorService:
         except OSError:
             pass
 
+    def _progress(self, event: str, *, expect: float = 0.0) -> None:
+        """Stamp the worker's step. `expect` is how long this step may run
+        at most (its budget), so a long clip is not read as a stall."""
+        now = time.time()
+        stamp = {
+            "at": now,
+            "event": event,
+            "depth": self._tts_queue.qsize() if hasattr(self, "_tts_queue") else 0,
+            "expected_done_at": now + expect if expect > 0 else None,
+        }
+        try:
+            PROGRESS_FILE.write_text(json.dumps(stamp))
+        except OSError:
+            pass
+
+    def _synthesis_timeout(self, text: str, profile: Optional[VoiceProfile]) -> Optional[float]:
+        """The budget for one synthesis: the line's spoken length times
+        synthesis_timeout_factor, never under the floor; None when off."""
+        factor = float(self._config.get("synthesis_timeout_factor", 3.0)) if isinstance(getattr(self, "_config", None), dict) else 3.0
+        if factor <= 0:
+            return None
+        try:
+            cps = float(getattr(profile, "chars_per_second", 0.0) or 0.0)
+        except (TypeError, ValueError):   # a test's mock profile
+            cps = 0.0
+        if cps <= 0:
+            cps = FALLBACK_CHARS_PER_SEC
+        spoken = len(text) / cps
+        return max(SYNTHESIS_TIMEOUT_FLOOR_SECONDS, spoken * factor)
+
+    def _submit_synthesis(self, synth: Any, text: str, profile: Any, out: Path, budget: Optional[float]) -> bool:
+        """Run one synthesis on the executor, under its budget when the
+        executor takes one (TTSExecutor); a test's executor may not."""
+        submit = self._tts_executor.submit
+        takes = getattr(self, "_executor_takes_timeout", None)
+        if takes is None:
+            try:
+                takes = "timeout" in inspect.signature(submit).parameters
+            except (TypeError, ValueError):
+                takes = False
+            self._executor_takes_timeout = takes
+        if takes and budget is not None:
+            return submit(synth.synthesize_one, text, profile, out, timeout=budget)
+        return submit(synth.synthesize_one, text, profile, out)
+
+    def _play_timeout(self, path: Path) -> Optional[float]:
+        """The budget for one play: the clip's length plus
+        play_timeout_margin_seconds; None when off or the length is unknown."""
+        margin = float(self._config.get("play_timeout_margin_seconds", 15.0)) if isinstance(getattr(self, "_config", None), dict) else 15.0
+        if margin <= 0:
+            return None
+        duration = _wav_duration_seconds(path)
+        if duration <= 0:
+            return None
+        return duration + margin
+
     def _get_summarizer(self) -> Summarizer:
         lock = getattr(self, "_summarizer_lock", None)
         if lock is None:
@@ -1020,10 +1081,12 @@ class NarratorService:
                     self._active_priority = None
                     self._active_item = None
 
+            self._progress("idle")
             phase = self._tts_queue.get()
             if phase is None:
                 _log("tts_worker received sentinel; stopping")
                 return
+            self._progress("taken")
 
             arbiter = getattr(self, "_priority_arbiter", None)
             item_p = getattr(arbiter, "active_priority", Priority.TOOL_NARRATION) if arbiter else Priority.TOOL_NARRATION
@@ -1128,6 +1191,7 @@ class NarratorService:
                 if not is_preempted:
                     self._tts_queue.task_done()
                 self._update_depth(self._tts_queue.qsize())
+                self._progress("done")
                 if state_lock:
                     with state_lock:
                         self._engine_state = "IDLE"
@@ -1217,21 +1281,27 @@ class NarratorService:
         except Exception as exc:  # noqa: BLE001
             _log(f"missed list write error: {exc!r}")
 
-    def _sink_play(self, path: Path, **hold_kwargs: Any) -> None:
+    def _sink_play(self, path: Path, timeout: Optional[float] = None, **hold_kwargs: Any) -> None:
         """sink.play with the hold keywords when the sink knows them
-        (NativeAudioSink); a plain play(path) for a sink that does not."""
+        (NativeAudioSink), and the play budget when it knows that; a plain
+        play(path) for a sink that knows neither."""
         play = self._sink.play
         takes = getattr(self, "_sink_takes_hold_kwargs", None)
         if takes is None:
             try:
-                takes = "on_hold" in inspect.signature(play).parameters
+                params = inspect.signature(play).parameters
+                takes = ("on_hold" in params, "timeout" in params)
             except (TypeError, ValueError):
-                takes = False
+                takes = (False, False)
             self._sink_takes_hold_kwargs = takes
-        if takes:
-            play(path, **hold_kwargs)
-        else:
-            play(path)
+        if isinstance(takes, bool):   # an older test set the flag by hand
+            takes = (takes, False)
+        kwargs: dict[str, Any] = {}
+        if takes[0]:
+            kwargs.update(hold_kwargs)
+        if takes[1] and timeout is not None:
+            kwargs["timeout"] = timeout
+        play(path, **kwargs)
 
     def _play_item(self, path: Path, item: Optional[QueueItem], *, text: str) -> bool:
         """Play through the sink with the missed-list bookkeeping around the
@@ -1255,8 +1325,17 @@ class NarratorService:
             except Exception as exc:  # noqa: BLE001
                 _log(f"missed list write error: {exc!r}")
 
+        budget = self._play_timeout(path)
+        self._progress("playing", expect=(budget or 0.0) + self._max_wait_seconds())
         try:
-            self._sink_play(path, hold=hold, already_waited=age, on_hold=on_hold)
+            self._sink_play(path, hold=hold, already_waited=age, on_hold=on_hold, timeout=budget)
+        except PlaybackError as exc:
+            if "timed out" not in str(exc):
+                raise
+            # mpv was killed by the sink; the line is set aside and the worker moves on.
+            self._set_aside(text, item, reason=REASON_TIMEOUT, waited=age, existing=held.get("line"))
+            _log(f"missed: {exc}; playback abandoned, set aside: {name!r}")
+            return False
         except PlaybackYielded as exc:
             outcome = exc.outcome
             self._note_hold_ended(outcome)
@@ -1458,12 +1537,18 @@ class NarratorService:
                 _log("synthesis skipped: interrupted or preempted prior to start")
                 return
 
+            budget = self._synthesis_timeout(spoken_line, profile)
+            self._progress("synthesizing", expect=budget or 0.0)
             if hasattr(self, "_tts_executor") and self._tts_executor is not None:
                 synth = getattr(self._tts_executor, "synth", getattr(self, "_synth", None))
                 if synth is not None and hasattr(self._tts_executor, "submit"):
-                    has_audio = self._tts_executor.submit(
-                        synth.synthesize_one, spoken_line, profile, temp_wav
-                    )
+                    try:
+                        has_audio = self._submit_synthesis(synth, spoken_line, profile, temp_wav, budget)
+                    except SynthesisTimeout as exc:
+                        # The line is set aside for him to replay; the worker moves on.
+                        self._set_aside(line, item, reason=REASON_TIMEOUT)
+                        _log(f"missed: {exc}; synthesis abandoned, set aside: {line[:50]!r}")
+                        return
                 elif synth is not None:
                     has_audio = synth.synthesize_one(spoken_line, profile, temp_wav)
                 else:
