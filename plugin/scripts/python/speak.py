@@ -147,6 +147,10 @@ def main(
         help="queue priority (1=DIRECT_OVERRIDE, 2=EXPLICIT_MCP, 3=AUTOPLAY)",
     )
     args = p.parse_args(argv)
+    if args.session_id is None:
+        # Every line carries its session so the daemon can name the desk
+        # only when the speaker changes (ADR-016).
+        args.session_id = os.environ.get("CLAUDE_CODE_SESSION_ID") or os.environ.get("CLAUDE_SESSION_ID") or None
 
     if args.source_hash is not None:
         sh = args.source_hash.strip().lower()

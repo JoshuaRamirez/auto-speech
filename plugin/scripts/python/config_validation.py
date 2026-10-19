@@ -17,7 +17,7 @@ from pathlib import Path
 @dataclass(frozen=True)
 class Field:
     name: str
-    kind: str  # "str" | "int" | "number" | "enum" | "bool" | "str_list"
+    kind: str  # "str" | "int" | "number" | "enum" | "bool" | "str_list" | "str_map"
     allowed: tuple = ()  # for kind == "enum"
     minimum: float | None = None  # inclusive lower bound for numeric kinds
 
@@ -50,6 +50,15 @@ SOUND_YIELD_FIELDS = (
     Field("exceptions", "str_list"),
     Field("max_wait_seconds", "number", minimum=0),
     Field("poll_seconds", "number", minimum=0),
+)
+
+
+# Mirrors the keys read by speaker.SpeakerSettings.from_mapping.
+SPEAKER_FIELDS = (
+    Field("enabled", "bool"),
+    Field("quiet_gap_seconds", "number", minimum=0),
+    Field("agents_dir", "str"),
+    Field("names", "str_map"),
 )
 
 
@@ -102,6 +111,10 @@ def validate_section(section: dict, fields: tuple[Field, ...], section_name: str
             not isinstance(val, list) or any(not isinstance(x, str) for x in val)
         ):
             problems.append(f"[{section_name}] {f.name} should be a list of strings, got {val!r}")
+        elif f.kind == "str_map" and (
+            not isinstance(val, dict) or any(not isinstance(x, str) for x in val.values())
+        ):
+            problems.append(f"[{section_name}] {f.name} should be a table of string = string, got {val!r}")
 
     return problems
 
@@ -124,9 +137,10 @@ def validate_toml_file(path: Path, section_name: str, fields: tuple[Field, ...])
 
 
 def validate_user_configs(config_dir: Path) -> list[str]:
-    """All problems across the user's autoplay.toml, narrator.toml and sound-yield.toml."""
+    """All problems across the user's autoplay.toml, narrator.toml, sound-yield.toml and speaker.toml."""
     problems: list[str] = []
     problems += validate_toml_file(config_dir / "autoplay.toml", "autoplay", AUTOPLAY_FIELDS)
     problems += validate_toml_file(config_dir / "narrator.toml", "narrator", NARRATOR_FIELDS)
     problems += validate_toml_file(config_dir / "sound-yield.toml", "sound_yield", SOUND_YIELD_FIELDS)
+    problems += validate_toml_file(config_dir / "speaker.toml", "speaker", SPEAKER_FIELDS)
     return problems

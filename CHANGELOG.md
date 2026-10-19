@@ -9,6 +9,43 @@ The Chrome extension under `chrome-extension/` is versioned independently
 
 ## [Unreleased]
 
+## [0.5.0] - 2026-10-18
+
+The desk is named only when the speaker changes. Baseline tag `v0.4.0`;
+commits `e0973ff` (tests first), `b4658a0` (speaker module and daemon),
+`23218d8` (CLI, MCP, config) plus this release-notes commit, landed on
+`main` by a `--no-ff` merge of `feat/speaker-change`; `tests/run_all.sh`:
+55 test files ran, 0 failed, under the isolated runner with the caller's
+Claude Code session cleared. Release notes:
+[docs/releases/v0.5.0.md](docs/releases/v0.5.0.md).
+
+### Added
+- **Name the desk only when the speaker changes** (ADR-016). A line opens
+  with "<desk> here," only when the session speaking differs from the last
+  one heard, or when the last line was heard more than the quiet gap ago
+  (15 minutes by default). Names come from the desk agents' notes
+  (`session:` → `name:`, else the note's file name); a personal note is
+  never read into the map; `[speaker.names]` names a session by hand and
+  wins; a session no note names is announced as "Another desk". A line
+  that already opens with its own name is not doubled. Only a line that
+  was heard moves the speaker: a line held and set aside (ADR-015) does
+  not. Cached audio (a cache hit, a `play_cache` replay) gets the name as
+  a short "<name> here." clip, synthesized once per name under the state
+  dir, played just before it. `auto-speech speaker status | on | off |
+  gap <seconds> | name <session> <name> | forget <session> | who
+  [session]`, MCP tool `speaker` (same actions), slash command
+  `/auto-speech-speaker` (extras), `~/.config/auto-speech/speaker.toml`
+  (`config/speaker.toml.example`), re-read when it changes. The daemon
+  `status` reply carries `speaker` (`speaker.py`).
+- **Every speak path carries its session.** The CLI `speak` and the
+  standalone `speak.py` default `--session-id` from the shell's
+  `CLAUDE_CODE_SESSION_ID`; the MCP `speak` tool takes an optional
+  `session_id` and otherwise uses the session that launched the server;
+  `playback_control` replays carry it; narration lines carry the session
+  of their hook events.
+- `config_validation` knows `[speaker]` (`names` is a table of string =
+  string); `auto-speech doctor` reports its problems.
+
 ### Fixed
 
 - A JSON line on the daemon socket whose `command` key names a known control
