@@ -53,10 +53,11 @@ from message_selector import MessageSelector
 from mpv_ipc import MpvIpc
 from missed_speech import ACTIONS as MISSED_ACTIONS, run_action as run_missed_action
 from sound_yield import ACTIONS as SOUND_YIELD_ACTIONS, run_action as run_sound_yield_action
+from speaker import ACTIONS as SPEAKER_ACTIONS, run_action as run_speaker_action
 from transcript_locator import TranscriptLocator
 
 SERVER_NAME = "auto-speech"
-SERVER_VERSION = "0.4.0"
+SERVER_VERSION = "0.5.0"
 SUPPORTED_PROTOCOLS = ("2025-06-18", "2025-03-26", "2024-11-05")
 MAX_CHARS = 20000  # matches web_server's /api/synthesize cap
 
@@ -92,7 +93,14 @@ SPEAK_TOOL = {
             "text": {
                 "type": "string",
                 "description": f"The words to say (1-{MAX_CHARS} characters).",
-            }
+            },
+            "session_id": {
+                "type": "string",
+                "description": (
+                    "The Claude Code session speaking (defaults to CLAUDE_CODE_SESSION_ID). "
+                    "The daemon names the desk only when the speaker changes."
+                ),
+            },
         },
         "required": ["text"],
         "additionalProperties": False,
@@ -113,6 +121,13 @@ AUTOPLAY_TURN_TOOL = {
             "session_id": {
                 "type": "string",
                 "description": "Optional session ID. If omitted, resolved from environment or newest session.",
+            },
+            "session_id": {
+                "type": "string",
+                "description": (
+                    "The Claude Code session speaking (defaults to CLAUDE_CODE_SESSION_ID). "
+                    "The daemon names the desk only when the speaker changes."
+                ),
             },
             "transcript_path": {
                 "type": "string",
@@ -319,6 +334,39 @@ MISSED_TOOL = {
     },
 }
 
+SPEAKER_TOOL = {
+    "name": "speaker",
+    "title": "Name the desk only when the speaker changes",
+    "description": (
+        "Speech opens with '<desk> here,' only when the session speaking "
+        "differs from the last one heard, or after a quiet gap (15 minutes "
+        "by default). Names come from the desk agents' notes; a line that "
+        "already opens with its own name is not doubled. 'status' shows the "
+        "switch, the gap and how many desks are known; 'on'/'off' switch it; "
+        "'gap' sets the quiet gap in seconds; 'name' says what to call a "
+        "session (wins over the notes); 'forget' drops that; 'who' says what "
+        "a session would be announced as. Same verbs as `auto-speech speaker` "
+        "and the [speaker] config."
+    ),
+    "inputSchema": {
+        "type": "object",
+        "properties": {
+            "action": {
+                "type": "string",
+                "enum": list(SPEAKER_ACTIONS),
+                "description": "status | on | off | gap | name | forget | who (default status)",
+            },
+            "seconds": {"type": "number", "description": "For gap: the quiet gap in seconds."},
+            "session_id": {
+                "type": "string",
+                "description": "For name/forget/who: the session (who defaults to this server's own).",
+            },
+            "name": {"type": "string", "description": "For name: what to say for the session."},
+        },
+        "additionalProperties": False,
+    },
+}
+
 DOCTOR_TOOL = {
     "name": "doctor",
     "title": "Run system health checks and diagnostics",
@@ -353,6 +401,7 @@ ALL_TOOLS = [
     SESSION_CONFIGURE_TOOL,
     SOUND_YIELD_TOOL,
     MISSED_TOOL,
+    SPEAKER_TOOL,
     DOCTOR_TOOL,
 ]
 
@@ -420,6 +469,8 @@ class McpServer:
         sound_yield_store=None,
         sound_yield_gate=None,
         missed_list=None,
+        speaker_store=None,
+        speaker_names=None,
     ) -> None:
         self._home = Path(home) if home is not None else Path(os.path.expanduser("~"))
         self._spawn = spawner
@@ -461,6 +512,8 @@ class McpServer:
         self._sound_yield_store = sound_yield_store
         self._sound_yield_gate = sound_yield_gate
         self._missed_list = missed_list
+        self._speaker_store = speaker_store
+        self._speaker_names = speaker_names
 
     def _is_mpv_socket_alive(self) -> bool:
         if self._is_mpv_alive_fn is not None:
@@ -541,6 +594,7 @@ class McpServer:
             "session_configure": self._call_session_configure,
             "sound_yield": self._call_sound_yield,
             "missed": self._call_missed,
+            "speaker": self._call_speaker,
             "doctor": self._call_doctor,
         }
 
@@ -569,13 +623,17 @@ class McpServer:
                     is_error=True,
                 ),
             )
+        session_id = args.get("session_id")
+        if session_id is not None and (not isinstance(session_id, str) or not session_id.strip()):
+            return _ok(req_id, _tool_result("session_id must be a non-empty string", is_error=True))
+        session_id = session_id or self._own_session_id()
         try:
             if self._spawn is not None:
                 self._spawn(text)
             else:
                 client = self._client or DaemonClient()
                 try:
-                    resp = client.speak(text, priority=Priority.EXPLICIT_MCP)
+                    resp = client.speak(text, priority=Priority.EXPLICIT_MCP, session_id=session_id)
                     if resp.status == "error":
                         spawn_say_worker(text)
                 except ConnectionError:
@@ -1040,7 +1098,7 @@ class McpServer:
             _wav_path, entry = entries[ordinal - 1]
             client = self._client or DaemonClient()
             try:
-                resp = client.play_cache(entry.source_hash)
+                resp = client.play_cache(entry.source_hash, session_id=self._own_session_id())
                 if resp.status not in ("ok", "queued"):
                     return _ok(
                         req_id,
@@ -1353,6 +1411,43 @@ class McpServer:
             result = run_missed_action(action, missed=self._missed_list, client=self._client)
         except Exception as exc:  # noqa: BLE001
             return _ok(req_id, _tool_result(f"missed failed: {exc}", is_error=True))
+        return _ok(req_id, _tool_result(result.text, is_error=not result.ok))
+
+    @staticmethod
+    def _own_session_id() -> str | None:
+        """The Claude Code session this server serves, from its environment."""
+        return os.environ.get("CLAUDE_CODE_SESSION_ID") or os.environ.get("CLAUDE_SESSION_ID") or None
+
+    def _call_speaker(self, req_id: Any, args: dict) -> dict:
+        action = args.get("action", "status")
+        if not isinstance(action, str) or action.strip().lower() not in SPEAKER_ACTIONS:
+            return _ok(
+                req_id,
+                _tool_result(
+                    f"invalid action: {action!r} (expected {', '.join(SPEAKER_ACTIONS)})",
+                    is_error=True,
+                ),
+            )
+        seconds = args.get("seconds")
+        if seconds is not None and (isinstance(seconds, bool) or not isinstance(seconds, (int, float))):
+            return _ok(req_id, _tool_result("seconds must be a number", is_error=True))
+        session_id = args.get("session_id")
+        if session_id is not None and not isinstance(session_id, str):
+            return _ok(req_id, _tool_result("session_id must be a string", is_error=True))
+        name = args.get("name")
+        if name is not None and not isinstance(name, str):
+            return _ok(req_id, _tool_result("name must be a string", is_error=True))
+        try:
+            result = run_speaker_action(
+                action,
+                seconds=seconds,
+                session_id=session_id or self._own_session_id(),
+                name=name,
+                store=self._speaker_store,
+                names=self._speaker_names,
+            )
+        except Exception as exc:  # noqa: BLE001
+            return _ok(req_id, _tool_result(f"speaker failed: {exc}", is_error=True))
         return _ok(req_id, _tool_result(result.text, is_error=not result.ok))
 
     def _call_doctor(self, req_id: Any, args: dict) -> dict:
