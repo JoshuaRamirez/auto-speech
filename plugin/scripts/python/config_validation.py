@@ -43,6 +43,8 @@ NARRATOR_FIELDS = (
     Field("min_events_per_phase", "int", minimum=1),
     Field("max_queue_depth", "int", minimum=1),
     Field("ollama_host", "str"),
+    Field("synthesis_timeout_factor", "number", minimum=0),
+    Field("play_timeout_margin_seconds", "number", minimum=0),
 )
 
 

@@ -10,6 +10,21 @@ The Chrome extension under `chrome-extension/` is versioned independently
 ## [Unreleased]
 
 ### Fixed
+- **Playback cannot hang on one line.** On 2026-10-19 the narrator sat in
+  one synthesis from 09:37 to 14:49 (the log's last line was that line's
+  `speak:`), the queue stood at 47/32 dropping the oldest, and the doctor
+  still said HEALTHY. Now every synthesis runs under a budget sized to the
+  line (`synthesis_timeout_factor`, default 3× its spoken length, floor
+  30 s) and every play under the clip's length plus
+  `play_timeout_margin_seconds` (default 15): a line past its budget is
+  set aside on the missed list as "timed out" and the next plays. A stuck
+  synthesis worker is abandoned and a fresh one serves the next call
+  (`TTSExecutor.submit(timeout=)`, `SynthesisTimeout`). The worker stamps
+  each step (`taken`, `synthesizing`, `playing`, `done`, `idle`, with the
+  step's budget) to `/tmp/auto-speech-narration-progress`, and the doctor's
+  new `progress` check WARNs "stalled" when the queue is non-empty and no
+  step has moved past its budget plus 120 s: a reading, not a gate. Tests:
+  `tests/test_playback_cannot_hang.py` (8), five new in `test_doctor.py`.
 - **auto-speech's mpv no longer claims the media keys.** mpv defaults to
   `--input-media-keys=yes`, so while a line played it could take the macOS
   play/pause key, and an AirPods Digital Crown press meant for Crown Talk's

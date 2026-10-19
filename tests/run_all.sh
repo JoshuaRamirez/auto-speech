@@ -81,6 +81,7 @@ CHEAP=(
     test_state_machine.py
     test_auto_speech_log.py
     test_doctor.py
+    test_playback_cannot_hang.py
     test_config_validation.py
     test_self_update.py
     test_playback_state.py
