@@ -16,6 +16,11 @@ The Chrome extension under `chrome-extension/` is versioned independently
   push-to-talk paused the speech instead. The sink now starts mpv with
   `--input-media-keys=no` (`native_audio_sink.py`; test
   `test_mpv_never_takes_the_media_keys`).
+- **The doctor no longer warns on `[autoplay] bypass_llm`.** The key is
+  read by `autoplay_config` (as is its older name `bypass_rewrite`), but
+  the config validator did not list it, so a valid `autoplay.toml` showed
+  "unknown key bypass_llm (ignored)". Both names are now known booleans
+  (`config_validation.py`).
 
 ## [0.6.0] - 2026-10-18
 
