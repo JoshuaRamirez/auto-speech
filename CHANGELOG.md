@@ -13,7 +13,7 @@ The Chrome extension under `chrome-extension/` is versioned independently
 
 The desk is named only when the speaker changes. Baseline tag `v0.4.0`;
 commits `e0973ff` (tests first), `b4658a0` (speaker module and daemon),
-`23218d8` (CLI, MCP, config) plus this release-notes commit, landed on
+`23218d8` (CLI, MCP, config), `787ace9` (runner), `5cb95ad` (release notes) plus merge `6be53c2`, landed on
 `main` by a `--no-ff` merge of `feat/speaker-change`; `tests/run_all.sh`:
 55 test files ran, 0 failed, under the isolated runner with the caller's
 Claude Code session cleared. Release notes:
