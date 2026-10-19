@@ -98,7 +98,9 @@ Sound yield (`[sound_yield]` in `sound-yield.toml`, or
 `$AUTO_SPEECH_SOUND_YIELD_CONFIG`) has no env-var overrides; `auto-speech
 yield …` and the MCP tool `sound_yield` write the same file, and the daemon
 re-reads it on every hold poll, so no restart is needed. Keys: `enabled`
-(true), `exceptions` ([]), `max_wait_seconds` (180), `poll_seconds` (0.5).
+(true), `hold_for` (`players`; `any` for the pre-0.6.0 rule), `players` (the
+built-in list, ADR-017), `exceptions` ([]), `max_wait_seconds` (180),
+`poll_seconds` (0.5).
 `after_max_wait` (v0.3.0) is gone: nothing held is dropped any more.
 
 The missed list, the lines held or set aside while another app played
