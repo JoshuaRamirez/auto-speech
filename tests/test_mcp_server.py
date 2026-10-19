@@ -119,7 +119,7 @@ def test_ping() -> None:
     assert s.handle_line(_req("ping"))["result"] == {}
 
 
-def test_tools_list_advertises_all_eight_tools() -> None:
+def test_tools_list_advertises_all_nine_tools() -> None:
     s, _ = _server()
     tools = s.handle_line(_req("tools/list"))["result"]["tools"]
     tool_names = [t["name"] for t in tools]
@@ -131,6 +131,7 @@ def test_tools_list_advertises_all_eight_tools() -> None:
         "session_configure",
         "sound_yield",
         "missed",
+        "speaker",
         "doctor",
     ]
     assert tool_names == expected_names
@@ -254,8 +255,23 @@ def test_speak_invokes_daemon_client_directly() -> None:
     assert res["result"]["isError"] is False
     assert "Queued 16 characters" in res["result"]["content"][0]["text"]
     mock_client.speak.assert_called_once_with(
-        "hello sublimated", priority=Priority.EXPLICIT_MCP
+        "hello sublimated", priority=Priority.EXPLICIT_MCP, session_id=None
     )
+
+
+def test_speak_carries_the_session_from_the_call_or_the_environment() -> None:
+    """Every path carries its session so the daemon can name the desk only
+    when the speaker changes (his 19:06)."""
+    mock_client = MagicMock()
+    mock_client.speak.return_value = DaemonResponse(status="ok", action="speak")
+    server = McpServer(client=mock_client)
+    server.handle_line(_req("tools/call", {"name": "speak", "arguments": {"text": "hi", "session_id": "sess-arg"}}))
+    assert mock_client.speak.call_args.kwargs["session_id"] == "sess-arg"
+    with patch.dict(os.environ, {"CLAUDE_CODE_SESSION_ID": "sess-env"}):
+        server.handle_line(_req("tools/call", {"name": "speak", "arguments": {"text": "hi again"}}))
+    assert mock_client.speak.call_args.kwargs["session_id"] == "sess-env"
+    res = server.handle_line(_req("tools/call", {"name": "speak", "arguments": {"text": "hi", "session_id": " "}}))
+    assert res["result"]["isError"] is True
 
 
 def test_speak_falls_back_to_spawn_say_worker_on_connection_error() -> None:
@@ -882,7 +898,7 @@ def test_playback_control_replay_cached_audio() -> None:
     res = _call_tool(server, "playback_control", {"action": "replay", "ordinal": 1})
     assert res["result"]["isError"] is False
     assert "Replaying cached audio" in res["result"]["content"][0]["text"]
-    mock_client.play_cache.assert_called_once_with("abcd" * 16)
+    mock_client.play_cache.assert_called_once_with("abcd" * 16, session_id=None)
 
 
 def test_playback_control_replay_empty_cache_and_bounds() -> None:
@@ -1359,6 +1375,71 @@ def test_missed_clear_forgets_everything() -> None:
     assert missed.load() == []
 
 
+# Group 10: speaker
+
+
+def _speaker_server(**kwargs):
+    from speaker import DeskNames, SpeakerStore
+
+    tmp = Path(tempfile.mkdtemp(prefix="auto-speech-mcp-speaker-"))
+    agents = tmp / "Agents"
+    agents.mkdir()
+    (agents / "Desk.md").write_text(
+        '---\nname: "Master Desk"\nstate: working\nsession: sess-master\nsection: "[[Desk/AspenESS|AspenESS]]"\n---\n',
+        encoding="utf-8",
+    )
+    store = SpeakerStore(tmp / "speaker.toml")
+    srv, _ = _server(speaker_store=store, speaker_names=DeskNames(agents), **kwargs)
+    return srv, store
+
+
+def test_speaker_requires_a_known_action() -> None:
+    srv, _ = _speaker_server()
+    res = _call_tool(srv, "speaker", {"action": "shout"})
+    assert res["result"]["isError"] is True
+    assert "status, on, off, gap, name, forget, who" in res["result"]["content"][0]["text"]
+
+
+def test_speaker_status_is_the_default_and_matches_the_cli_text() -> None:
+    srv, _ = _speaker_server()
+    text = _call_tool(srv, "speaker", {})["result"]["content"][0]["text"]
+    assert text.startswith("speaker names: on\nquiet gap: 15 min")
+    assert "desks known: 1" in text
+
+
+def test_speaker_off_gap_name_forget_and_who() -> None:
+    srv, store = _speaker_server()
+    assert "speaker names: off" in _call_tool(srv, "speaker", {"action": "off"})["result"]["content"][0]["text"]
+    assert store.load().enabled is False
+    res = _call_tool(srv, "speaker", {"action": "gap", "seconds": 120})
+    assert res["result"]["isError"] is False and "quiet gap: 2 min" in res["result"]["content"][0]["text"]
+    assert store.load().quiet_gap_seconds == 120.0
+    assert _call_tool(srv, "speaker", {"action": "gap"})["result"]["isError"] is True
+    assert _call_tool(srv, "speaker", {"action": "gap", "seconds": "soon"})["result"]["isError"] is True
+    res = _call_tool(srv, "speaker", {"action": "name", "session_id": "sess-x", "name": "Side Desk"})
+    assert res["result"]["isError"] is False
+    assert dict(store.load().names) == {"sess-x": "Side Desk"}
+    who = _call_tool(srv, "speaker", {"action": "who", "session_id": "sess-x"})["result"]["content"][0]["text"]
+    assert "Side Desk" in who
+    who = _call_tool(srv, "speaker", {"action": "who", "session_id": "sess-master"})["result"]["content"][0]["text"]
+    assert "Master Desk" in who
+    res = _call_tool(srv, "speaker", {"action": "forget", "session_id": "sess-x"})
+    assert res["result"]["isError"] is False and store.load().names == ()
+    with patch.dict(os.environ, {"CLAUDE_CODE_SESSION_ID": "sess-master"}):
+        who = _call_tool(srv, "speaker", {"action": "who"})["result"]["content"][0]["text"]
+    assert "Master Desk" in who, "who defaults to the server's own session"
+
+
+def test_speaker_tool_schema() -> None:
+    s, _ = _server()
+    tools = {t["name"]: t for t in s.handle_line(_req("tools/list"))["result"]["tools"]}
+    schema = tools["speaker"]["inputSchema"]
+    assert schema["properties"]["action"]["enum"] == ["status", "on", "off", "gap", "name", "forget", "who"]
+    assert "required" not in schema
+    assert set(schema["properties"]) == {"action", "seconds", "session_id", "name"}
+    assert "session_id" in tools["speak"]["inputSchema"]["properties"]
+
+
 def test_missed_tool_schema() -> None:
     s, _ = _server()
     tools = s.handle_line(_req("tools/list"))["result"]["tools"]
@@ -1384,7 +1465,7 @@ TESTS = [
     test_initialize_unknown_protocol_falls_back_to_latest,
     test_notification_gets_no_response,
     test_ping,
-    test_tools_list_advertises_all_eight_tools,
+    test_tools_list_advertises_all_nine_tools,
     # Group 2: Backward Compatibility of speak
     test_speak_queues_text_verbatim,
     test_speak_rejects_bad_text,
@@ -1456,6 +1537,11 @@ TESTS = [
     test_missed_play_reports_an_unreachable_daemon,
     test_missed_clear_forgets_everything,
     test_missed_tool_schema,
+    test_speak_carries_the_session_from_the_call_or_the_environment,
+    test_speaker_requires_a_known_action,
+    test_speaker_status_is_the_default_and_matches_the_cli_text,
+    test_speaker_off_gap_name_forget_and_who,
+    test_speaker_tool_schema,
 ]
 
 

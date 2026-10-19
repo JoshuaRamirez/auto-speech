@@ -1206,6 +1206,137 @@ def test_dispatch_json_reads_a_command_key_like_action() -> None:
     assert svc._priority_arbiter.depths() == {"p1_interrupt": 0, "p2_mcp": 0, "p3_autoplay": 0, "p4_narration": 0}
 
 
+# -- speaker names: "<desk> here," only when who is talking changes ----------
+
+_MASTER = "aaaaaaaa-0000-4000-8000-000000000000"
+_ASPEN = "bbbbbbbb-0000-4000-8000-000000000001"
+
+
+class _Clock:
+    def __init__(self, t: float = 1_700_000_000.0) -> None:
+        self.t = t
+
+    def __call__(self) -> float:
+        return self.t
+
+
+def _speaker_service(sink=None, *, clock=None):
+    """A service whose announcer knows two desks and ticks on an injected clock."""
+    from speaker import Announcer, DeskNames, SpeakerStore
+
+    clock = clock or _Clock()
+    svc = _missed_service(sink or _MockSink())
+    svc._cache = MagicMock()
+    svc._cache.lookup.return_value = None
+    cfg = Path(tempfile.mkdtemp(prefix="auto-speech-speaker-cfg-")) / "speaker.toml"
+    agents = Path(tempfile.mkdtemp(prefix="auto-speech-agents-"))
+    svc._speaker = Announcer(
+        SpeakerStore(cfg),
+        DeskNames(agents, overrides={_MASTER: "Master Desk", _ASPEN: "Aspen Desk"}, now=clock),
+        now=clock,
+    )
+    return svc
+
+
+def _texts(svc) -> list[str]:
+    return [t for t, _ in svc._synth.synthesized]
+
+
+def test_speaker_change_is_announced_in_the_synthesized_text() -> None:
+    svc = _speaker_service()
+    svc._speak("The build is green.", item=_item("The build is green.", session_id=_MASTER))
+    svc._speak("Tests next.", item=_item("Tests next.", session_id=_MASTER))
+    svc._speak("One thing from Aspen.", item=_item("One thing from Aspen.", session_id=_ASPEN))
+    svc._speak("Back again.", item=_item("Back again.", session_id=_MASTER))
+    assert _texts(svc) == [
+        "Master Desk here, The build is green.",
+        "Tests next.",
+        "Aspen Desk here, One thing from Aspen.",
+        "Master Desk here, Back again.",
+    ], _texts(svc)
+    assert len(svc._sink.played) == 4
+
+
+def test_a_quiet_gap_names_the_same_desk_again() -> None:
+    from speaker import DEFAULT_QUIET_GAP_SECONDS
+
+    clock = _Clock()
+    svc = _speaker_service(clock=clock)
+    svc._speak("One.", item=_item("One.", session_id=_MASTER))
+    clock.t += DEFAULT_QUIET_GAP_SECONDS + 1
+    svc._speak("Two.", item=_item("Two.", session_id=_MASTER))
+    assert _texts(svc) == ["Master Desk here, One.", "Master Desk here, Two."]
+
+
+def test_a_line_that_names_itself_is_not_doubled() -> None:
+    svc = _speaker_service()
+    svc._speak("Master Desk here, hello.", item=_item("x", session_id=_MASTER))
+    svc._speak("Next.", item=_item("x", session_id=_MASTER))
+    assert _texts(svc) == ["Master Desk here, hello.", "Next."]
+
+
+def test_a_cached_line_gets_a_spoken_prefix_clip_before_it() -> None:
+    svc = _speaker_service()
+    cached = Path(tempfile.mkdtemp(prefix="auto-speech-cache-")) / "full.wav"
+    cached.write_bytes(b"RIFFcached")
+    svc._cache.lookup.return_value = (cached, MagicMock())
+    h = "ab" * 32
+    svc._speak("From the cache.", source_hash=h, item=_item("From the cache.", source_hash=h, session_id=_ASPEN))
+    assert _texts(svc) == ["Aspen Desk here."], _texts(svc)
+    assert [p.name for p in svc._sink.played][-1] == "full.wav"
+    assert len(svc._sink.played) == 2 and svc._sink.played[0] != cached
+    # The same desk again: the cached line plays alone.
+    svc._speak("Again.", source_hash=h, item=_item("Again.", source_hash=h, session_id=_ASPEN))
+    assert svc._sink.played[2:] == [cached]
+    assert _texts(svc) == ["Aspen Desk here."]
+
+
+def test_the_worker_play_cache_path_announces_too() -> None:
+    svc = _speaker_service()
+    wav = Path(tempfile.mkdtemp(prefix="auto-speech-cache-")) / "full.wav"
+    wav.write_bytes(b"RIFFcached")
+    svc._play_cached(wav, _item(str(wav), session_id=_MASTER))
+    svc._play_cached(wav, _item(str(wav), session_id=_MASTER))
+    assert _texts(svc) == ["Master Desk here."]
+    assert [p == wav for p in svc._sink.played] == [False, True, True]
+
+
+def test_a_line_set_aside_while_held_does_not_move_the_speaker() -> None:
+    from sound_yield import EXPIRED, HoldOutcome
+
+    sink = _HoldSink(HoldOutcome(EXPIRED, 180.0, ("ChatGPT (pid 9)",)), yielded=True)
+    svc = _speaker_service(sink)
+    svc._speak("One.", item=_item("One.", session_id=_MASTER))
+    assert sink.played == []
+    sink.yielded = False
+    sink.outcome = None
+    svc._speak("Two.", item=_item("Two.", session_id=_MASTER))
+    assert _texts(svc) == ["Master Desk here, One.", "Master Desk here, Two."]
+    assert svc._speaker.status()["last_speaker"] == "Master Desk"
+
+
+def test_narration_without_an_item_carries_its_session() -> None:
+    svc = _speaker_service()
+    svc._speak("Turn done.", session_id=_MASTER)
+    svc._speak("Plain narration.")
+    svc._speak("Another turn.", session_id=_MASTER)
+    assert _texts(svc) == ["Master Desk here, Turn done.", "Plain narration.", "Another turn."]
+
+
+def test_status_reply_reports_the_speaker() -> None:
+    from priority_arbiter import PriorityArbiter
+
+    svc = _speaker_service()
+    svc._priority_arbiter = PriorityArbiter(maxsize=8)
+    svc._active_priority = None
+    svc._dropped_phases = 0
+    svc._start_time = time.time()
+    assert svc.dispatch_json({"action": "status"})["speaker"]["last_speaker"] is None
+    svc._speak("One.", item=_item("One.", session_id=_ASPEN))
+    sp = svc.dispatch_json({"action": "status"})["speaker"]
+    assert sp["last_speaker"] == "Aspen Desk" and sp["last_session_id"] == _ASPEN
+
+
 def test_tail_events_idle_shutdown_deferred_when_busy() -> None:
     svc = narrator_service.NarratorService.__new__(narrator_service.NarratorService)
     svc._idle_shutdown = 1.0
@@ -1304,6 +1435,14 @@ def main() -> int:
     test_dispatch_json_carries_the_replay_flags_into_the_queue_item,
     test_status_reply_counts_the_missed_list,
     test_dispatch_json_reads_a_command_key_like_action,
+    test_speaker_change_is_announced_in_the_synthesized_text,
+    test_a_quiet_gap_names_the_same_desk_again,
+    test_a_line_that_names_itself_is_not_doubled,
+    test_a_cached_line_gets_a_spoken_prefix_clip_before_it,
+    test_the_worker_play_cache_path_announces_too,
+    test_a_line_set_aside_while_held_does_not_move_the_speaker,
+    test_narration_without_an_item_carries_its_session,
+    test_status_reply_reports_the_speaker,
         test_tail_events_idle_shutdown_deferred_when_busy,
         test_stop_event_flushes_classifier_with_session_id,
     ]

@@ -19,6 +19,7 @@ import atexit
 import inspect
 import json
 import os
+import re
 import queue
 import signal
 import subprocess
@@ -62,6 +63,7 @@ from narrator_state import (
 from narrator_summarizer import Summarizer, load_summarizer
 from sound_yield import ABORTED, DEFAULT_MAX_WAIT_SECONDS, SoundYieldGate
 from priority_arbiter import Priority, PriorityArbiter, QueueItem, QueueProxyFacade
+from speaker import Announcer, Plan
 from unix_ipc_server import _DaemonSocketServer, control_payload
 from tts_executor import TTSExecutor
 from resilient_synthesizer import ResilientSynthesizer
@@ -255,6 +257,7 @@ class NarratorService:
         config: dict | None = None,
         sound_yield_gate: SoundYieldGate | Any | None = None,
         missed: MissedList | None = None,
+        speaker: Announcer | None = None,
     ) -> None:
         self._config = config if config is not None else load_config()
         self._classifier = PhaseClassifier(silence_seconds=0.5, max_events_per_phase=1)
@@ -293,6 +296,8 @@ class NarratorService:
             sink if sink is not None else NativeAudioSink(sound_yield=sound_yield_gate)
         )
         self._missed: MissedList = missed if missed is not None else MissedList()
+        # Names the desk only when the speaker changes (ADR-016).
+        self._speaker: Announcer = speaker if speaker is not None else Announcer(log=_log)
         self._last_hold_ended_at: Optional[float] = None
         self._sink_takes_hold_kwargs: Optional[bool] = None
         if tts_executor is not None:
@@ -621,6 +626,7 @@ class NarratorService:
                 "uptime_seconds": round(time.time() - getattr(self, "_start_time", time.time()), 2),
                 "sound_yield": hold if isinstance(hold, dict) else None,
                 "missed": self._missed_counts(),
+                "speaker": self._speaker_status(),
             }
 
         return {
@@ -1055,10 +1061,9 @@ class NarratorService:
                         else:
                             self._engine_state = "PLAYING"
                         try:
-                            self._play_item(
+                            self._play_cached(
                                 Path(phase),
                                 item_obj if isinstance(item_obj, QueueItem) else None,
-                                text="",
                             )
                         except Exception as exc:  # noqa: BLE001
                             _log(f"play_cache error: {exc!r}")
@@ -1107,14 +1112,14 @@ class NarratorService:
                                 )
                             _log(f"OUTPUT: {words}")
                             if words:
-                                self._speak(words)
+                                self._speak(words, session_id=session_id)
                 else:
                     _log(f"Phase received in worker: {phase}")
                     summ = self._get_summarizer()
                     line = summ.summarize(phase)
                     _log(f"Summarizer generated: {line}")
                     if line:
-                        self._speak(line)
+                        self._speak(line, session_id=getattr(phase, "session_id", None) or None)
             except Exception as exc:  # noqa: BLE001 — keep the worker loop alive
                 _log(f"tts_worker error: {exc!r}")
             finally:
@@ -1228,10 +1233,11 @@ class NarratorService:
         else:
             play(path)
 
-    def _play_item(self, path: Path, item: Optional[QueueItem], *, text: str) -> None:
+    def _play_item(self, path: Path, item: Optional[QueueItem], *, text: str) -> bool:
         """Play through the sink with the missed-list bookkeeping around the
         hold: held → on the list as held; longest wait or interrupted while
-        held → stays on the list as missed; played → off the list."""
+        held → stays on the list as missed; played → off the list. Returns
+        True when the line was heard (so the speaker bookkeeping can move)."""
         age = 0.0
         hold = True
         if item is not None:
@@ -1264,7 +1270,7 @@ class NarratorService:
             )
             who = ", ".join(outcome.blockers) or "another app"
             _log(f"missed: set aside after {outcome.waited_seconds:.0f}s held while {who} played: {name!r}")
-            return
+            return False
 
         outcome = getattr(self._sink, "last_hold", None)
         self._note_hold_ended(outcome)
@@ -1279,7 +1285,7 @@ class NarratorService:
                 existing=line,
             )
             _log(f"missed: hold interrupted after {outcome.waited_seconds:.0f}s, set aside: {name!r}")
-            return
+            return False
         if missed is not None:
             try:
                 if line is not None:
@@ -1288,6 +1294,84 @@ class NarratorService:
                     missed.remove(item.missed_id)
             except Exception as exc:  # noqa: BLE001
                 _log(f"missed list write error: {exc!r}")
+        return True
+
+    # -- speaker names: "<desk> here," only when who is talking changes -------
+
+    def _speaker_status(self) -> Optional[dict[str, Any]]:
+        speaker = getattr(self, "_speaker", None)
+        if speaker is None:
+            return None
+        try:
+            return speaker.status()
+        except Exception:  # noqa: BLE001
+            return None
+
+    def _speaker_plan(self, text: str, session_id: Optional[str]) -> Optional[Plan]:
+        speaker = getattr(self, "_speaker", None)
+        if speaker is None:
+            return None
+        try:
+            return speaker.plan(text, session_id)
+        except Exception as exc:  # noqa: BLE001
+            _log(f"speaker plan error: {exc!r}")
+            return None
+
+    def _speaker_spoken(self, session_id: Optional[str]) -> None:
+        speaker = getattr(self, "_speaker", None)
+        if speaker is None or not session_id:
+            return
+        try:
+            speaker.spoken(session_id)
+        except Exception as exc:  # noqa: BLE001
+            _log(f"speaker bookkeeping error: {exc!r}")
+
+    def _speaker_clip(self, plan: Plan) -> Optional[Path]:
+        """The "<name> here." clip as its own short wav, synthesized once per
+        name under the state dir; None when it cannot be made."""
+        text = plan.clip_text
+        if not text:
+            return None
+        slug = re.sub(r"[^a-z0-9]+", "-", text.lower()).strip("-") or "desk"
+        clip_dir = state_path("auto-speech-speaker")
+        clip = Path(clip_dir) / f"{slug}.wav"
+        try:
+            if clip.is_file() and clip.stat().st_size > 0:
+                return clip
+            clip.parent.mkdir(parents=True, exist_ok=True)
+            synth = getattr(getattr(self, "_tts_executor", None), "synth", None) or getattr(self, "_synth", None)
+            profile = getattr(self, "_profile", None)
+            if synth is None or profile is None:
+                return None
+            tmp = clip.with_suffix(".partial.wav")
+            ok = synth.synthesize_one(text, profile, tmp)
+            if ok and tmp.is_file() and tmp.stat().st_size > 0:
+                os.replace(tmp, clip)
+                return clip
+            tmp.unlink(missing_ok=True)
+        except Exception as exc:  # noqa: BLE001
+            _log(f"speaker clip error: {exc!r}")
+        return None
+
+    def _play_cached(self, path: Path, item: Optional[QueueItem], *, text: str = "", plan: Optional[Plan] = None) -> bool:
+        """Cached audio cannot take "<name> here," in front of its words, so
+        when the desk is to be named the clip plays first, then the line."""
+        sid = getattr(item, "session_id", None) if item is not None else None
+        if plan is None:
+            plan = self._speaker_plan(text, sid)
+        if plan is not None and plan.prefix:
+            clip = self._speaker_clip(plan)
+            if clip is not None:
+                hold = bool(getattr(item, "hold", True)) if item is not None else True
+                try:
+                    self._sink_play(clip, hold=hold, already_waited=0.0, on_hold=None)
+                except Exception as exc:  # noqa: BLE001
+                    _log(f"speaker clip playback error: {exc!r}")
+                    return False
+        heard = self._play_item(path, item, text=text)
+        if heard:
+            self._speaker_spoken(sid)
+        return heard
 
     def _speak(
         self,
@@ -1297,6 +1381,7 @@ class NarratorService:
         voice_id: Optional[str] = None,
         speed: Optional[float] = None,
         item: Optional[QueueItem] = None,
+        session_id: Optional[str] = None,
     ) -> None:
         line = line.strip()
         if not line:
@@ -1309,7 +1394,13 @@ class NarratorService:
                 _log(f"missed: stale backlog ({age:.0f}s old when its turn came), set aside: {line[:50]!r}")
                 return
 
-        _log(f"speak: {line} (source_hash={source_hash})")
+        # Name the desk only when the speaker changes (ADR-016). A cache hit
+        # keeps its words and gets the name as a clip in front instead.
+        sid = session_id or (getattr(item, "session_id", None) if item is not None else None)
+        plan = self._speaker_plan(line, sid)
+        spoken_line = plan.text if plan is not None else line
+
+        _log(f"speak: {spoken_line} (source_hash={source_hash})")
         self._ensure_tts_initialized()
         if self._sink is None or self._profile is None:
             _log(f"tts engine not available; dropped narration: {line[:50]!r}")
@@ -1345,7 +1436,7 @@ class NarratorService:
                     else:
                         self._engine_state = "PLAYING"
                     try:
-                        self._play_item(cached_wav, item, text=line)
+                        self._play_cached(cached_wav, item, text=line, plan=plan)
                     finally:
                         if state_lock:
                             with state_lock:
@@ -1371,14 +1462,14 @@ class NarratorService:
                 synth = getattr(self._tts_executor, "synth", getattr(self, "_synth", None))
                 if synth is not None and hasattr(self._tts_executor, "submit"):
                     has_audio = self._tts_executor.submit(
-                        synth.synthesize_one, line, profile, temp_wav
+                        synth.synthesize_one, spoken_line, profile, temp_wav
                     )
                 elif synth is not None:
-                    has_audio = synth.synthesize_one(line, profile, temp_wav)
+                    has_audio = synth.synthesize_one(spoken_line, profile, temp_wav)
                 else:
                     has_audio = False
             elif hasattr(self, "_synth") and self._synth is not None:
-                has_audio = self._synth.synthesize_one(line, profile, temp_wav)
+                has_audio = self._synth.synthesize_one(spoken_line, profile, temp_wav)
             else:
                 _log(f"no synthesizer available for: {line[:50]!r}")
                 return
@@ -1430,7 +1521,8 @@ class NarratorService:
                     self._engine_state = "PLAYING"
 
                 _log(f"playing audio ({play_target.stat().st_size} bytes)...")
-                self._play_item(play_target, item, text=line)
+                if self._play_item(play_target, item, text=spoken_line):
+                    self._speaker_spoken(sid)
             else:
                 _log(f"no speakable audio generated for: {line[:50]!r}")
         except Exception as exc:

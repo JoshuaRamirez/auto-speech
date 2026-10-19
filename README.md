@@ -162,6 +162,38 @@ run the same CLI. The reasoning behind the 180 s wait, the missed list
 and the replay order is in
 [ADR-015](docs/decisions/ADR-015-sound-yield.md).
 
+## Naming the desk only when the speaker changes
+
+Several desks (Claude Code sessions) speak through one daemon. A line
+opens with **"<desk> here,"** only when the session speaking differs from
+the last one heard, or when the last line was heard more than a quiet gap
+ago (15 minutes by default). One desk talking is heard as one voice; a
+change of desk is always named. Names come from the desk agents' notes
+(`session:` → `name:`, else the note's file name: "Master Desk", "Aspen
+Desk", "Development Desk", "Clerk - Desk"); a session no note names is
+announced as "Another desk". A line that already opens with its own name
+is not doubled. Every `speak` path carries its session (the CLI and
+`speak.py` take it from `CLAUDE_CODE_SESSION_ID`; the MCP tool from the
+call or its own environment); a line with no session is spoken as sent.
+
+```bash
+auto-speech speaker status               # switch, quiet gap, how many desks are known
+auto-speech speaker gap 600              # the same desk names itself again after 10 quiet minutes
+auto-speech speaker name <session> Side Desk   # name a session by hand (wins over the notes)
+auto-speech speaker forget <session>
+auto-speech speaker who [session]        # what a session would be announced as
+auto-speech speaker off                  # lines are spoken exactly as sent
+auto-speech speaker on                   # default
+```
+
+MCP: `speaker(action="gap", seconds=600)`, same actions. Config:
+`~/.config/auto-speech/speaker.toml`, section `[speaker]` with `enabled`,
+`quiet_gap_seconds`, `agents_dir`, and `[speaker.names]`; see
+`config/speaker.toml.example`. A change is read at the next line; no
+restart. Slash command `/auto-speech-speaker` (extras). Cached audio gets
+the name as a short clip in front of it. The reasoning, and the quiet gap,
+is in [ADR-016](docs/decisions/ADR-016-speaker-names.md).
+
 ## Web app
 
 `/auto-speech-app` (or `bash plugin/scripts/shell/run_server.sh`) serves

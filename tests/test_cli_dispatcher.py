@@ -87,7 +87,7 @@ class TestCliHelpAndRouting(BaseCliTestCase):
         with mock.patch("sys.stdout", stdout):
             rc = cli.main(["--version"])
         self.assertEqual(rc, 0)
-        self.assertIn("auto-speech 0.4.0", stdout.getvalue())
+        self.assertIn("auto-speech 0.5.0", stdout.getvalue())
 
     def test_top_level_missing_subcommand_exits_two(self) -> None:
         stderr = io.StringIO()
@@ -290,6 +290,19 @@ class TestCliSpeak(BaseCliTestCase):
             voice_id="system",
             speed=1.0,
         )
+
+    def test_speak_uses_the_shell_session_when_no_flag_is_given(self) -> None:
+        """Every path carries its session so the daemon can name the desk only
+        when the speaker changes (his 19:06)."""
+        mock_client = mock.MagicMock()
+        mock_client.speak.return_value = DaemonResponse(status="ok", action="speak")
+        os.environ["CLAUDE_CODE_SESSION_ID"] = "sess-env"
+        rc = cli.main(["speak", "hello"], client=mock_client)
+        self.assertEqual(rc, 0)
+        self.assertEqual(mock_client.speak.call_args.kwargs["session_id"], "sess-env")
+        mock_client.speak.reset_mock()
+        rc = cli.main(["speak", "hello", "--session-id", "sess-flag"], client=mock_client)
+        self.assertEqual(mock_client.speak.call_args.kwargs["session_id"], "sess-flag")
 
     def test_speak_daemon_unreachable_exits_one(self) -> None:
         mock_client = mock.MagicMock()
@@ -820,6 +833,81 @@ class TestCliYield(BaseCliTestCase):
         self.assertEqual(set(data), {"enabled", "exceptions", "max_wait_seconds", "poll_seconds"})
         self.assertEqual(data["enabled"], False)
         self.assertEqual(data["exceptions"], ["Music"])
+
+
+class TestCliSpeaker(BaseCliTestCase):
+    """`auto-speech speaker …`: the desk is named only when the speaker
+    changes. HOME is sandboxed (the config lands in the temp home); the agent
+    notes are a temp dir named by AUTO_SPEECH_AGENTS_DIR."""
+
+    def setUp(self) -> None:
+        super().setUp()
+        os.environ.pop("AUTO_SPEECH_SPEAKER_CONFIG", None)
+        agents = self.home / "Agents"
+        agents.mkdir()
+        (agents / "Desk.md").write_text(
+            '---\nname: "Master Desk"\nstate: working\nsession: sess-master\nsection: "[[Desk/AspenESS|AspenESS]]"\n---\n',
+            encoding="utf-8",
+        )
+        (agents / "Personal - Finance.md").write_text(
+            '---\nstate: done\nsession: sess-personal\nsection: "[[Personal]]"\n---\n', encoding="utf-8"
+        )
+        os.environ["AUTO_SPEECH_AGENTS_DIR"] = str(agents)
+        from speaker import SpeakerStore, default_config_path
+
+        self.cfg = default_config_path()
+        self.assertTrue(str(self.cfg).startswith(str(self.home)))
+        self.store = SpeakerStore(self.cfg)
+
+    def _run(self, *argv: str) -> tuple[int, str, str]:
+        stdout, stderr = io.StringIO(), io.StringIO()
+        with mock.patch("sys.stdout", stdout), mock.patch("sys.stderr", stderr):
+            rc = cli.main(list(argv))
+        return rc, stdout.getvalue(), stderr.getvalue()
+
+    def test_status_is_the_default(self) -> None:
+        rc, out, _ = self._run("speaker")
+        self.assertEqual(rc, 0)
+        self.assertTrue(out.startswith("speaker names: on\nquiet gap: 15 min"), out)
+        self.assertIn("desks known: 1", out)
+
+    def test_off_on_and_gap(self) -> None:
+        rc, out, _ = self._run("speaker", "off")
+        self.assertEqual(rc, 0)
+        self.assertIn("speaker names: off", out)
+        self.assertFalse(self.store.load().enabled)
+        rc, out, _ = self._run("speaker", "on")
+        self.assertIn("speaker names: on", out)
+        rc, out, _ = self._run("speaker", "gap", "300")
+        self.assertEqual(rc, 0)
+        self.assertIn("quiet gap: 5 min", out)
+        self.assertEqual(self.store.load().quiet_gap_seconds, 300.0)
+        rc, _, err = self._run("speaker", "gap", "-1")
+        self.assertEqual(rc, cli.EXIT_INVALID_INPUT)
+        self.assertIn(">= 0", err)
+
+    def test_name_forget_and_who(self) -> None:
+        rc, out, _ = self._run("speaker", "name", "sess-x", "Side", "Desk")
+        self.assertEqual(rc, 0)
+        self.assertIn("'Side Desk'", out)
+        self.assertEqual(dict(self.store.load().names), {"sess-x": "Side Desk"})
+        rc, out, _ = self._run("speaker", "who", "sess-x")
+        self.assertIn("Side Desk", out)
+        rc, out, _ = self._run("speaker", "who", "sess-master")
+        self.assertIn("Master Desk", out)
+        rc, out, _ = self._run("speaker", "who", "sess-personal")
+        self.assertIn("Another desk", out, "a personal note is never read into the map")
+        rc, out, _ = self._run("speaker", "forget", "sess-x")
+        self.assertEqual(rc, 0)
+        self.assertEqual(self.store.load().names, ())
+
+    def test_who_defaults_to_the_shell_session(self) -> None:
+        rc, _, err = self._run("speaker", "who")
+        self.assertEqual(rc, cli.EXIT_INVALID_INPUT)
+        os.environ["CLAUDE_CODE_SESSION_ID"] = "sess-master"
+        rc, out, _ = self._run("speaker", "who")
+        self.assertEqual(rc, 0)
+        self.assertIn("Master Desk", out)
 
 
 class TestCliMissed(BaseCliTestCase):
