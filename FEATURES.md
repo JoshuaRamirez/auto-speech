@@ -44,6 +44,16 @@ module that owns it. Release-by-release history is in
 - **Exception list and off switch** for the hold, identical in the CLI
   (`auto-speech yield`), the MCP tool (`sound_yield`) and
   `~/.config/auto-speech/sound-yield.toml`; live re-read, no restart.
+- **Players list: sound holds speech only when a player app makes it**
+  (v0.6.0, ADR-017). Core Audio says an app is running output, not whether
+  that output is silent; an unknown app's open stream never holds. Built-in
+  players (Music, TV, Podcasts, QuickTime, Safari, Spotify, VLC, IINA, mpv,
+  afplay, the browsers, Zoom, FaceTime, Teams, the ChatGPT and Claude
+  apps) plus his additions; a bundle id covers its helpers; `hold_for =
+  any` restores the every-app rule. `yield hold-for | player-add |
+  player-remove | player-reset`, MCP `sound_yield` same actions,
+  `[sound_yield] hold_for` / `players`; `yield check` says why each running
+  app does or does not hold.
 - **Transport**: pause, resume, restart, seek (`+N`, `-N`, `N`, `end`), stop
   (`control.py`, CLI, MCP `playback_control`).
 - **Replay cache**: content-addressed WAVs keyed by source hash; replay the
@@ -106,7 +116,7 @@ module that owns it. Release-by-release history is in
 ## Surfaces
 - **CLI** `bin/auto-speech` (`cli.py`): `speak`, `replay`, `pause`,
   `resume`, `restart`, `stop`, `seek`, `autoplay {on,off,status,mode,scope}`,
-  `narrate {on,off,status,stop,config}`, `yield {status,on,off,add,remove,
+  `narrate {on,off,status,stop,config}`, `yield {status,on,off,hold-for,player-add,player-remove,player-reset,add,remove,
   clear,check}`, `missed [--play|--clear]`, `hook {stop,narrator,bootstrap}`,
   `doctor`, `update`.
 - **MCP server** (`mcp_server.py`, stdio JSON-RPC): `speak`,

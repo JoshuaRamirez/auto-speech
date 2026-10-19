@@ -9,7 +9,9 @@ from __future__ import annotations
 import os
 import sys
 import tempfile
+import tomllib
 import unittest
+from dataclasses import replace
 from pathlib import Path
 
 SRC = Path(__file__).resolve().parents[1] / "plugin" / "scripts" / "python"
@@ -18,6 +20,9 @@ if str(SRC) not in sys.path:
 
 import sound_yield as sy  # noqa: E402
 from sound_yield import (  # noqa: E402
+    ACTIONS,
+    DEFAULT_PLAYERS,
+    run_action,
     ABORTED,
     CLEAR,
     DISABLED,
@@ -491,6 +496,135 @@ class TestFormatting(unittest.TestCase):
         self.assertIn("nothing else is playing sound; speech would play now", format_assessment(gate_idle.assess()))
         gate_off, _ = _gate(tmp, FakeProbe([[MUSIC]]), config="[sound_yield]\nenabled = false\n")
         self.assertIn("sound yield is OFF", format_assessment(gate_off.assess()))
+
+
+ANTIGRAVITY = AudioProcess(pid=2856, bundle_id="com.google.antigravity.helper")  # an editor's helper: stream open, silent
+CHROME_HELPER = AudioProcess(pid=68655, bundle_id="com.google.Chrome.helper")  # Chrome plays through its helper
+TABLE[2856] = (1, "/Applications/Antigravity.app/Contents/Frameworks/Antigravity Helper.app/Contents/MacOS/Antigravity Helper")
+TABLE[68655] = (1, "/Applications/Google Chrome.app/Contents/Frameworks/Google Chrome Helper.app/Contents/MacOS/Google Chrome Helper")
+
+
+class TestPlayersList(unittest.TestCase):
+    """The Desk's call of 2026-10-18 19:45 (ADR-017): an open stream holds
+    speech only when its app is on the players list. Core Audio can say that
+    a process is running output, not whether that output is silent, and an
+    editor's helper ran a silent stream for an afternoon and held every line."""
+
+    def setUp(self):
+        self._tmpdir = tempfile.TemporaryDirectory()
+        self.tmp = Path(self._tmpdir.name)
+        self.addCleanup(self._tmpdir.cleanup)
+
+    def test_defaults_hold_only_for_players(self):
+        s = SoundYieldSettings()
+        self.assertEqual(s.hold_for, "players")
+        self.assertEqual(s.players, DEFAULT_PLAYERS)
+        self.assertIn("com.apple.Music", DEFAULT_PLAYERS)
+        self.assertIn("com.google.Chrome", DEFAULT_PLAYERS)
+
+    def test_unknown_app_with_an_open_stream_does_not_hold(self):
+        gate, _ = _gate(self.tmp, FakeProbe([[ANTIGRAVITY]]))
+        a = gate.assess()
+        self.assertFalse(a.hold)
+        self.assertEqual([p.pid for p in a.others], [2856])
+        self.assertEqual(a.blockers, [])
+        self.assertEqual(gate.wait_until_clear().status, CLEAR)
+
+    def test_players_hold_and_a_helper_matches_its_app_by_prefix(self):
+        gate, _ = _gate(self.tmp, FakeProbe([[MUSIC, CHROME_HELPER, ANTIGRAVITY]]))
+        a = gate.assess()
+        self.assertTrue(a.hold)
+        self.assertEqual(sorted(p.pid for p in a.blockers), [501, 68655])
+        self.assertEqual([p.pid for p in a.others], [2856])
+
+    def test_an_app_he_adds_becomes_a_player(self):
+        store = _store(self.tmp)
+        settings, added = store.add_players(["com.google.antigravity", "music"])
+        self.assertEqual(added, ["com.google.antigravity"])  # Music is already a player
+        gate, _ = _gate(self.tmp, FakeProbe([[ANTIGRAVITY]]))
+        self.assertTrue(gate.assess().hold)
+        settings, removed = store.remove_players(["COM.GOOGLE.ANTIGRAVITY", "nope"])
+        self.assertEqual(removed, ["com.google.antigravity"])
+        self.assertFalse(gate.assess().hold)
+
+    def test_a_default_player_can_be_removed_and_reset_restores_the_defaults(self):
+        store = _store(self.tmp)
+        settings, removed = store.remove_players(["Chrome"])
+        self.assertEqual(removed, ["com.google.Chrome"])
+        gate, _ = _gate(self.tmp, FakeProbe([[CHROME_HELPER]]))
+        self.assertFalse(gate.assess().hold)
+        self.assertEqual(store.reset_players().players, DEFAULT_PLAYERS)
+        self.assertTrue(gate.assess().hold)
+
+    def test_a_player_name_matches_by_last_component_and_process_name(self):
+        s = SoundYieldSettings(players=("Music", "afplay"))
+        self.assertTrue(s.is_player(MUSIC))
+        self.assertTrue(s.is_player(replace(AFPLAY, name="afplay")))
+        self.assertFalse(s.is_player(SPOTIFY))
+
+    def test_exception_beats_the_players_list(self):
+        gate, _ = _gate(self.tmp, FakeProbe([[CHROME_HELPER]]), config='[sound_yield]\nexceptions = ["com.google.Chrome"]\n')
+        a = gate.assess()
+        self.assertFalse(a.hold)
+        self.assertEqual([p.pid for p in a.excepted], [68655])
+
+    def test_hold_for_any_restores_the_old_rule(self):
+        gate, _ = _gate(self.tmp, FakeProbe([[ANTIGRAVITY]]), config='[sound_yield]\nhold_for = "any"\n')
+        a = gate.assess()
+        self.assertTrue(a.hold)
+        self.assertEqual([p.pid for p in a.blockers], [2856])
+        store = _store(self.tmp)
+        self.assertEqual(store.set_hold_for("players").hold_for, "players")
+        self.assertFalse(gate.assess().hold)
+
+    def test_bad_hold_for_and_players_fall_back_and_are_reported(self):
+        s = SoundYieldSettings.from_mapping({"hold_for": "some", "players": "Music"}, config_path="x")
+        self.assertEqual(s.hold_for, "players")
+        self.assertEqual(s.players, ("Music",))  # one string is one entry, as for exceptions
+        self.assertTrue(any("hold_for" in p for p in s.problems))
+        s2 = SoundYieldSettings.from_mapping({"players": 7}, config_path="x")
+        self.assertEqual(s2.players, DEFAULT_PLAYERS)
+        self.assertTrue(any("players" in p for p in s2.problems))
+
+    def test_toml_round_trip_keeps_hold_for_and_players(self):
+        s = SoundYieldSettings(hold_for="any", players=("Music", "com.google.Chrome"))
+        back = SoundYieldSettings.from_mapping(tomllib.loads(s.to_toml())["sound_yield"])
+        self.assertEqual(back.hold_for, "any")
+        self.assertEqual(back.players, ("Music", "com.google.Chrome"))
+
+    def test_status_and_check_say_the_rule_and_who_is_ignored(self):
+        text = format_settings(SoundYieldSettings())
+        self.assertIn("holds for: players only", text)
+        self.assertIn("players (apps whose sound holds speech): com.apple.Music", text)
+        gate, _ = _gate(self.tmp, FakeProbe([[ANTIGRAVITY, MUSIC]]))
+        check = format_assessment(gate.assess())
+        self.assertIn("Antigravity (com.google.antigravity.helper) (pid 2856) — not on the players list, does not hold", check)
+        self.assertIn("Music (com.apple.Music) (pid 501) — holds speech", check)
+        self.assertIn("speech would HOLD", check)
+        self.assertIn("holds for: any app", format_settings(SoundYieldSettings(hold_for="any")))
+
+    def test_run_action_player_verbs_share_the_file(self):
+        store = _store(self.tmp)
+        r = run_action("player-add", ["Antigravity"], store=store)
+        self.assertTrue(r.ok)
+        self.assertIn("players added: Antigravity", r.text)
+        self.assertIn("Antigravity", store.load().players)
+        r = run_action("player-remove", ["antigravity"], store=store)
+        self.assertIn("players removed: Antigravity", r.text)
+        r = run_action("player-reset", store=store)
+        self.assertIn("players reset to the defaults", r.text)
+        r = run_action("hold-for", ["any"], store=store)
+        self.assertTrue(r.ok)
+        self.assertEqual(store.load().hold_for, "any")
+        self.assertFalse(run_action("hold-for", ["sometimes"], store=store).ok)
+        self.assertFalse(run_action("player-add", [], store=store).ok)
+        self.assertIn("player-add", " ".join(ACTIONS))
+
+    def test_device_fallback_still_holds_and_says_the_list_cannot_apply(self):
+        gate, _ = _gate(self.tmp, FakeProbe(process_list_available=False, device=True))
+        a = gate.assess()
+        self.assertTrue(a.hold)
+        self.assertIn("the players list and exceptions cannot apply", format_assessment(a))
 
 
 if __name__ == "__main__":

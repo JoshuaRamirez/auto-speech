@@ -637,8 +637,8 @@ def handle_narrate(args: argparse.Namespace) -> int:
 
 
 def handle_yield(args: argparse.Namespace, store: Any | None = None, gate: Any | None = None) -> int:
-    """`auto-speech yield <status|on|off|add|remove|clear|check> [apps…]`:
-    the sound-yield switch and exception list (same verbs as the MCP tool)."""
+    """`auto-speech yield <status|on|off|add|remove|clear|check|hold-for|player-add|player-remove|player-reset> [apps…]`:
+    the sound-yield switch, the players list and the exception list (same verbs as the MCP tool)."""
     action = getattr(args, "yield_action", None) or "status"
     apps = getattr(args, "apps", None) or []
     result = run_sound_yield_action(action, apps, store=store, gate=gate)
@@ -870,7 +870,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--version",
         action="version",
-        version="auto-speech 0.5.0",
+        version="auto-speech 0.6.0",
     )
     subparsers = parser.add_subparsers(
         dest="subcommand",
@@ -1057,7 +1057,7 @@ def build_parser() -> argparse.ArgumentParser:
     p_sy = subparsers.add_parser(
         "yield",
         aliases=["sound-yield"],
-        help="Hold speech while another app plays sound: switch, exception list, live check.",
+        help="Hold speech while a player app plays sound: switch, players list, exception list, live check.",
     )
     sub_sy = p_sy.add_subparsers(dest="yield_action", metavar="<action>")
     sub_sy.add_parser("status", help="Show the switch, the exception list and the longest hold.")
@@ -1069,6 +1069,16 @@ def build_parser() -> argparse.ArgumentParser:
     p_sy_rm.add_argument("apps", nargs="+", help="Bundle ids or names to remove.")
     sub_sy.add_parser("clear", help="Empty the exception list.")
     sub_sy.add_parser("check", help="Say who is playing sound now and whether speech would hold.")
+    p_sy_hf = sub_sy.add_parser(
+        "hold-for",
+        help="Whose sound holds speech: players (only the players list; default) or any (every app but the exceptions).",
+    )
+    p_sy_hf.add_argument("apps", nargs=1, metavar="players|any", help="players | any")
+    p_sy_pa = sub_sy.add_parser("player-add", help="Add apps whose sound holds speech (the players list).")
+    p_sy_pa.add_argument("apps", nargs="+", help="Bundle ids (com.apple.Music) or names (Music).")
+    p_sy_pr = sub_sy.add_parser("player-remove", help="Remove apps from the players list.")
+    p_sy_pr.add_argument("apps", nargs="+", help="Bundle ids or names to remove (Chrome removes com.google.Chrome).")
+    sub_sy.add_parser("player-reset", help="Put the players list back to the built-in defaults.")
 
     p_md = subparsers.add_parser(
         "missed",

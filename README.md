@@ -116,7 +116,7 @@ to `/tmp/auto-speech-say.log`. Remove it with `bash setup/uninstall-mcp.sh`.
 
 ## Yielding to other apps' sound
 
-By default auto-speech **does not start speaking while another app is
+By default auto-speech **does not start speaking while a player app is
 playing sound**: music, a video, a call. The speech keeps its place in the
 queue and plays once the other sound stops. **Nothing held is ever
 dropped.** If the sound goes on past the longest wait (180 s, counted from
@@ -125,7 +125,13 @@ and when the sound stops, only lines younger than that still play by
 themselves, so a long listen does not end in a stale backlog read out line
 by line. Detection reads Core Audio's process list (which processes are
 running output), needs no permission, and never captures audio.
-auto-speech's own playback never counts.
+auto-speech's own playback never counts. Core Audio can say that an app is
+running output, not whether that output is silent, and an editor's helper
+once held every line for an afternoon with a silent open stream; so since
+0.6.0 a running app holds speech only when it is on the **players list**
+(Music, TV, Podcasts, QuickTime, Safari, Spotify, VLC, IINA, mpv, afplay,
+the browsers, Zoom, FaceTime, Teams, the ChatGPT and Claude apps, plus
+whatever you add). **An unknown app's open stream never holds.**
 
 ```bash
 auto-speech missed                       # what you have not heard, oldest first
@@ -138,29 +144,38 @@ play by themselves when the sound stops. MCP: `missed(action="list" |
 "play" | "clear")`, same text. The list is one file,
 `~/.local/state/auto-speech/missed.json`.
 
-An **exception list** names apps whose sound does not hold speech, by
-bundle id or name. The switch and the list have the same verbs in the
-CLI, the MCP tool and the config file:
+The **players list** names the apps whose sound holds speech; an
+**exception list** names apps whose sound never does, even if they are
+players. Both take bundle ids or names, and a bundle id covers its helpers
+(`com.google.Chrome` covers `com.google.Chrome.helper`). The switch and
+both lists have the same verbs in the CLI, the MCP tool and the config file:
 
 ```bash
-auto-speech yield status                 # switch, exception list, longest hold
+auto-speech yield status                 # switch, rule, players, exceptions, longest hold
+auto-speech yield player-add Slack       # Slack's sound holds speech too
+auto-speech yield player-remove Chrome   # Chrome's sound no longer holds
+auto-speech yield player-reset           # back to the built-in players
+auto-speech yield hold-for any           # the old rule: every app holds, except the exceptions
+auto-speech yield hold-for players       # default
 auto-speech yield add Music Spotify      # these apps' sound does not hold speech
 auto-speech yield remove Spotify
 auto-speech yield clear
 auto-speech yield off                    # speech plays over other apps' sound
 auto-speech yield on                     # default
-auto-speech yield check                  # who is playing right now; would speech hold?
+auto-speech yield check                  # who is playing right now, why each does or does not hold
 ```
 
-MCP: `sound_yield(action="add", apps=["com.apple.Music"])`, same actions.
+MCP: `sound_yield(action="player-add", apps=["Slack"])`, same actions.
 Config: `~/.config/auto-speech/sound-yield.toml`, section `[sound_yield]`
-with `enabled`, `exceptions`, `max_wait_seconds` and `poll_seconds`; see
-`config/sound-yield.toml.example`. A change takes effect at the next
+with `enabled`, `hold_for`, `players`, `exceptions`, `max_wait_seconds`
+and `poll_seconds`; see `config/sound-yield.toml.example`. A change takes effect at the next
 playback, or at the next poll of a hold already in progress; no restart.
 The slash commands `/auto-speech-yield` and `/auto-speech-missed` (extras)
 run the same CLI. The reasoning behind the 180 s wait, the missed list
 and the replay order is in
-[ADR-015](docs/decisions/ADR-015-sound-yield.md).
+[ADR-015](docs/decisions/ADR-015-sound-yield.md); the players list and why
+a silent stream cannot be told from a quiet one without a tap is in
+[ADR-017](docs/decisions/ADR-017-players-list.md).
 
 ## Naming the desk only when the speaker changes
 
