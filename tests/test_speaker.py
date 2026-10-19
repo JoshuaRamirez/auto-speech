@@ -125,15 +125,18 @@ class TestDeskNames(unittest.TestCase):
 
 
 class TestSelfAnnounced(unittest.TestCase):
-    def test_a_line_that_opens_with_a_name_here_is_self_announced(self) -> None:
+    NAMES = ("Master Desk", "Clerk - Desk", "Aspen Desk")
+
+    def test_a_line_that_opens_with_a_known_name_here_is_self_announced(self) -> None:
         for text in ("Master Desk here, the build is green.", "master desk here: done.",
                      "  Clerk - Desk here. Two things.", "Aspen Desk here — one thing."):
-            self.assertTrue(is_self_announced(text), text)
+            self.assertTrue(is_self_announced(text, self.NAMES), text)
 
     def test_other_lines_are_not(self) -> None:
         for text in ("The build is green.", "Here is the build.", "I am here, finally.",
+                     "Someone else here, with news.",
                      "Nobody is here, and that is the point of this long opening clause here,"):
-            self.assertFalse(is_self_announced(text), text)
+            self.assertFalse(is_self_announced(text, self.NAMES), text)
 
 
 class TestAnnouncer(unittest.TestCase):
@@ -277,7 +280,7 @@ class TestRunAction(unittest.TestCase):
         self.assertTrue(r.ok)
         self.assertIn("speaker names: on", r.text)
         self.assertIn("quiet gap: 15 min", r.text)
-        self.assertIn("desks known: 5", r.text)
+        self.assertIn("desks known: 4", r.text)  # Desk and First Desk share a session; the personal note is skipped
 
     def test_off_and_on(self) -> None:
         self.assertIn("speaker names: off", run_action("off", store=self.store, names=self.names).text)
