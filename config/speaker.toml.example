@@ -1,0 +1,26 @@
+# auto-speech speaker names: "<desk> here," only when the speaker changes.
+#
+# Copy to ~/.config/auto-speech/speaker.toml and edit, or point
+# AUTO_SPEECH_SPEAKER_CONFIG=/path/to/file.toml at a custom one.
+# `auto-speech speaker …` and the MCP tool `speaker` write this same file,
+# with the same names. The daemon re-reads it when it changes. Defaults shown.
+
+[speaker]
+# The switch. true: a line opens with "<desk> here," when the session
+# speaking differs from the last one heard, or after the quiet gap.
+# false: lines are spoken exactly as sent.
+enabled = true
+
+# After this many seconds of nothing heard, the same desk names itself
+# again (900 = 15 minutes).
+quiet_gap_seconds = 900
+
+# Where the desk agents' notes are (front matter `session:` and `name:`).
+# Unset: $AUTO_SPEECH_AGENTS_DIR, else $DESK_DIR/Agents, else
+# ~/Desk/Agents.
+# agents_dir = "~/Desk/Agents"
+
+# Names set by hand, session id = name; these win over the notes.
+# `auto-speech speaker name <session> <name>` writes them here.
+[speaker.names]
+# "dddddddd-0000-4000-8000-000000000003" = "The Clerk"
