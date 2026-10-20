@@ -11,6 +11,7 @@ missed_speech.py and ADR-015.
 from __future__ import annotations
 
 import logging
+import os
 import shutil
 import signal
 import subprocess
@@ -39,6 +40,16 @@ if "unittest" in sys.modules:
 logger = logging.getLogger(__name__)
 
 MPV_PID_PATH = state_path("auto-speech-mpv.pid")
+# The mpv audio output (its --ao). Unset: mpv picks the system output. "null" plays
+# to nothing: the test suite sets it so no test can reach the speakers
+# (his 2026-10-20 10:40 "turn off the speech tests").
+AUDIO_OUTPUT_ENV = "AUTO_SPEECH_MPV_AO"
+
+
+def audio_output_from_env() -> str | None:
+    """The mpv audio output named by AUTO_SPEECH_MPV_AO, or None when unset or blank."""
+    value = (os.environ.get(AUDIO_OUTPUT_ENV) or "").strip()
+    return value or None
 
 
 class AudioSinkError(RuntimeError):
@@ -92,16 +103,22 @@ class NativeAudioSink:
         mpv_path: str | Path | None = None,
         *,
         sound_yield: SoundYieldGate | Any | None = None,
+        audio_output: str | None = None,
     ) -> None:
         """Initialize NativeAudioSink.
 
         Args:
             mpv_path: Optional custom path to mpv binary. If None, resolved via PATH.
+            audio_output: mpv's audio output (--ao), e.g. "null" for silence. None
+                reads AUTO_SPEECH_MPV_AO; unset or blank leaves mpv's default.
             sound_yield: The gate consulted before every playback. None means
                 the default gate (DEFAULT_SOUND_YIELD_FACTORY); False means
                 no gate at all (never hold).
         """
         self._custom_mpv_path = str(mpv_path) if mpv_path is not None else None
+        self._audio_output = (
+            (audio_output.strip() or None) if audio_output is not None else audio_output_from_env()
+        )
         self._playback_lock = threading.Lock()
         self._state_lock = threading.Lock()
         self._proc: subprocess.Popen | None = None
@@ -115,6 +132,27 @@ class NativeAudioSink:
         self._hold_abort = threading.Event()
         self._holding_since: float | None = None
         self._last_hold: HoldOutcome | None = None
+
+    @property
+    def audio_output(self) -> str | None:
+        """The mpv audio output this sink plays to (None: mpv's default)."""
+        return self._audio_output
+
+    def mpv_argv(self, mpv_bin: str, wav_path: str | Path) -> list[str]:
+        """The mpv command line for one file: quiet, no video, no media keys, and
+        --ao=<audio_output> when one is set (the test suite's "null")."""
+        argv = [
+            mpv_bin,
+            "--really-quiet",
+            "--no-video",
+            "--keep-open=no",
+            "--idle=no",
+            "--input-media-keys=no",  # never claim the macOS media keys (AirPods play/pause belongs to other apps)
+        ]
+        if self._audio_output:
+            argv.append(f"--ao={self._audio_output}")
+        argv.append(str(wav_path))
+        return argv
 
     def _resolve_mpv(self) -> str:
         """Resolve mpv binary path, raising MpvNotInstalledError if not found."""
@@ -167,15 +205,7 @@ class NativeAudioSink:
             with self._state_lock:
                 self._interrupted = False
                 proc = subprocess.Popen(
-                    [
-                        mpv_bin,
-                        "--really-quiet",
-                        "--no-video",
-                        "--keep-open=no",
-                        "--idle=no",
-                        "--input-media-keys=no",  # never claim the macOS media keys (AirPods play/pause belongs to other apps)
-                        str(wav_path),
-                    ],
+                    self.mpv_argv(mpv_bin, wav_path),
                     stdout=subprocess.DEVNULL,
                     stderr=subprocess.PIPE,
                 )
