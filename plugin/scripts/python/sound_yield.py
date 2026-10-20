@@ -1133,6 +1133,12 @@ def format_settings(settings: SoundYieldSettings) -> str:
     return "\n".join(lines)
 
 
+def _playing(proc: AudioProcess) -> str:
+    """A process that also holds the microphone says so, so `yield check`
+    shows why it is not a meeting (it is not on the meeting-apps list)."""
+    return "playing, microphone open" if proc.running_input else "playing"
+
+
 def format_assessment(assessment: Assessment, *, now: float | None = None) -> str:
     lines: list[str] = []
     s = assessment.settings
@@ -1156,11 +1162,11 @@ def format_assessment(assessment: Assessment, *, now: float | None = None) -> st
         for p in assessment.mic:
             lines.append(f"microphone in use: {p.label()} — not a meeting app, does not hold")
         for p in assessment.blockers:
-            lines.append(f"playing: {p.label()} — holds speech")
+            lines.append(f"{_playing(p)}: {p.label()} — holds speech")
         for p in assessment.excepted:
-            lines.append(f"playing: {p.label()} — on the exception list, does not hold")
+            lines.append(f"{_playing(p)}: {p.label()} — on the exception list, does not hold")
         for p in assessment.others:
-            lines.append(f"playing: {p.label()} — not on the players list, does not hold")
+            lines.append(f"{_playing(p)}: {p.label()} — not a meeting app nor a player, does not hold")
         for p in assessment.own:
             lines.append(f"playing: {p.label()} — auto-speech's own, does not hold")
         if assessment.in_meeting:
