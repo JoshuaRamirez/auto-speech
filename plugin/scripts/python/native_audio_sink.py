@@ -28,6 +28,7 @@ from sound_yield import (
     EXPIRED,
     HoldOutcome,
     SoundYieldGate,
+    REASON_MEETING,
 )
 
 # Ensure unittest.mock is available if running under a test runner where unittest is loaded
@@ -73,9 +74,15 @@ class PlaybackYielded(AudioSinkError):
         self.path = path
         self.outcome = outcome
         who = ", ".join(outcome.blockers) or "another app"
-        super().__init__(
-            f"playback of {path} set aside: held {outcome.waited_seconds:.0f}s while {who} played sound"
-        )
+        if getattr(outcome, "reason", "") == REASON_MEETING:
+            message = f"playback of {path} set aside: in a meeting ({who})"
+        else:
+            message = f"playback of {path} set aside: held {outcome.waited_seconds:.0f}s while {who} played sound"
+        super().__init__(message)
+
+    @property
+    def in_meeting(self) -> bool:
+        return getattr(self.outcome, "reason", "") == REASON_MEETING
 
 
 def default_sound_yield_gate() -> SoundYieldGate | None:
@@ -303,6 +310,7 @@ class NativeAudioSink:
                 "status": last.status,
                 "waited_seconds": round(last.waited_seconds, 1),
                 "blockers": list(last.blockers),
+                "reason": getattr(last, "reason", ""),
             },
         }
 

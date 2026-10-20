@@ -56,7 +56,7 @@ The default install exposes 8 curated commands:
 | `/auto-speech-scope [all\|solo]` | read ALL sessions, or only THIS one |
 | `/auto-speech-doctor [json]` | health check; exits non-zero when unhealthy |
 
-15 more (playback transport, narrator controls, autoplay-status, yield, missed, update)
+17 more (playback transport, narrator controls, autoplay-status, yield, missed, meeting, update)
 live in `plugin/commands-extra/` — install with
 `bash setup/install-plugin.sh --with-extras`. Every command is prefixed
 `auto-speech-` so nothing collides with Claude Code built-ins or other
@@ -139,6 +139,20 @@ auto-speech missed --play                # replay the missed lines in that order
 auto-speech missed --clear               # forget them
 ```
 
+**In a meeting, auto-speech does not talk.** A meeting app holding the
+microphone (Teams, Zoom, FaceTime, a browser on Meet, Slack, Webex,
+Discord) is read from the same Core Audio process walk, with no permission
+and no audio captured; every line asked for meanwhile goes straight to the
+missed list, and when the meeting ends one spoken line says how many were
+missed. Your own switch, for the rest:
+
+```bash
+auto-speech yield meeting on             # 60 minutes, then off by itself
+auto-speech yield meeting for 45m        # or 2h, 1h30m; 8 h at most
+auto-speech yield meeting off
+auto-speech yield meeting                # status
+```
+
 Each replayed line leaves the list once it has played; lines still held
 play by themselves when the sound stops. MCP: `missed(action="list" |
 "play" | "clear")`, same text. The list is one file,
@@ -170,7 +184,7 @@ Config: `~/.config/auto-speech/sound-yield.toml`, section `[sound_yield]`
 with `enabled`, `hold_for`, `players`, `exceptions`, `max_wait_seconds`
 and `poll_seconds`; see `config/sound-yield.toml.example`. A change takes effect at the next
 playback, or at the next poll of a hold already in progress; no restart.
-The slash commands `/auto-speech-yield` and `/auto-speech-missed` (extras)
+The slash commands `/auto-speech-yield`, `/auto-speech-meeting` and `/auto-speech-missed` (extras)
 run the same CLI. The reasoning behind the 180 s wait, the missed list
 and the replay order is in
 [ADR-015](docs/decisions/ADR-015-sound-yield.md); the players list and why

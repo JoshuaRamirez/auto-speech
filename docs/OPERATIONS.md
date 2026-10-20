@@ -103,6 +103,15 @@ re-reads it on every hold poll, so no restart is needed. Keys: `enabled`
 built-in list, ADR-017), `exceptions` ([]), `max_wait_seconds` (180),
 `poll_seconds` (0.5).
 `after_max_wait` (v0.3.0) is gone: nothing held is dropped any more.
+`meeting_hold` (true), `meeting_apps` (Teams, Zoom, FaceTime, the browsers,
+Slack, Webex, Discord) and `meeting_summary` (true) are the meeting hold
+(ADR-018): a listed app holding the microphone sets every line aside at
+once with reason `meeting`, and one spoken line after the meeting says how
+many. His own mode is `auto-speech yield meeting on|off|for 45m|status`
+(60 min by default, 8 h at most), kept in
+`~/.local/state/auto-speech/meeting.json` (`$AUTO_SPEECH_MEETING_FILE`;
+`tests/run_all.sh` points it into the isolated state directory); past its
+end it reads as off. `yield check` names who holds the microphone.
 
 The missed list, the lines held or set aside while another app played
 sound, is one JSON file: `~/.local/state/auto-speech/missed.json`

@@ -37,6 +37,7 @@ REASON_STALE = "stale backlog"
 REASON_INTERRUPTED = "interrupted"
 REASON_RESTART = "daemon restarted"
 REASON_TIMEOUT = "timed out"
+REASON_MEETING = "meeting"  # set aside at once while he was in a meeting
 
 ACTIONS = ("list", "play", "clear")
 
@@ -167,7 +168,15 @@ class MissedList:
         return {
             "held": sum(1 for m in lines if m.status == HELD),
             "missed": sum(1 for m in lines if m.status == MISSED),
+            "meeting": sum(1 for m in lines if m.status == MISSED and m.reason == REASON_MEETING),
         }
+
+    def missed_in_meeting(self, since: float = 0.0) -> list[MissedLine]:
+        """The lines set aside for a meeting, missed after `since`, oldest first."""
+        return [
+            m for m in self._read()
+            if m.status == MISSED and m.reason == REASON_MEETING and (m.missed_at or 0.0) >= since
+        ]
 
     # -- writes ------------------------------------------------------------------
 
@@ -280,6 +289,8 @@ def format_lines(lines: list[MissedLine], *, now: float | None = None) -> str:
             why = "missed: the daemon restarted while it was held"
         elif m.reason == REASON_TIMEOUT:
             why = "missed: timed out (its synthesis or playback ran past its budget)"
+        elif m.reason == REASON_MEETING:
+            why = f"missed: in a meeting ({_who(m.held_for)})"
         else:
             why = "missed"
         out.append(f"  {i}. {when}  {why}")
