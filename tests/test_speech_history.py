@@ -216,7 +216,16 @@ class TestExport(_Tmp):
         self.history.prune()
         self.assertFalse(old.exists())
         self.assertTrue(young.exists(), "an export may still be writing its sidecar")
+        tmp = self.history.directory / ".20000101-000000-000-x.wav.tmp"
+        tmp.write_bytes(b"partial")
+        os.utime(tmp, (T0 - 3600, T0 - 3600))
+        self.history.prune()
+        self.assertFalse(tmp.exists(), "a .tmp left by an export cut short goes too")
         self.assertEqual([x.text for x in self.history.load()], ["kept"])
+
+    def test_names_sort_in_time_order_in_utc(self):
+        line = self.export()
+        self.assertTrue(line.stem.startswith(time.strftime("%Y%m%d-%H%M%S", time.gmtime(T0))), line.stem)
 
     def test_no_temp_files_are_left(self):
         self.export()

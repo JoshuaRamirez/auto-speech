@@ -37,11 +37,11 @@ never stops speech.
 
 ### On disk
 One line is two files in `~/.local/state/auto-speech/history/`
-(`$AUTO_SPEECH_HISTORY_DIR`): `<YYYYmmdd-HHMMSS-mmm>-<id>.wav`, a copy of
+(`$AUTO_SPEECH_HISTORY_DIR`): `<YYYYmmdd-HHMMSS-mmm>-<id>.wav` (UTC), a copy of
 the WAV that played, and `<same>.json`, the sidecar. The WAV is written
 first and the sidecar last, each by tmp + rename, so a line with no
-sidecar is not in the history; a WAV left without one for over a minute
-is removed at the next prune. Names sort in time order.
+sidecar is not in the history; a WAV left without one, or a `.tmp`,
+for over a minute is removed at the next prune. Names sort in time order.
 
 The sidecar (version 1): `text` (the words in the audio: with the
 "<desk> here," prefix when it was synthesized in, without it when a cached
@@ -111,8 +111,9 @@ the player. The config file is read on every line: no restart needed.
 
 ### For readers of the store (Spoken Transcript)
 The layout is the contract: one directory; a line is `<stem>.wav` and
-`<stem>.json`, `<stem>` = `YYYYmmdd-HHMMSS-mmm-<id>` in local time, so
-names sort in time order; a `.json` is present only once its WAV is
+`<stem>.json`, `<stem>` = `YYYYmmdd-HHMMSS-mmm-<id>` in UTC, so names
+sort in time order even across a clock change (the sidecar's
+`spoken_at` is local); a `.json` is present only once its WAV is
 complete; dot-files are in-progress writes and the lock; sidecar
 `version` 1 as above. A reader may find a line gone between listing and
 reading it (pruned) and should skip it. Readers never write or delete.
@@ -136,6 +137,8 @@ and nothing opens. `history status` says which of these applies.
 - `tests/run_all.sh` points `AUTO_SPEECH_HISTORY_DIR` and
   `AUTO_SPEECH_HISTORY_CONFIG` into its private state dir, so no test
   writes his history or his config.
+- A bare `replay N` of a replay-cache clip carries no text (the cache
+  keeps none), so its sidecar has empty `text` and no word timings.
 - The prefix clip of a cached line (ADR-016) is not exported on its own;
   the sidecar's `sender` carries who it was.
 

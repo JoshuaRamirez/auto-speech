@@ -48,7 +48,7 @@ import time
 import tomllib
 import wave
 from dataclasses import dataclass, replace
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Callable, Optional
 
@@ -69,7 +69,7 @@ TIMING_ESTIMATE = "estimate"
 TIMING_SYNTHESIZER = "synthesizer"
 ESTIMATE_METHOD = "word length in characters, plus a pause after commas and sentence ends, spread over the clip's duration"
 
-ORPHAN_GRACE_SECONDS = 60.0  # a WAV this young without its sidecar may be an export still being written
+ORPHAN_GRACE_SECONDS = 60.0  # a WAV without its sidecar, or a .tmp, this young may be an export still being written
 
 PRIORITY_NAMES = {1: "user interrupt", 2: "explicit", 3: "autoplay", 4: "narration"}
 
@@ -282,8 +282,8 @@ class HistoryLine:
 
 
 class SpeechHistory:
-    """The history dir. The daemon is the writer; `keep` from the CLI or MCP
-    prunes too, under the same file lock. Every write is atomic (tmp +
+    """The history dir. The daemon is the writer; `max-gb` from the CLI or
+    MCP prunes too, under the same file lock. Every write is atomic (tmp +
     rename), WAV first and sidecar last."""
 
     def __init__(
@@ -332,7 +332,7 @@ class SpeechHistory:
         spoken_at: Optional[float] = None,
     ) -> Optional[HistoryLine]:
         """Copy the played WAV into the history with its sidecar, then prune
-        to `keep`. None when the history is off. `word_timings` from a
+        to `max_gb`. None when the history is off. `word_timings` from a
         synthesizer that gives them are kept as given; otherwise they are
         estimated and marked so."""
         settings = self._store.load()
@@ -342,7 +342,10 @@ class SpeechHistory:
         when = float(spoken_at) if spoken_at is not None else self._clock()
         line_id = secrets.token_hex(4)
         local = datetime.fromtimestamp(when)
-        stem = f"{local.strftime('%Y%m%d-%H%M%S')}-{int((when % 1) * 1000):03d}-{line_id}"
+        # The name is in UTC so names sort in time order across a clock change
+        # (the hour repeated in autumn); the sidecar keeps the local time.
+        utc = datetime.fromtimestamp(when, timezone.utc)
+        stem = f"{utc.strftime('%Y%m%d-%H%M%S')}-{int((when % 1) * 1000):03d}-{line_id}"
         duration = wav_duration_seconds(src)
         if word_timings is not None:
             timings = {"source": TIMING_SYNTHESIZER, "words": list(word_timings)}
@@ -386,26 +389,46 @@ class SpeechHistory:
 
     # -- reads -------------------------------------------------------------------
 
-    def _entries_unlocked(self) -> list[tuple[str, int]]:
-        """(stem, bytes of its WAV and sidecar) for every complete line,
-        oldest first, from the directory listing alone: no sidecar is read."""
+    def _scan_unlocked(self) -> tuple[list[tuple[str, int]], list[tuple[Path, float]]]:
+        """One directory listing, no sidecar read: (stem, bytes of its WAV
+        and sidecar) for every complete line, oldest first; and the leftovers
+        of an export cut short (a WAV with no sidecar, a .tmp) with their
+        mtimes."""
         if not self._dir.is_dir():
-            return []
+            return [], []
         sizes: dict[str, int] = {}
+        mtimes: dict[str, float] = {}
         stems: set[str] = set()
+        leftovers: list[tuple[Path, float]] = []
         with os.scandir(self._dir) as it:
             for e in it:
                 name = e.name
-                if name.startswith(".") or not (name.endswith(".json") or name.endswith(".wav")):
+                if name.startswith("."):
+                    if name.endswith(".tmp"):
+                        try:
+                            leftovers.append((Path(e.path), e.stat(follow_symlinks=False).st_mtime))
+                        except OSError:
+                            pass
+                    continue
+                if not (name.endswith(".json") or name.endswith(".wav")):
                     continue
                 stem, _, ext = name.rpartition(".")
                 try:
-                    sizes[stem] = sizes.get(stem, 0) + e.stat(follow_symlinks=False).st_size
+                    st = e.stat(follow_symlinks=False)
                 except OSError:
                     continue
+                sizes[stem] = sizes.get(stem, 0) + st.st_size
                 if ext == "json":
                     stems.add(stem)
-        return [(stem, sizes.get(stem, 0)) for stem in sorted(stems)]
+                else:
+                    mtimes[stem] = st.st_mtime
+        for stem, mtime in mtimes.items():
+            if stem not in stems:
+                leftovers.append((self._dir / f"{stem}.wav", mtime))
+        return [(stem, sizes.get(stem, 0)) for stem in sorted(stems)], leftovers
+
+    def _entries_unlocked(self) -> list[tuple[str, int]]:
+        return self._scan_unlocked()[0]
 
     def _line(self, stem: str) -> Optional[HistoryLine]:
         js = self._dir / f"{stem}.json"
@@ -449,7 +472,7 @@ class SpeechHistory:
         """Delete the oldest lines until the store is within `max_gb`, and
         any WAV left without its sidecar (an export cut short). The newest
         line always stays. Returns how many lines went."""
-        entries = self._entries_unlocked()
+        entries, leftovers = self._scan_unlocked()
         limit = float(max_gb) * BYTES_PER_GB
         total = sum(size for _, size in entries)
         removed = 0
@@ -461,14 +484,9 @@ class SpeechHistory:
             total -= size
             removed += 1
         now = self._clock()
-        for wav in self._dir.glob("*.wav"):
-            if wav.name.startswith(".") or wav.with_suffix(".json").exists():
-                continue
-            try:
-                if now - wav.stat().st_mtime > ORPHAN_GRACE_SECONDS:
-                    wav.unlink(missing_ok=True)
-            except OSError:
-                pass
+        for path, mtime in leftovers:
+            if now - mtime > ORPHAN_GRACE_SECONDS:
+                path.unlink(missing_ok=True)
         return removed
 
     def prune(self, max_gb: Optional[float] = None) -> int:
