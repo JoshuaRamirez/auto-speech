@@ -1069,7 +1069,7 @@ def test_longest_wait_sets_the_line_aside_as_missed_never_dropped() -> None:
     assert (m.status, m.reason, m.text, m.held_for) == (MISSED, REASON_LONGEST_WAIT, "You have mail.", ("ChatGPT (pid 9)",))
     assert m.waited_seconds >= 180.0
     assert (m.priority, m.voice_id, m.speed) == (4, "af_bella", 1.2)
-    assert svc._missed.counts() == {"held": 0, "missed": 1}
+    assert svc._missed.counts() == {"held": 0, "missed": 1, "meeting": 0}
 
 
 def test_interrupt_during_a_hold_keeps_the_line_as_missed() -> None:
@@ -1133,6 +1133,119 @@ def test_replay_of_a_missed_line_plays_over_other_sound_and_clears_it() -> None:
     assert svc._missed.load() == []
 
 
+# --- meetings: set aside before synthesis; one summary line after (ADR-018) ---
+
+
+class _Meeting:
+    """What the gate says: `reason` and the names, like a sound_yield.Assessment."""
+
+    def __init__(self, names=()):
+        self.reason = "meeting" if names else ""
+        self._names = tuple(names)
+
+    def meeting_names(self):
+        return self._names
+
+
+def _meeting_service(sink, *, names=(), summary: bool = True):
+    svc = _missed_service(sink)
+    svc._yield_gate.assess.return_value = _Meeting(names)
+    svc._yield_gate.settings.return_value = MagicMock(max_wait_seconds=180.0, meeting_summary=summary)
+    svc._meeting_active = None
+    svc._meeting_checked_at = 0.0
+    svc._meeting_summary_after = 0.0
+    svc.enqueue_text = lambda text: svc.__dict__.setdefault("queued", []).append(text)
+    return svc
+
+
+def test_a_meeting_sets_the_line_aside_before_synthesis() -> None:
+    from missed_speech import MISSED, REASON_MEETING
+    from sound_yield import CLEAR, HoldOutcome
+
+    sink = _HoldSink(HoldOutcome(CLEAR))
+    svc = _meeting_service(sink, names=("MSTeams (com.microsoft.teams2) (pid 601)",))
+    svc._speak("The build is green.", item=_item("The build is green.", priority=4))
+
+    assert svc._synth.synthesized == [], "no synthesis during a meeting"
+    assert sink.played == []
+    [m] = svc._missed.load()
+    assert (m.status, m.reason, m.text, m.held_for) == (
+        MISSED, REASON_MEETING, "The build is green.", ("MSTeams (com.microsoft.teams2) (pid 601)",)
+    )
+    assert svc._missed.counts() == {"held": 0, "missed": 1, "meeting": 1}
+
+
+def test_an_explicit_replay_plays_through_a_meeting() -> None:
+    from sound_yield import CLEAR, HoldOutcome
+
+    sink = _HoldSink(HoldOutcome(CLEAR))
+    svc = _meeting_service(sink, names=("meeting mode (manual)",))
+    svc._speak("Replay me.", item=_item("Replay me.", hold=False, missed_id="abcd1234"))
+    assert len(sink.played) == 1
+    assert sink.calls[0]["hold"] is False
+    assert svc._missed.load() == []
+
+
+def test_the_sink_yielding_for_a_meeting_is_recorded_as_a_meeting() -> None:
+    from missed_speech import MISSED, REASON_MEETING
+    from sound_yield import EXPIRED, HoldOutcome, REASON_MEETING as HOLD_MEETING
+
+    # The gate said nothing before synthesis (the meeting began a moment later);
+    # the sink's hold found it and yielded with reason meeting.
+    sink = _HoldSink(HoldOutcome(EXPIRED, 0.0, ("MSTeams (pid 601)",), HOLD_MEETING), yielded=True)
+    svc = _meeting_service(sink, names=())
+    svc._speak("Late line.", item=_item("Late line."))
+    assert sink.played == []
+    [m] = svc._missed.load()
+    assert (m.status, m.reason, m.held_for) == (MISSED, REASON_MEETING, ("MSTeams (pid 601)",))
+
+
+def test_the_meeting_watch_speaks_one_summary_when_the_meeting_ends() -> None:
+    from sound_yield import CLEAR, HoldOutcome
+
+    sink = _HoldSink(HoldOutcome(CLEAR))
+    svc = _meeting_service(sink, names=("meeting mode (manual)",))
+    t0 = time.time()
+    assert svc._watch_meeting(now=t0) is None, "a meeting begins: nothing to say"
+    assert svc._meeting_active is True
+    svc._speak("One.", item=_item("One."))
+    svc._speak("Two.", item=_item("Two."))
+    assert svc._watch_meeting(now=t0 + 1.0) is None, "within the poll interval: not asked again"
+    assert svc._watch_meeting(now=t0 + 3.0) is None, "still in the meeting"
+
+    svc._yield_gate.assess.return_value = _Meeting(())
+    text = svc._watch_meeting(now=t0 + 6.0)
+    assert text == "You missed 2 lines during the meeting. Say auto-speech missed to hear them."
+    assert svc.queued == [text]
+    assert svc._meeting_active is False
+    assert svc._watch_meeting(now=t0 + 9.0) is None, "said once"
+    assert svc.queued == [text]
+    # The lines stay on the list for `missed --play`.
+    assert [m.text for m in svc._missed.load()] == ["One.", "Two."]
+
+
+def test_the_meeting_watch_summarises_lines_left_from_before_a_restart() -> None:
+    from sound_yield import CLEAR, HoldOutcome
+
+    sink = _HoldSink(HoldOutcome(CLEAR))
+    earlier = _meeting_service(sink, names=("meeting mode (manual)",))
+    earlier._speak("Before the restart.", item=_item("Before the restart."))
+
+    # A new daemon on the same missed list, with the meeting over.
+    later = _meeting_service(sink, names=())
+    later._missed = earlier._missed
+    text = later._watch_meeting(now=time.time())
+    assert text == "You missed 1 line during the meeting. Say auto-speech missed to hear them."
+
+    # No summary when the file says so, and none when nothing was set aside.
+    quiet = _meeting_service(sink, names=(), summary=False)
+    quiet._missed = earlier._missed
+    assert quiet._watch_meeting(now=time.time()) is None
+    empty = _meeting_service(sink, names=())
+    assert empty._watch_meeting(now=time.time()) is None
+    assert "queued" not in empty.__dict__
+
+
 def test_speak_with_a_plain_sink_and_no_item_still_works() -> None:
     sink = _MockSink()  # play(wav_path) only: no hold keywords
     svc = _missed_service(sink)
@@ -1180,7 +1293,7 @@ def test_status_reply_counts_the_missed_list() -> None:
     svc._missed.hold(MissedLine(id="b", text="y", queued_at=time.time()), ("Music",))
 
     resp = svc.dispatch_json({"action": "status"})
-    assert resp["missed"] == {"held": 1, "missed": 1}
+    assert resp["missed"] == {"held": 1, "missed": 1, "meeting": 0}
 
 
 def test_dispatch_json_reads_a_command_key_like_action() -> None:
@@ -1199,7 +1312,7 @@ def test_dispatch_json_reads_a_command_key_like_action() -> None:
     resp = svc.dispatch_json({"command": "status"})
     assert resp["status"] == "ok", resp
     assert resp["daemon_state"] == "IDLE"
-    assert resp["missed"] == {"held": 0, "missed": 0}
+    assert resp["missed"] == {"held": 0, "missed": 0, "meeting": 0}
 
     resp = svc.dispatch_json({"command": "dance"})
     assert resp["error_code"] == "INVALID_ACTION"
@@ -1430,6 +1543,11 @@ def main() -> int:
     test_interrupt_during_a_hold_keeps_the_line_as_missed,
     test_stale_backlog_after_a_hold_is_set_aside_without_synthesis,
     test_an_old_line_still_plays_when_no_hold_touched_it,
+    test_a_meeting_sets_the_line_aside_before_synthesis,
+    test_an_explicit_replay_plays_through_a_meeting,
+    test_the_sink_yielding_for_a_meeting_is_recorded_as_a_meeting,
+    test_the_meeting_watch_speaks_one_summary_when_the_meeting_ends,
+    test_the_meeting_watch_summarises_lines_left_from_before_a_restart,
     test_replay_of_a_missed_line_plays_over_other_sound_and_clears_it,
     test_speak_with_a_plain_sink_and_no_item_still_works,
     test_dispatch_json_carries_the_replay_flags_into_the_queue_item,

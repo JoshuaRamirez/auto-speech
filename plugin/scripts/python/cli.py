@@ -637,8 +637,8 @@ def handle_narrate(args: argparse.Namespace) -> int:
 
 
 def handle_yield(args: argparse.Namespace, store: Any | None = None, gate: Any | None = None) -> int:
-    """`auto-speech yield <status|on|off|add|remove|clear|check|hold-for|player-add|player-remove|player-reset> [apps…]`:
-    the sound-yield switch, the players list and the exception list (same verbs as the MCP tool)."""
+    """`auto-speech yield <status|on|off|add|remove|clear|check|hold-for|player-add|player-remove|player-reset|meeting> [apps…]`:
+    the sound-yield switch, the players list, the exception list and his meeting mode (same verbs as the MCP tool)."""
     action = getattr(args, "yield_action", None) or "status"
     apps = getattr(args, "apps", None) or []
     result = run_sound_yield_action(action, apps, store=store, gate=gate)
@@ -1079,6 +1079,11 @@ def build_parser() -> argparse.ArgumentParser:
     p_sy_pr = sub_sy.add_parser("player-remove", help="Remove apps from the players list.")
     p_sy_pr.add_argument("apps", nargs="+", help="Bundle ids or names to remove (Chrome removes com.google.Chrome).")
     sub_sy.add_parser("player-reset", help="Put the players list back to the built-in defaults.")
+    p_sy_mt = sub_sy.add_parser(
+        "meeting",
+        help="His own meeting mode: status | on (60 min) | off | for <45m|2h|1h30m> (8 h at most); speech is set aside as missed meanwhile.",
+    )
+    p_sy_mt.add_argument("apps", nargs="*", metavar="status|on|off|for <duration>", help="status | on | off | for 45m")
 
     p_md = subparsers.add_parser(
         "missed",

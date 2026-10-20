@@ -855,13 +855,39 @@ class TestCliYield(BaseCliTestCase):
         self.assertIn("playing: Music (com.apple.Music) (pid 501) — holds speech", stdout.getvalue())
         self.assertIn("speech would HOLD (up to 180 s, then set aside as missed)", stdout.getvalue())
 
+    def test_yield_meeting_on_off_for_share_the_flag_file(self) -> None:
+        flag = self.home / "state" / "meeting.json"
+        os.environ["AUTO_SPEECH_MEETING_FILE"] = str(flag)
+        rc, out, _ = self._run("yield", "meeting")
+        self.assertEqual((rc, out.strip()), (0, "meeting mode: off"))
+        rc, out, _ = self._run("yield", "meeting", "on")
+        self.assertEqual(rc, 0)
+        self.assertIn("meeting mode: on until", out)
+        self.assertIn("60 min left", out)
+        self.assertTrue(flag.exists())
+        rc, out, _ = self._run("yield", "meeting", "for", "45m")
+        self.assertEqual(rc, 0)
+        self.assertIn("45 min left", out)
+        rc, out, _ = self._run("yield", "status")
+        self.assertIn("meeting hold: ON", out)
+        self.assertIn("meeting mode: on until", out)
+        rc, _, err = self._run("yield", "meeting", "for", "9h")
+        self.assertEqual(rc, 2)
+        self.assertIn("8 h", err)
+        rc, out, _ = self._run("yield", "meeting", "off")
+        self.assertEqual((rc, out.strip()), (0, "meeting mode: off (was on)"))
+        self.assertFalse(flag.exists())
+
     def test_yield_config_shape_matches_mcp_and_file(self) -> None:
         import tomllib
 
         self._run("yield", "off")
         self._run("yield", "add", "Music")
         data = tomllib.loads(self._cfg().read_text())["sound_yield"]
-        self.assertEqual(set(data), {"enabled", "hold_for", "players", "exceptions", "max_wait_seconds", "poll_seconds"})
+        self.assertEqual(
+            set(data),
+            {"enabled", "hold_for", "players", "exceptions", "max_wait_seconds", "poll_seconds", "meeting_hold", "meeting_apps", "meeting_summary"},
+        )
         self.assertEqual(data["enabled"], False)
         self.assertEqual(data["exceptions"], ["Music"])
 

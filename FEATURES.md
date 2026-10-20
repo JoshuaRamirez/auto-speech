@@ -41,6 +41,18 @@ module that owns it. Release-by-release history is in
   has played), `missed --clear` forgets them; MCP tool `missed`, slash
   command `/auto-speech-missed`; file
   `~/.local/state/auto-speech/missed.json` (`missed_speech.py`).
+- **No speech during a meeting** (ADR-018): a meeting app (Teams, Zoom,
+  FaceTime, a browser on Meet, Slack, Webex, Discord) holding the
+  microphone, read from the same Core Audio process walk (input-running
+  flag; no capture, no permission), or his own `auto-speech yield meeting
+  on|off|for 45m` (60 min by default, 8 h at most, expires by itself; MCP
+  `sound_yield(action="meeting")`, `/auto-speech-meeting`), sets every line
+  aside on the missed list at once with reason `meeting`, no synthesis, no
+  stall; one spoken line after the meeting says how many were missed. An
+  open microphone that is not a meeting app never holds. Keys
+  `meeting_hold`, `meeting_apps`, `meeting_summary`; flag file
+  `~/.local/state/auto-speech/meeting.json` (`sound_yield.py`,
+  `narrator_service.py`).
 - **Exception list and off switch** for the hold, identical in the CLI
   (`auto-speech yield`), the MCP tool (`sound_yield`) and
   `~/.config/auto-speech/sound-yield.toml`; live re-read, no restart.
@@ -122,7 +134,7 @@ module that owns it. Release-by-release history is in
 - **MCP server** (`mcp_server.py`, stdio JSON-RPC): `speak`,
   `autoplay_turn`, `narrate_event`, `playback_control`, `session_configure`,
   `sound_yield`, `missed`, `doctor` (ADR-014 for the fire-and-forget shape).
-- **Slash commands**: 8 curated (`plugin/commands/`) plus 15 extras
+- **Slash commands**: 8 curated (`plugin/commands/`) plus 17 extras
   (`plugin/commands-extra/`), every one prefixed `auto-speech-`.
 - **Web app** at `http://127.0.0.1:7860` (loopback only): paste-to-speak,
   transport, replay browser, `/api/synthesize`, `/api/voices`, job status

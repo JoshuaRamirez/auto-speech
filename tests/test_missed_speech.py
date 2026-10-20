@@ -76,7 +76,7 @@ class TestMissedList(unittest.TestCase):
 
     def test_missing_file_reads_empty_and_a_read_never_creates_it(self):
         self.assertEqual(self.missed.load(), [])
-        self.assertEqual(self.missed.counts(), {"held": 0, "missed": 0})
+        self.assertEqual(self.missed.counts(), {"held": 0, "missed": 0, "meeting": 0})
         self.assertFalse(self.path.exists())
         self.assertFalse(self.path.parent.exists())
 
@@ -88,7 +88,7 @@ class TestMissedList(unittest.TestCase):
         self.missed.miss(got, reason=REASON_LONGEST_WAIT, waited_seconds=180.0)
         [got] = self.missed.load()
         self.assertEqual((got.status, got.reason, got.waited_seconds, got.missed_at, got.held_for), (MISSED, REASON_LONGEST_WAIT, 180.0, self.now, ("Music (pid 5)",)))
-        self.assertEqual(self.missed.counts(), {"held": 0, "missed": 1})
+        self.assertEqual(self.missed.counts(), {"held": 0, "missed": 1, "meeting": 0})
         self.assertTrue(self.missed.remove("a1"))
         self.assertFalse(self.missed.remove("a1"))
         self.assertEqual(self.missed.load(), [])
@@ -183,6 +183,19 @@ class TestFormat(unittest.TestCase):
         self.assertIn("replay the missed lines, oldest first: auto-speech missed --play", text)
         self.assertIn("1 held line will play by themselves when the sound stops", text)
         self.assertIn("forget all of them: auto-speech missed --clear", text)
+
+    def test_a_meeting_line_reads_as_a_sentence_and_is_counted(self):
+        from missed_speech import REASON_MEETING
+
+        lst = MissedList(Path(tempfile.mkdtemp(prefix="auto-speech-missed-")) / "missed.json", clock=lambda: T0 + 100)
+        lst.miss(MissedLine(id="m1", text="During the call.", queued_at=T0), reason=REASON_MEETING, held_for=("MSTeams (pid 1)",))
+        lst.miss(MissedLine(id="m2", text="Music line.", queued_at=T0 + 1), reason=REASON_LONGEST_WAIT, waited_seconds=180)
+        text = format_lines(lst.load(), now=T0 + 200)
+        self.assertIn("missed: in a meeting (MSTeams (pid 1))", text)
+        self.assertEqual(lst.counts(), {"held": 0, "missed": 2, "meeting": 1})
+        self.assertEqual([m.id for m in lst.missed_in_meeting()], ["m1"])
+        self.assertEqual(lst.missed_in_meeting(since=T0 + 101), [])
+        self.assertEqual([m.id for m in lst.missed_in_meeting(since=T0 + 100)], ["m1"])
 
     def test_only_held_lines_offer_no_replay(self):
         text = format_lines([_lines()[-1]], now=T0 + 300)

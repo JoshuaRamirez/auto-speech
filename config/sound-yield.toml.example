@@ -47,3 +47,19 @@ max_wait_seconds = 180
 
 # How often a held speech re-checks whether the other sound has stopped.
 poll_seconds = 0.5
+
+# A meeting (ADR-018): an app on the meeting_apps list holding the
+# microphone (read from the same Core Audio process walk; no audio is
+# captured, no permission is asked). Speech is set aside on the missed
+# list at once, without waiting, and when the meeting ends one spoken
+# line says how many lines were missed. An open microphone that is not a
+# meeting app (CrownTalk, the speech daemon) never holds. His own switch,
+# `auto-speech yield meeting on|off|for 45m`, works whatever these say.
+meeting_hold = true
+meeting_apps = [
+  "com.microsoft.teams2", "com.microsoft.teams", "us.zoom.xos", "com.apple.FaceTime",
+  "com.google.Chrome", "com.apple.Safari", "com.apple.WebKit.GPU", "company.thebrowser.Browser",
+  "com.microsoft.edgemac", "org.mozilla.firefox", "org.mozilla.plugincontainer", "com.brave.Browser",
+  "com.tinyspeck.slackmacgap", "com.cisco.webexmeetingsapp", "com.webex.meetingmanager", "com.hnc.Discord",
+]
+meeting_summary = true
