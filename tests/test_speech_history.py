@@ -20,7 +20,9 @@ if str(SRC) not in sys.path:
 
 import speech_history as sh  # noqa: E402
 from speech_history import (  # noqa: E402
+    BYTES_PER_GB,
     DEFAULT_KEEP,
+    DEFAULT_MAX_GB,
     HistorySettings,
     HistoryStore,
     SpeechHistory,
@@ -63,6 +65,11 @@ class _Tmp(unittest.TestCase):
     def tearDown(self) -> None:
         self.tmpdir.cleanup()
 
+    def _line_bytes(self) -> int:
+        probe = SpeechHistory(self.root / "probe", store=self.store, clock=self.clock)
+        line = probe.export(self.wav, text="line 0")
+        return line.wav.stat().st_size + line.json.stat().st_size
+
     def export(self, text: str = "Hello there.", **kw):
         line = self.history.export(self.wav, text=text, **kw)
         self.clock.t += 1.0
@@ -72,19 +79,20 @@ class _Tmp(unittest.TestCase):
 class TestSettings(_Tmp):
     def test_defaults_without_a_file(self):
         s = self.store.load()
-        self.assertEqual((s.enabled, s.keep, s.player), (True, DEFAULT_KEEP, False))
-        self.assertEqual(DEFAULT_KEEP, 200)
+        self.assertEqual((s.enabled, s.max_gb, s.keep, s.player), (True, DEFAULT_MAX_GB, DEFAULT_KEEP, False))
+        self.assertEqual((DEFAULT_MAX_GB, DEFAULT_KEEP), (20.0, 200))
 
     def test_round_trip_through_the_file(self):
-        self.store.save(HistorySettings(enabled=False, keep=12, player=True))
+        self.store.save(HistorySettings(enabled=False, max_gb=0.5, keep=12, player=True))
         s = self.store.load()
-        self.assertEqual((s.enabled, s.keep, s.player), (False, 12, True))
+        self.assertEqual((s.enabled, s.max_gb, s.keep, s.player), (False, 0.5, 12, True))
         self.assertEqual(s.config_path, str(self.store.path))
 
     def test_bad_values_fall_back_with_a_warning(self):
-        s = HistorySettings.from_mapping({"enabled": "yes", "keep": 0, "player": 1}, config_path="x")
-        self.assertEqual((s.enabled, s.keep, s.player), (True, DEFAULT_KEEP, False))
-        self.assertEqual(len(s.problems), 3)
+        s = HistorySettings.from_mapping({"enabled": "yes", "max_gb": 0, "keep": 0, "player": 1}, config_path="x")
+        self.assertEqual((s.enabled, s.max_gb, s.keep, s.player), (True, DEFAULT_MAX_GB, DEFAULT_KEEP, False))
+        self.assertEqual(len(s.problems), 4)
+        self.assertEqual(HistorySettings.from_mapping({"max_gb": "big"}).max_gb, DEFAULT_MAX_GB)
         self.assertEqual(HistorySettings.from_mapping({"keep": True}).keep, DEFAULT_KEEP)
 
     def test_an_unparsable_file_uses_defaults(self):
@@ -96,8 +104,9 @@ class TestSettings(_Tmp):
     def test_config_validation_knows_the_section(self):
         from config_validation import validate_user_configs
 
-        (self.root / "history.toml").write_text("[history]\nkeep = 0\ncolour = 1\n", encoding="utf-8")
+        (self.root / "history.toml").write_text("[history]\nkeep = 0\nmax_gb = \"lots\"\ncolour = 1\n", encoding="utf-8")
         problems = validate_user_configs(self.root)
+        self.assertIn("[history] max_gb should be a number, got 'lots'", problems)
         self.assertIn("[history] unknown key 'colour' (ignored)", problems)
         self.assertIn("[history] keep must be >= 1, got 0", problems)
 
@@ -175,13 +184,28 @@ class TestExport(_Tmp):
         self.assertEqual(self.history.get(a.stem).text, "one")
         self.assertIsNone(self.history.get("nope"))
 
-    def test_only_the_last_keep_lines_stay(self):
-        self.store.set_keep(3)
+    def test_the_store_is_bounded_by_size_oldest_first(self):
+        per = self._line_bytes()
+        self.store.set_max_gb(3.5 * per / BYTES_PER_GB)  # room for three lines, not four
         for i in range(5):
             self.export(f"line {i}")
         kept = self.history.load()
         self.assertEqual([x.text for x in kept], ["line 2", "line 3", "line 4"])
         self.assertEqual(len(list(self.history.directory.glob("*.wav"))), 3)
+        self.assertLessEqual(self.history.size_bytes(), 3.5 * per)
+
+    def test_keep_deletes_nothing(self):
+        self.store.set_keep(1)
+        for i in range(4):
+            self.export(f"line {i}")
+        self.assertEqual(self.history.count(), 4)
+        self.assertEqual([x.text for x in self.history.load(limit=2)], ["line 2", "line 3"])
+
+    def test_the_newest_line_stays_even_past_the_bound(self):
+        self.store.set_max_gb(1 / BYTES_PER_GB)  # one byte
+        self.export("old")
+        self.export("new")
+        self.assertEqual([x.text for x in self.history.load()], ["new"])
 
     def test_a_wav_without_its_sidecar_is_pruned_once_old(self):
         self.export("kept")
@@ -206,7 +230,7 @@ class TestRunAction(_Tmp):
     def test_unknown_action(self):
         r = self.run_("shout")
         self.assertFalse(r.ok)
-        self.assertIn("list | status | on | off | keep | player-on | player-off", r.text)
+        self.assertIn("list | status | on | off | max-gb | keep | player-on | player-off", r.text)
 
     def test_list_is_the_default_and_newest_first(self):
         self.assertEqual(self.run_(None).text, "speech history: nothing played yet")
@@ -218,6 +242,8 @@ class TestRunAction(_Tmp):
         self.assertIn("Master Desk (timings estimated)", text)
         self.assertIn(".wav", text)
         self.assertIn("the last 1 of 2 lines", self.run_("list", count=1).text)
+        self.store.set_keep(1)
+        self.assertIn("the last 1 of 2 lines", self.run_("list").text, "list shows the newest `keep` by default")
         self.assertFalse(self.run_("list", count=0).ok)
 
     def test_list_as_json_hands_over_the_paths(self):
@@ -231,7 +257,10 @@ class TestRunAction(_Tmp):
 
     def test_status_on_off_player(self):
         text = self.run_("status").text
-        self.assertTrue(text.startswith("speech history: on\nkeep: the last 200 lines\nheld now: 0 lines, 0.0 MB\nplayer after each line: off"))
+        self.assertTrue(text.startswith(
+            "speech history: on\nmax_gb: 20 GB on disk, the oldest pruned first\nheld now: 0 lines, 0.0 MB\n"
+            "keep: the player's view shows the newest 200 lines\nplayer after each line: off"
+        ), text)
         self.assertIn("speech history: off", self.run_("off").text)
         self.assertFalse(self.store.load().enabled)
         self.assertIn("speech history: on", self.run_("on").text)
@@ -240,14 +269,27 @@ class TestRunAction(_Tmp):
         self.assertTrue(self.store.load().player)
         self.assertIn("player after each line: off", self.run_("player-off").text)
 
-    def test_keep_sets_n_and_prunes_at_once(self):
+    def test_max_gb_bounds_the_store_and_prunes_at_once(self):
+        per = self._line_bytes()
+        for i in range(4):
+            self.export(f"line {i}")
+        r = self.run_("max-gb", gb=2.5 * per / BYTES_PER_GB)
+        self.assertTrue(r.ok, r.text)
+        self.assertTrue(r.text.startswith("pruned the 2 oldest lines\nspeech history: on\nmax_gb: "), r.text)
+        self.assertEqual([x.text for x in self.history.load()], ["line 2", "line 3"])
+        self.assertFalse(self.run_("max-gb").ok)
+        self.assertFalse(self.run_("max-gb", gb=0).ok)
+        self.assertFalse(self.run_("max-gb", gb=True).ok)
+
+    def test_keep_sets_the_view_and_deletes_nothing(self):
         for i in range(4):
             self.export(f"line {i}")
         r = self.run_("keep", count=2)
         self.assertTrue(r.ok)
-        self.assertTrue(r.text.startswith("pruned the 2 oldest lines\nspeech history: on\nkeep: the last 2 lines"))
+        self.assertIn("keep: the player's view shows the newest 2 lines", r.text)
+        self.assertTrue(r.text.startswith("speech history: on\n"), "no pruned-lines head")
         self.assertEqual(self.store.load().keep, 2)
-        self.assertEqual([x.text for x in self.history.load()], ["line 2", "line 3"])
+        self.assertEqual(self.history.count(), 4)
         self.assertFalse(self.run_("keep").ok)
         self.assertFalse(self.run_("keep", count=0).ok)
         self.assertFalse(self.run_("keep", count=True).ok)
@@ -318,6 +360,7 @@ class TestCli(_Tmp):
 
         p = cli.build_parser()
         self.assertEqual(p.parse_args(["history", "keep", "50"]).count, 50)
+        self.assertEqual(p.parse_args(["history", "max-gb", "2.5"]).gb, 2.5)
         a = p.parse_args(["history", "list", "--limit", "3", "--json"])
         self.assertEqual((a.history_action, a.limit, a.json), ("list", 3, True))
         self.assertEqual(p.parse_args(["history", "player-on"]).history_action, "player-on")

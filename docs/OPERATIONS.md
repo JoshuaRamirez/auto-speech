@@ -123,14 +123,18 @@ empties it under the same file lock.
 The speech history (ADR-020) is every line played, as a WAV and a JSON
 sidecar, in `~/.local/state/auto-speech/history/` (`$AUTO_SPEECH_HISTORY_DIR`).
 Its settings are `[history]` in `history.toml` (`$AUTO_SPEECH_HISTORY_CONFIG`):
-`enabled` (true), `keep` (200: the last N lines; the oldest past it are
-deleted after each export), `player` (false: open the UI Utility's player
-after each line, never during a hold, nothing while it is not installed).
-`auto-speech history keep N` and the MCP tool `history(action="keep",
-count=N)` write the same file; the daemon reads it on every line, so no
+`enabled` (true), `max_gb` (20: the most the store holds on disk; the
+oldest lines go first after each export), `keep` (200: how many of the
+newest lines the player's view and `history list` show; it deletes
+nothing), `player` (false: open the UI Utility's player after each line,
+never during a hold, nothing while it is not installed). `auto-speech
+history max-gb 20` / `keep N` and the MCP tool `history(action="max-gb",
+gb=20)` / `history(action="keep", count=N)` write the same file; the daemon reads it on every line, so no
 restart is needed. `history` lists the newest lines with their WAV paths,
 `history list --json` the sidecars; `history status` says how much is
-kept and why the player would or would not open. Word timings are
+held on disk and why the player would or would not open. It is the one
+WAV store: Spoken Transcript reads it for its transcript page and never
+writes it; the file layout readers rely on is in ADR-020. Word timings are
 estimated (`word_timings.source = "estimate"`): `say` reports none.
 `tests/run_all.sh` points both variables into its isolated state directory.
 

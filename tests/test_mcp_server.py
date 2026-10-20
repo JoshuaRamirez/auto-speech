@@ -1549,7 +1549,8 @@ def test_history_requires_a_known_action() -> None:
     srv, *_ = _history_server()
     res = _call_tool(srv, "history", {"action": "shout"})
     assert res["result"]["isError"] is True
-    assert "list, status, on, off, keep, player-on, player-off" in res["result"]["content"][0]["text"]
+    assert "list, status, on, off, max-gb, keep, player-on, player-off" in res["result"]["content"][0]["text"]
+    assert _call_tool(srv, "history", {"action": "max-gb", "gb": "huge"})["result"]["isError"] is True
     assert _call_tool(srv, "history", {"action": "keep", "count": "ten"})["result"]["isError"] is True
     assert _call_tool(srv, "history", {"as_json": "yes"})["result"]["isError"] is True
 
@@ -1569,8 +1570,13 @@ def test_history_keep_and_player_write_the_shared_config() -> None:
     srv, store, history, tmp = _history_server()
     res = _call_tool(srv, "history", {"action": "keep", "count": 30})
     assert res["result"]["isError"] is False
-    assert "keep: the last 30 lines" in res["result"]["content"][0]["text"]
+    assert "keep: the player's view shows the newest 30 lines" in res["result"]["content"][0]["text"]
     assert store.load().keep == 30
+    res = _call_tool(srv, "history", {"action": "max-gb", "gb": 5})
+    assert res["result"]["isError"] is False
+    assert "max_gb: 5 GB on disk" in res["result"]["content"][0]["text"]
+    assert store.load().max_gb == 5.0
+    assert _call_tool(srv, "history", {"action": "max-gb"})["result"]["isError"] is True
     assert _call_tool(srv, "history", {"action": "keep"})["result"]["isError"] is True
     _call_tool(srv, "history", {"action": "player-on"})
     assert store.load().player is True
@@ -1582,7 +1588,8 @@ def test_history_tool_schema() -> None:
     srv, *_ = _history_server()
     tools = {t["name"]: t for t in srv.handle_line(_req("tools/list"))["result"]["tools"]}
     schema = tools["history"]["inputSchema"]
-    assert schema["properties"]["action"]["enum"] == ["list", "status", "on", "off", "keep", "player-on", "player-off"]
+    assert schema["properties"]["action"]["enum"] == ["list", "status", "on", "off", "max-gb", "keep", "player-on", "player-off"]
+    assert schema["properties"]["gb"]["type"] == "number"
     assert schema["properties"]["count"]["type"] == "integer"
     assert schema["additionalProperties"] is False
 

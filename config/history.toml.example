@@ -1,4 +1,5 @@
-# auto-speech speech history: every line played, kept as a WAV and a sidecar.
+# auto-speech speech history: every line played, kept as a WAV and a sidecar,
+# up to max_gb on disk. The one WAV store: Spoken Transcript reads it, never writes it.
 #
 # Copy to ~/.config/auto-speech/history.toml and edit, or point
 # AUTO_SPEECH_HISTORY_CONFIG=/path/to/file.toml at a custom one.
@@ -12,9 +13,13 @@
 # false: nothing is exported; what is kept stays.
 enabled = true
 
-# N: only the last `keep` lines are kept; the oldest past it are deleted
-# after each export (and at once when `keep` is lowered). 200 lines is
-# about 190 MB at the measured mean clip (ADR-020).
+# The most the store may hold on disk, in GB. After each export the oldest
+# lines are deleted until it fits (and at once when this is lowered). 20 GB
+# is about 21,000 lines at the measured mean clip (ADR-020).
+max_gb = 20
+
+# How many of the newest lines the player's history view and
+# `auto-speech history list` show. It deletes nothing.
 keep = 200
 
 # Open the UI Utility's player on each line after it plays. Never during a

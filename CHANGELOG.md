@@ -22,7 +22,7 @@ The Chrome extension under `chrome-extension/` is versioned independently
   to fall (`timeout_retries`, `retry_load_per_core`, `retry_wait_seconds`),
   and only past its retries is it set aside. `tests/test_speech_under_load.py`
   (19 cases, one a short niced load test with the real `say` and mpv, silent).
-- **Every line played is kept as a WAV and a sidecar; the last 200
+- **Every line played is kept as a WAV and a sidecar, up to 20 GB
   (ADR-020).** His 2026-10-20 13:38 (the Master Desk #m1020-1339-68ee): "A
   history button shows everything said before. Only the last N WAVs are
   kept (N configurable), so the disk never fills." When the sink has played
@@ -32,11 +32,15 @@ The Chrome extension under `chrome-extension/` is versioned independently
   timings. `say` gives no word timings, so they are estimated from word
   length and punctuation pauses and marked `source: "estimate"`. A line set
   aside by the meeting hold or the sound yield exports nothing until it
-  plays. N is `keep`, the same name in `[history] keep`
-  (`~/.config/auto-speech/history.toml`), `auto-speech history keep N` and
-  MCP `history(action="keep", count=N)`, 200 by default (about 190 MB at
-  the measured mean clip); the oldest past N are deleted after every
-  export. `auto-speech history [list|status|on|off|keep|player-on|player-off]`
+  plays. His 14:50: "save WAV files up to … the size of a small,
+  medium-sized video game": the store is bounded by size, `max_gb`, the
+  same name in `[history] max_gb` (`~/.config/auto-speech/history.toml`),
+  `auto-speech history max-gb 20` and MCP `history(action="max-gb", gb=20)`,
+  20 GB by default (about 21,000 lines at the measured mean clip); the
+  oldest go first after every export. `keep` (200) is only how many of the
+  newest lines the player's view shows; it deletes nothing. It is the one
+  WAV store: Spoken Transcript reads it and never writes it.
+  `auto-speech history [list|status|on|off|max-gb|keep|player-on|player-off]`
   and the MCP tool `history` list the lines newest first with their WAV
   paths (`--json` / `as_json` for the sidecars). A player launcher behind
   `[history] player` (default off) never opens during a hold and does

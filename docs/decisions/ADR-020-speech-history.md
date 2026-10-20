@@ -1,4 +1,4 @@
-# ADR-020 — Every line played is kept as a WAV and a sidecar; the last 200 by default
+# ADR-020 — Every line played is kept as a WAV and a sidecar, up to 20 GB by default
 
 **Status:** Accepted
 **Date:** 2026-10-20
@@ -64,31 +64,58 @@ and they are kept with `source: "synthesizer"`. Forced alignment against
 the WAV would be exact, and stays a later decision: it needs a model or a
 download.
 
-### N: `keep`, 200 by default
-The same name in all three: `[history] keep` in
-`~/.config/auto-speech/history.toml`, `auto-speech history keep N`, MCP
-`history(action="keep", count=N)`. After every export the oldest lines
-past N are deleted; lowering N prunes at once.
+### Bounded by size: `max_gb`, 20 by default (revised 2026-10-20 15:11)
+The first cut bounded the store by count, the last 200 lines (about
+190 MB). His 14:50 (#m1020-1451-d9e7): "I want you to save WAV files up
+to, I don't know, the size of a small, medium-sized video game." And the
+history is now the one WAV store: a new seat, Spoken Transcript
+(`~/Developer/Spoken-Transcript`), reads it for a transcript page and
+never writes it. So the bound is a size, not a count.
 
-Why 200, measured from the live daemon log on 2026-10-20 (read only):
-1,184 clips played since 10-18; the mean clip is 0.94 MB (about 20 s at
-24 kHz 16-bit mono), the median 0.62 MB, the 90th percentile 1.8 MB. The
-busiest day, 10-19, played 775 lines. At the mean, 200 lines is about
-190 MB (about 370 MB if every one were a 90th-percentile clip), and holds
-the last four hours or so of that busiest day, a whole quiet day. That is
-enough for "what did it say this morning" and small next to the replay
-cache, and the disk cannot fill: the history is bounded by N, not by time.
-He raises or lowers it with one command.
+The same name in all three: `[history] max_gb` in
+`~/.config/auto-speech/history.toml`, `auto-speech history max-gb 20`,
+MCP `history(action="max-gb", gb=20)`. After every export the oldest
+lines are deleted until the WAVs and sidecars together fit; lowering it
+prunes at once. The newest line always stays, even if it alone is larger.
+GB is decimal (10^9 bytes), as the status line's MB is.
+
+Why 20 GB: a small to medium game is roughly 10 to 50 GB; 20 is in that
+range and small next to the disk. Measured from the live daemon log on
+2026-10-20 (read only): 1,184 clips played since 10-18, the mean clip
+0.94 MB (about 20 s at 24 kHz 16-bit mono), the median 0.62 MB, the 90th
+percentile 1.8 MB; the busiest day, 10-19, played 775 lines. At the mean,
+20 GB holds about 21,000 lines, roughly four weeks of his busiest days
+and more of ordinary ones. The disk cannot fill: the store is bounded by
+bytes, whatever the clip lengths.
+
+At that size a prune that read every sidecar would read some 21,000
+files after each line. It does not: it lists the directory once
+(`os.scandir`, a stat per file) and pairs `<stem>.wav` with
+`<stem>.json` by name, and `list` reads only the sidecars it shows.
+
+### `keep`: the player's view, not a delete limit
+`[history] keep` (200), `auto-speech history keep N`, MCP
+`history(action="keep", count=N)` is now only how many of the newest
+lines the player's history view, and `history list` by default, show. It
+deletes nothing. 200 is about the last four hours of his busiest day.
 
 ### Settings and the shared verb
-`[history] enabled` (true), `keep` (200), `player` (false). One
-`run_action` serves `auto-speech history [list|status|on|off|keep N|
-player-on|player-off]` and the MCP tool `history(action, count,
-as_json)`, so both say the same thing. `list` is newest first with the
-WAV paths; `--json` / `as_json` returns the sidecars with `wav_path` and
-`sidecar_path`, which is what a caller hands the player. The config file
-is read on every line: no restart needed. `config_validation` knows the
-section, so the doctor warns on a typo.
+`[history] enabled` (true), `max_gb` (20), `keep` (200), `player`
+(false). One `run_action` serves `auto-speech history [list|status|on|off|
+max-gb GB|keep N|player-on|player-off]` and the MCP tool
+`history(action, count, gb, as_json)`, so both say the same thing. `list`
+is newest first with the WAV paths; `--json` / `as_json` returns the
+sidecars with `wav_path` and `sidecar_path`, which is what a caller hands
+the player. The config file is read on every line: no restart needed.
+`config_validation` knows the section, so the doctor warns on a typo.
+
+### For readers of the store (Spoken Transcript)
+The layout is the contract: one directory; a line is `<stem>.wav` and
+`<stem>.json`, `<stem>` = `YYYYmmdd-HHMMSS-mmm-<id>` in local time, so
+names sort in time order; a `.json` is present only once its WAV is
+complete; dot-files are in-progress writes and the lock; sidecar
+`version` 1 as above. A reader may find a line gone between listing and
+reading it (pruned) and should skip it. Readers never write or delete.
 
 ### The player launcher, default off
 `speech_player.PlayerLauncher.after_line()` runs after each export. With
@@ -105,7 +132,7 @@ and nothing opens. `history status` says which of these applies.
 
 ## Consequences
 - A second copy of each played WAV is written (about 1 MB, a few ms after
-  playback, on the worker thread). Bounded by N.
+  playback, on the worker thread). Bounded by `max_gb`.
 - `tests/run_all.sh` points `AUTO_SPEECH_HISTORY_DIR` and
   `AUTO_SPEECH_HISTORY_CONFIG` into its private state dir, so no test
   writes his history or his config.
@@ -114,7 +141,8 @@ and nothing opens. `history status` says which of these applies.
 
 ## Invariants
 - I-20.1 A line is exported if and only if the sink played it.
-- I-20.2 After an export, at most `keep` lines are in the history.
+- I-20.2 After an export the store is within `max_gb`, or holds only the
+  newest line; the oldest go first. `keep` never deletes.
 - I-20.3 Estimated word timings are marked `source: "estimate"`, in order,
   within the clip, the last ending at its duration.
 - I-20.4 The player never opens while the setting is off, while a hold

@@ -79,10 +79,13 @@ module that owns it. Release-by-release history is in
   UI Utility's `{w, start, end}` shape, estimated from word length and
   pauses and marked `source: "estimate"` because `say` gives none). A line
   set aside by the meeting hold or the sound yield is exported only once it
-  plays. Only the last `keep` lines are kept (200 by default); the oldest
-  go after each export. `auto-speech history [list [--limit N] [--json] |
-  status | on | off | keep N | player-on | player-off]`, the MCP tool
-  `history` (same actions, `count`, `as_json`) and `[history]` in
+  plays. The store holds up to `max_gb` on disk (20 GB by default), the
+  oldest pruned first after each export; `keep` (200) is how many of the
+  newest lines the player's view shows and deletes nothing. The one WAV
+  store: Spoken Transcript reads it. `auto-speech history [list [--limit N]
+  [--json] | status | on | off | max-gb GB | keep N | player-on |
+  player-off]`, the MCP tool `history` (same actions, `count`, `gb`,
+  `as_json`) and `[history]` in
   `~/.config/auto-speech/history.toml` (`speech_history.py`).
 - **Player launcher, default off** (ADR-020): with `[history] player = true`
   the daemon hands each exported line to the launcher, which never opens
@@ -148,7 +151,7 @@ module that owns it. Release-by-release history is in
 - **CLI** `bin/auto-speech` (`cli.py`): `speak`, `replay`, `pause`,
   `resume`, `restart`, `stop`, `seek`, `autoplay {on,off,status,mode,scope}`,
   `narrate {on,off,status,stop,config}`, `yield {status,on,off,hold-for,player-add,player-remove,player-reset,add,remove,
-  clear,check}`, `missed [--play|--clear]`, `history {list,status,on,off,keep,player-on,player-off}`,
+  clear,check}`, `missed [--play|--clear]`, `history {list,status,on,off,max-gb,keep,player-on,player-off}`,
   `hook {stop,narrator,bootstrap}`,
   `doctor`, `update`.
 - **MCP server** (`mcp_server.py`, stdio JSON-RPC): `speak`,

@@ -79,6 +79,7 @@ SPEAKER_FIELDS = (
 # Mirrors the keys read by speech_history.HistorySettings.from_mapping.
 HISTORY_FIELDS = (
     Field("enabled", "bool"),
+    Field("max_gb", "number", minimum=0),
     Field("keep", "int", minimum=1),
     Field("player", "bool"),
 )
