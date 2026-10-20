@@ -381,17 +381,19 @@ SPEAKER_TOOL = {
 
 HISTORY_TOOL = {
     "name": "history",
-    "title": "Every line played, kept as a WAV and a sidecar (the last N)",
+    "title": "Every line played, kept as a WAV and a sidecar, up to max_gb on disk",
     "description": (
         "Each line auto-speech plays is kept as a WAV with a JSON sidecar "
         "(its text, when it was spoken, who sent it, priority, duration, "
         "and word timings, estimated and marked so when the synthesizer "
-        "gives none). Only the last `keep` lines are kept (200 by default). "
-        "A line set aside by a meeting or another app's sound is kept only "
-        "once it plays. 'list' (default) shows the newest lines with their "
-        "WAV paths ('count' how many, 'as_json' for the sidecars); 'status' "
-        "shows the settings; 'on'/'off' switch the export; 'keep' sets N "
-        "('count'); 'player-on'/'player-off' switch the player that opens "
+        "gives none). The store holds up to `max_gb` on disk (20 GB by "
+        "default), the oldest pruned first. A line set aside by a meeting or "
+        "another app's sound is kept only once it plays. 'list' (default) "
+        "shows the newest `keep` lines (200) with their WAV paths ('count' "
+        "how many, 'as_json' for the sidecars); 'status' shows the settings; "
+        "'on'/'off' switch the export; 'max-gb' bounds the store ('gb'); "
+        "'keep' sets how many of the newest lines the player's view shows "
+        "('count'; deletes nothing); 'player-on'/'player-off' switch the player that opens "
         "after each line (default off, never during a hold). Same verbs as "
         "`auto-speech history` and the [history] config."
     ),
@@ -401,12 +403,17 @@ HISTORY_TOOL = {
             "action": {
                 "type": "string",
                 "enum": list(HISTORY_ACTIONS),
-                "description": "list | status | on | off | keep | player-on | player-off (default list)",
+                "description": "list | status | on | off | max-gb | keep | player-on | player-off (default list)",
             },
             "count": {
                 "type": "integer",
                 "minimum": 1,
-                "description": "For keep: N, how many lines to keep. For list: how many to show (default 20).",
+                "description": "For keep: N, how many of the newest lines the player's view shows. For list: how many to show (default keep).",
+            },
+            "gb": {
+                "type": "number",
+                "exclusiveMinimum": 0,
+                "description": "For max-gb: the most the store may hold on disk, in GB (default 20).",
             },
             "as_json": {"type": "boolean", "default": False, "description": "For list: the sidecars as JSON."},
         },
@@ -1516,6 +1523,9 @@ class McpServer:
         count = args.get("count")
         if count is not None and (isinstance(count, bool) or not isinstance(count, int)):
             return _ok(req_id, _tool_result("count must be a whole number", is_error=True))
+        gb = args.get("gb")
+        if gb is not None and (isinstance(gb, bool) or not isinstance(gb, (int, float))):
+            return _ok(req_id, _tool_result("gb must be a number", is_error=True))
         as_json = args.get("as_json", False)
         if not isinstance(as_json, bool):
             return _ok(req_id, _tool_result("as_json must be true or false", is_error=True))
@@ -1524,6 +1534,7 @@ class McpServer:
             result = run_history_action(
                 action,
                 count=count,
+                gb=gb,
                 as_json=as_json,
                 store=store,
                 history=self._speech_history,

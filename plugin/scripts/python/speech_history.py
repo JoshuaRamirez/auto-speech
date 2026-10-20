@@ -3,19 +3,27 @@
 His 13:38, 2026-10-20 (the Master Desk #m1020-1339-68ee): "Each time the
 Desk speaks, a small player pops up and plays the line's WAV … A history
 button shows everything said before. Only the last N WAVs are kept (N
-configurable), so the disk never fills."
+configurable), so the disk never fills." His 14:50 (#m1020-1451-d9e7): "I
+want you to save WAV files up to, I don't know, the size of a small,
+medium-sized video game."
 
-Auto-speech owns the history; the player only shows what it is handed.
-Three parts, each testable on its own:
+Auto-speech owns the history; the player only shows what it is handed. It
+is the one WAV store: Spoken Transcript reads it for its transcript page
+and never writes it. Three parts, each testable on its own:
 
 - HistorySettings / HistoryStore: ~/.config/auto-speech/history.toml
-  ([history] enabled, keep, player). `keep` is N, the same name in the
-  config, the CLI (`auto-speech history keep N`) and the MCP tool
-  (`history(action="keep", count=N)`). Default DEFAULT_KEEP (ADR-020).
+  ([history] enabled, max_gb, keep, player). `max_gb` bounds the store on
+  disk (20 GB by default), oldest pruned first; `keep` is only how many of
+  the newest lines the player's history view and `history list` show. Each
+  has the same name in the config, the CLI (`auto-speech history max-gb
+  20`, `history keep 200`) and the MCP tool (`history(action="max-gb",
+  gb=20)`, `history(action="keep", count=200)`). ADR-020.
 - SpeechHistory: the store on disk. One line is two files under the
   history dir, `<stamp>-<id>.wav` and `<stamp>-<id>.json` (the sidecar);
   the sidecar is written last, so a line with no sidecar is not in the
-  history. After each export the oldest lines past `keep` are deleted.
+  history. After each export the oldest lines are deleted until the store
+  is within `max_gb`; the prune reads only file names and sizes, never the
+  sidecars, so it stays cheap at tens of thousands of lines.
 - estimate_word_timings: `say -o` gives no word timings, so each word's
   span is estimated from its length and the pause after it, and the
   sidecar says so (`word_timings.source = "estimate"`).
@@ -50,7 +58,9 @@ DIR_ENV = "AUTO_SPEECH_HISTORY_DIR"
 SECTION = "history"
 
 DEFAULT_ENABLED = True
-DEFAULT_KEEP = 200  # ADR-020: about 190 MB at the measured mean clip, the last ~4 h of his busiest day
+DEFAULT_MAX_GB = 20.0  # ADR-020: "a small, medium-sized video game"; about 21,000 lines at the measured mean clip
+DEFAULT_KEEP = 200  # the player's view: the newest 200 lines, about the last 4 h of his busiest day
+BYTES_PER_GB = 1_000_000_000
 DEFAULT_PLAYER = False  # the player opens after a line only when he turns it on
 MIN_KEEP = 1
 
@@ -63,8 +73,7 @@ ORPHAN_GRACE_SECONDS = 60.0  # a WAV this young without its sidecar may be an ex
 
 PRIORITY_NAMES = {1: "user interrupt", 2: "explicit", 3: "autoplay", 4: "narration"}
 
-ACTIONS = ("list", "status", "on", "off", "keep", "player-on", "player-off")
-DEFAULT_LIST_LIMIT = 20
+ACTIONS = ("list", "status", "on", "off", "max-gb", "keep", "player-on", "player-off")
 
 
 def default_config_path() -> Path:
@@ -89,6 +98,7 @@ def default_history_dir() -> Path:
 @dataclass(frozen=True)
 class HistorySettings:
     enabled: bool = DEFAULT_ENABLED
+    max_gb: float = DEFAULT_MAX_GB
     keep: int = DEFAULT_KEEP
     player: bool = DEFAULT_PLAYER
     config_path: Optional[str] = None
@@ -107,6 +117,11 @@ class HistorySettings:
             problems.append(f"[{SECTION}] enabled should be true or false, got {enabled!r}")
             enabled = DEFAULT_ENABLED
 
+        max_gb = section.get("max_gb", DEFAULT_MAX_GB)
+        if isinstance(max_gb, bool) or not isinstance(max_gb, (int, float)) or max_gb <= 0:
+            problems.append(f"[{SECTION}] max_gb should be a number of gigabytes > 0, got {max_gb!r}")
+            max_gb = DEFAULT_MAX_GB
+
         keep = section.get("keep", DEFAULT_KEEP)
         if isinstance(keep, bool) or not isinstance(keep, int) or keep < MIN_KEEP:
             problems.append(f"[{SECTION}] keep should be a whole number >= {MIN_KEEP}, got {keep!r}")
@@ -119,6 +134,7 @@ class HistorySettings:
 
         return cls(
             enabled=enabled,
+            max_gb=float(max_gb),
             keep=int(keep),
             player=player,
             config_path=config_path,
@@ -127,9 +143,10 @@ class HistorySettings:
 
     def to_toml(self) -> str:
         lines = [
-            "# auto-speech: every line played, kept as a WAV and a sidecar; the last `keep` lines (ADR-020).",
+            "# auto-speech: every line played, kept as a WAV and a sidecar, up to max_gb on disk (ADR-020).",
             f"[{SECTION}]",
             f"enabled = {'true' if self.enabled else 'false'}",
+            f"max_gb = {self.max_gb:g}",
             f"keep = {self.keep}",
             f"player = {'true' if self.player else 'false'}",
         ]
@@ -170,6 +187,9 @@ class HistoryStore:
 
     def set_enabled(self, enabled: bool) -> HistorySettings:
         return self.save(replace(self.load(), enabled=bool(enabled)))
+
+    def set_max_gb(self, max_gb: float) -> HistorySettings:
+        return self.save(replace(self.load(), max_gb=float(max_gb)))
 
     def set_keep(self, keep: int) -> HistorySettings:
         return self.save(replace(self.load(), keep=int(keep)))
@@ -359,69 +379,86 @@ class SpeechHistory:
             tmp_json = self._dir / f".{stem}.json.tmp"
             tmp_json.write_text(json.dumps(sidecar, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
             os.replace(tmp_json, dst_json)
-            self._prune_unlocked(settings.keep)
+            self._prune_unlocked(settings.max_gb)
             return HistoryLine(id=line_id, stem=stem, sidecar=sidecar, wav=dst_wav, json=dst_json)
 
         return self._locked(go)
 
     # -- reads -------------------------------------------------------------------
 
-    def _read_unlocked(self) -> list[HistoryLine]:
+    def _entries_unlocked(self) -> list[tuple[str, int]]:
+        """(stem, bytes of its WAV and sidecar) for every complete line,
+        oldest first, from the directory listing alone: no sidecar is read."""
         if not self._dir.is_dir():
             return []
-        out: list[HistoryLine] = []
-        for js in sorted(self._dir.glob("*.json")):
-            if js.name.startswith("."):
-                continue
-            try:
-                data = json.loads(js.read_text(encoding="utf-8"))
-            except (OSError, ValueError):
-                continue
-            if not isinstance(data, dict):
-                continue
-            out.append(
-                HistoryLine(
-                    id=str(data.get("id") or js.stem.rsplit("-", 1)[-1]),
-                    stem=js.stem,
-                    sidecar=data,
-                    wav=js.with_suffix(".wav"),
-                    json=js,
-                )
-            )
-        return out
+        sizes: dict[str, int] = {}
+        stems: set[str] = set()
+        with os.scandir(self._dir) as it:
+            for e in it:
+                name = e.name
+                if name.startswith(".") or not (name.endswith(".json") or name.endswith(".wav")):
+                    continue
+                stem, _, ext = name.rpartition(".")
+                try:
+                    sizes[stem] = sizes.get(stem, 0) + e.stat(follow_symlinks=False).st_size
+                except OSError:
+                    continue
+                if ext == "json":
+                    stems.add(stem)
+        return [(stem, sizes.get(stem, 0)) for stem in sorted(stems)]
 
-    def load(self) -> list[HistoryLine]:
-        """Every line in the history, oldest first."""
-        return self._read_unlocked()
+    def _line(self, stem: str) -> Optional[HistoryLine]:
+        js = self._dir / f"{stem}.json"
+        try:
+            data = json.loads(js.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            return None
+        if not isinstance(data, dict):
+            return None
+        return HistoryLine(
+            id=str(data.get("id") or stem.rsplit("-", 1)[-1]),
+            stem=stem,
+            sidecar=data,
+            wav=self._dir / f"{stem}.wav",
+            json=js,
+        )
+
+    def load(self, limit: Optional[int] = None) -> list[HistoryLine]:
+        """The lines in the history, oldest first; with `limit`, only the
+        newest `limit` of them (and only those sidecars are read)."""
+        stems = [stem for stem, _ in self._entries_unlocked()]
+        if limit is not None:
+            stems = stems[-max(0, int(limit)):] if limit > 0 else []
+        return [line for line in (self._line(stem) for stem in stems) if line is not None]
+
+    def count(self) -> int:
+        return len(self._entries_unlocked())
 
     def get(self, line_id: str) -> Optional[HistoryLine]:
-        for line in self._read_unlocked():
-            if line.id == line_id or line.stem == line_id:
-                return line
+        for stem, _ in reversed(self._entries_unlocked()):
+            if stem == line_id or stem.rsplit("-", 1)[-1] == line_id:
+                return self._line(stem)
         return None
 
     def size_bytes(self) -> int:
-        total = 0
-        if not self._dir.is_dir():
-            return 0
-        for f in self._dir.iterdir():
-            try:
-                if f.is_file() and not f.name.startswith("."):
-                    total += f.stat().st_size
-            except OSError:
-                pass
-        return total
+        return sum(size for _, size in self._entries_unlocked())
 
     # -- pruning ---------------------------------------------------------------
 
-    def _prune_unlocked(self, keep: int) -> int:
-        """Delete the oldest lines past `keep`, and any WAV left without its
-        sidecar (an export cut short). Returns how many lines went."""
-        lines = self._read_unlocked()
+    def _prune_unlocked(self, max_gb: float) -> int:
+        """Delete the oldest lines until the store is within `max_gb`, and
+        any WAV left without its sidecar (an export cut short). The newest
+        line always stays. Returns how many lines went."""
+        entries = self._entries_unlocked()
+        limit = float(max_gb) * BYTES_PER_GB
+        total = sum(size for _, size in entries)
         removed = 0
-        for line in lines[: max(0, len(lines) - max(MIN_KEEP, int(keep)))]:
-            line.wav.unlink(missing_ok=True)
-            line.json.unlink(missing_ok=True)
+        for stem, size in entries[:-1]:
+            if total <= limit:
+                break
+            (self._dir / f"{stem}.wav").unlink(missing_ok=True)
+            (self._dir / f"{stem}.json").unlink(missing_ok=True)
+            total -= size
             removed += 1
         now = self._clock()
         for wav in self._dir.glob("*.wav"):
@@ -434,11 +471,11 @@ class SpeechHistory:
                 pass
         return removed
 
-    def prune(self, keep: Optional[int] = None) -> int:
-        k = int(keep) if keep is not None else self._store.load().keep
+    def prune(self, max_gb: Optional[float] = None) -> int:
+        gb = float(max_gb) if max_gb is not None else self._store.load().max_gb
         if not self._dir.is_dir():
             return 0
-        return self._locked(lambda: self._prune_unlocked(k))
+        return self._locked(lambda: self._prune_unlocked(gb))
 
 
 # --------------------------------------------------------------------------
@@ -456,12 +493,17 @@ def _mb(n: int) -> str:
     return f"{n / 1_000_000:.1f} MB"
 
 
+def _gb(gb: float) -> str:
+    return f"{gb:g} GB"
+
+
 def format_status(settings: HistorySettings, history: SpeechHistory, player_note: str = "") -> str:
-    lines = history.load()
+    n = history.count()
     out = [
         f"speech history: {'on' if settings.enabled else 'off'}",
-        f"keep: the last {settings.keep} line{'s' if settings.keep != 1 else ''}",
-        f"held now: {len(lines)} line{'s' if len(lines) != 1 else ''}, {_mb(history.size_bytes())}",
+        f"max_gb: {_gb(settings.max_gb)} on disk, the oldest pruned first",
+        f"held now: {n} line{'s' if n != 1 else ''}, {_mb(history.size_bytes())}",
+        f"keep: the player's view shows the newest {settings.keep} line{'s' if settings.keep != 1 else ''}",
         f"player after each line: {'on' if settings.player else 'off'}" + (f" ({player_note})" if player_note else ""),
         f"dir: {history.directory}",
     ]
@@ -499,13 +541,15 @@ def run_action(
     action: str | None,
     *,
     count: int | None = None,
+    gb: float | None = None,
     as_json: bool = False,
     store: HistoryStore | None = None,
     history: SpeechHistory | None = None,
     player_note: Callable[[HistorySettings], str] | None = None,
 ) -> ActionResult:
     """`auto-speech history <action> …` and the MCP tool `history(action, …)`.
-    `count` is the number for `keep`, and how many lines `list` shows."""
+    `count` is the number for `keep`, and how many lines `list` shows (the
+    newest `keep` by default); `gb` is the number for `max-gb`."""
     store = store or HistoryStore()
     history = history or SpeechHistory(store=store)
     action = (action or "list").strip().lower()
@@ -518,28 +562,34 @@ def run_action(
         return ActionResult(True, (head + "\n" if head else "") + body)
 
     if action == "list":
-        limit = DEFAULT_LIST_LIMIT
+        limit = store.load().keep
         if count is not None:
             if isinstance(count, bool) or not isinstance(count, int) or count < 1:
                 return ActionResult(False, f"history list: count must be a whole number >= 1, got {count!r}")
             limit = count
-        lines = history.load()
-        shown = list(reversed(lines))[:limit]
+        total = history.count()
+        shown = list(reversed(history.load(limit=limit)))
         if as_json:
-            return ActionResult(True, json.dumps({"total": len(lines), "lines": [x.to_dict() for x in shown]}, indent=2, ensure_ascii=False))
-        return ActionResult(True, format_lines(shown, len(lines)))
+            return ActionResult(True, json.dumps({"total": total, "lines": [x.to_dict() for x in shown]}, indent=2, ensure_ascii=False))
+        return ActionResult(True, format_lines(shown, total))
     if action == "status":
         return status(store.load())
     if action in ("on", "off"):
         return status(store.set_enabled(action == "on"))
     if action in ("player-on", "player-off"):
         return status(store.set_player(action == "player-on"))
-    # keep
+    if action == "max-gb":
+        if gb is None or isinstance(gb, bool) or not isinstance(gb, (int, float)):
+            return ActionResult(False, f"history max-gb: give the most the store may hold, in GB (default {DEFAULT_MAX_GB:g})")
+        if gb <= 0:
+            return ActionResult(False, f"history max-gb: must be > 0, got {gb:g}")
+        settings = store.set_max_gb(float(gb))
+        removed = history.prune(float(gb))
+        head = f"pruned the {removed} oldest line{'s' if removed != 1 else ''}" if removed else ""
+        return status(settings, head)
+    # keep: the player's view only; nothing is deleted
     if count is None or isinstance(count, bool) or not isinstance(count, int):
-        return ActionResult(False, f"history keep: give how many lines to keep, a whole number (default {DEFAULT_KEEP})")
+        return ActionResult(False, f"history keep: give how many of the newest lines the player shows (default {DEFAULT_KEEP})")
     if count < MIN_KEEP:
         return ActionResult(False, f"history keep: must be >= {MIN_KEEP}, got {count}")
-    settings = store.set_keep(count)
-    removed = history.prune(count)
-    head = f"pruned the {removed} oldest line{'s' if removed != 1 else ''}" if removed else ""
-    return status(settings, head)
+    return status(store.set_keep(count))

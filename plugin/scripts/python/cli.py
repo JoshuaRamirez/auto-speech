@@ -675,9 +675,9 @@ def handle_speaker(args: argparse.Namespace, store: Any | None = None, names: An
 
 
 def handle_history(args: argparse.Namespace, store: Any | None = None, history: Any | None = None) -> int:
-    """`auto-speech history [list|status|on|off|keep N|player-on|player-off]`:
-    every line played, kept as a WAV and a sidecar, the last N (same verbs
-    as the MCP tool `history`, same names as the [history] config)."""
+    """`auto-speech history [list|status|on|off|max-gb GB|keep N|player-on|player-off]`:
+    every line played, kept as a WAV and a sidecar, up to max_gb on disk
+    (same verbs as the MCP tool `history`, same names as the [history] config)."""
     from speech_player import PlayerLauncher
 
     action = getattr(args, "history_action", None) or "list"
@@ -687,6 +687,7 @@ def handle_history(args: argparse.Namespace, store: Any | None = None, history: 
     result = run_history_action(
         action,
         count=count,
+        gb=getattr(args, "gb", None),
         as_json=bool(getattr(args, "json", False)),
         store=store,
         history=history,
@@ -1139,16 +1140,18 @@ def build_parser() -> argparse.ArgumentParser:
 
     p_hi = subparsers.add_parser(
         "history",
-        help="Every line played, kept as a WAV and a sidecar (the last N): list it, size it, and the player switch.",
+        help="Every line played, kept as a WAV and a sidecar, up to max_gb on disk: list it, bound it, and the player switch.",
     )
     sub_hi = p_hi.add_subparsers(dest="history_action", metavar="<action>")
     p_hi_ls = sub_hi.add_parser("list", help="The lines played, newest first, with their WAV paths (default).")
-    p_hi_ls.add_argument("--limit", type=int, default=None, help="How many lines to show (default 20).")
+    p_hi_ls.add_argument("--limit", type=int, default=None, help="How many lines to show (default: keep, 200).")
     p_hi_ls.add_argument("--json", action="store_true", help="Each line's sidecar as JSON, with its WAV and sidecar paths.")
-    sub_hi.add_parser("status", help="Show the switch, keep, what is held now and the player switch.")
+    sub_hi.add_parser("status", help="Show the switch, max_gb, what is held now, keep and the player switch.")
     sub_hi.add_parser("on", help="Export every line played (default).")
     sub_hi.add_parser("off", help="Export nothing; what is kept stays.")
-    p_hi_keep = sub_hi.add_parser("keep", help="Keep the last N lines; the oldest past N are deleted.")
+    p_hi_gb = sub_hi.add_parser("max-gb", help="The most the store may hold on disk; the oldest lines past it are deleted.")
+    p_hi_gb.add_argument("gb", type=float, help="Gigabytes, > 0 (default 20).")
+    p_hi_keep = sub_hi.add_parser("keep", help="How many of the newest lines the player's view shows (deletes nothing).")
     p_hi_keep.add_argument("count", type=int, help="N, a whole number >= 1 (default 200).")
     sub_hi.add_parser("player-on", help="Open the player on each line after it plays (never during a hold).")
     sub_hi.add_parser("player-off", help="Never open the player (default).")

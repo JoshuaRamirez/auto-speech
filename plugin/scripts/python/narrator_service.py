@@ -321,7 +321,7 @@ class NarratorService:
         # Names the desk only when the speaker changes (ADR-016).
         self._speaker: Announcer = speaker if speaker is not None else Announcer(log=_log)
         # Every line heard goes into the speech history as a WAV and a
-        # sidecar, the last N kept; the player opens on it when he turns it
+        # sidecar, up to max_gb on disk; the player opens on it when he turns it
         # on, never while a hold stands (ADR-020).
         self._history: SpeechHistory = history if history is not None else SpeechHistory()
         self._player = player if player is not None else PlayerLauncher(holding=self._hold_stands, log=_log)
