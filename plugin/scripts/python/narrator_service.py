@@ -43,6 +43,7 @@ from config_constants import DEFAULT_SPEED, DEFAULT_VOICE_ID, FALLBACK_CHARS_PER
 from missed_speech import (
     REASON_INTERRUPTED,
     REASON_LONGEST_WAIT,
+    REASON_MEETING,
     REASON_RESTART,
     REASON_STALE,
     REASON_TIMEOUT,
@@ -62,7 +63,7 @@ from narrator_state import (
     NarratorStateMachine,
 )
 from narrator_summarizer import Summarizer, load_summarizer
-from sound_yield import ABORTED, DEFAULT_MAX_WAIT_SECONDS, SoundYieldGate
+from sound_yield import ABORTED, DEFAULT_MAX_WAIT_SECONDS, REASON_MEETING as HOLD_REASON_MEETING, SoundYieldGate
 from priority_arbiter import Priority, PriorityArbiter, QueueItem, QueueProxyFacade
 from speaker import Announcer, Plan
 from unix_ipc_server import _DaemonSocketServer, control_payload
@@ -85,6 +86,7 @@ DEFAULT_SOCKET_PATH = state_path("auto-speech-daemon.sock")
 SOCKET_FILE = Path(os.environ.get("AUTO_SPEECH_DAEMON_SOCK", str(DEFAULT_SOCKET_PATH)))
 
 POLL_INTERVAL_S = 0.25
+MEETING_POLL_S = 2.0  # how often the main loop asks the gate whether he is in a meeting
 
 # Categories we never narrate. Single MCP calls and stray uncategorised
 # tools land in OTHER and produce noise.
@@ -305,6 +307,13 @@ class NarratorService:
         self._speaker: Announcer = speaker if speaker is not None else Announcer(log=_log)
         self._last_hold_ended_at: Optional[float] = None
         self._sink_takes_hold_kwargs: Optional[bool] = None
+        # The meeting watch (ADR-018): the main loop asks the gate every
+        # MEETING_POLL_S whether he is in a meeting, and when one ends with
+        # lines set aside, queues one summary line. 0.0 = count every meeting
+        # line on the list, so lines from before a restart are summarised too.
+        self._meeting_active: Optional[bool] = None
+        self._meeting_checked_at: float = 0.0
+        self._meeting_summary_after: float = 0.0
         if tts_executor is not None:
             self._tts_executor = tts_executor
         elif synth is not None or engine is not None:
@@ -725,6 +734,12 @@ class NarratorService:
                             WATERMARK_FILE.write_text(str(offset))
                         except OSError:
                             pass
+
+            # The meeting watch: notices a meeting's end and queues the summary line.
+            try:
+                self._watch_meeting()
+            except Exception as exc:  # noqa: BLE001 — never let the watch stop the loop
+                _log(f"meeting watch error: {exc!r}")
 
             # Idle shutdown: ensure we only shut down when truly idle (no active audio and empty queue)
             is_busy = (
@@ -1242,6 +1257,79 @@ class NarratorService:
         if outcome is not None and float(getattr(outcome, "waited_seconds", 0.0) or 0.0) > 0:
             self._last_hold_ended_at = time.time()
 
+    # -- the meeting watch (ADR-018) ----------------------------------------------
+
+    def _meeting_now(self) -> tuple[str, ...]:
+        """The names of what makes this a meeting right now (a meeting app
+        holding the microphone, or his manual meeting mode); empty when he
+        is not in one, when the gate cannot say, or when there is no gate."""
+        gate = getattr(self, "_yield_gate", None)
+        if gate is None:
+            return ()
+        try:
+            assessment = gate.assess()
+        except Exception:  # noqa: BLE001 — the gate fails open
+            return ()
+        if getattr(assessment, "reason", "") != HOLD_REASON_MEETING:
+            return ()
+        try:
+            names = tuple(assessment.meeting_names())
+        except Exception:  # noqa: BLE001
+            names = ()
+        return names or ("meeting",)
+
+    def _meeting_summary_wanted(self) -> bool:
+        gate = getattr(self, "_yield_gate", None)
+        if gate is None:
+            return False
+        try:
+            return bool(gate.settings().meeting_summary) is True
+        except Exception:  # noqa: BLE001
+            return True
+
+    def _watch_meeting(self, now: Optional[float] = None) -> Optional[str]:
+        """Called from the main loop. Notes when a meeting begins and ends;
+        when one ends (or at the first look after a restart) with lines set
+        aside for a meeting, queues one summary line at the narration
+        priority, through the normal gate. Returns the summary text when one
+        was queued, so a test can see it."""
+        now = time.time() if now is None else now
+        if now - float(getattr(self, "_meeting_checked_at", 0.0) or 0.0) < MEETING_POLL_S:
+            return None
+        self._meeting_checked_at = now
+        active = bool(self._meeting_now())
+        before = getattr(self, "_meeting_active", None)
+        self._meeting_active = active
+        if active:
+            if before is not True:
+                _log("meeting: began; lines are set aside as missed until it ends")
+            return None
+        if before is True:
+            _log("meeting: ended")
+        missed = getattr(self, "_missed", None)
+        if missed is None:
+            return None
+        try:
+            pending = missed.missed_in_meeting(since=float(getattr(self, "_meeting_summary_after", 0.0) or 0.0))
+        except Exception as exc:  # noqa: BLE001
+            _log(f"missed list read error: {exc!r}")
+            return None
+        self._meeting_summary_after = now
+        if not pending or not self._meeting_summary_wanted():
+            return None
+        n = len(pending)
+        text = (
+            f"You missed {n} line{'s' if n != 1 else ''} during the meeting. "
+            "Say auto-speech missed to hear them."
+        )
+        try:
+            self.enqueue_text(text)
+        except Exception as exc:  # noqa: BLE001
+            _log(f"meeting: summary not queued: {exc!r}")
+            return None
+        _log(f"meeting: summary queued ({n} line{'s' if n != 1 else ''} set aside)")
+        return text
+
     def _missed_line(self, text: str, item: Optional[QueueItem], *, existing: Optional[MissedLine] = None) -> MissedLine:
         if existing is not None:
             return existing
@@ -1339,16 +1427,20 @@ class NarratorService:
         except PlaybackYielded as exc:
             outcome = exc.outcome
             self._note_hold_ended(outcome)
+            in_meeting = getattr(outcome, "reason", "") == HOLD_REASON_MEETING
             self._set_aside(
                 text,
                 item,
-                reason=REASON_LONGEST_WAIT,
+                reason=REASON_MEETING if in_meeting else REASON_LONGEST_WAIT,
                 waited=age + outcome.waited_seconds,
                 held_for=tuple(outcome.blockers),
                 existing=held.get("line"),
             )
             who = ", ".join(outcome.blockers) or "another app"
-            _log(f"missed: set aside after {outcome.waited_seconds:.0f}s held while {who} played: {name!r}")
+            if in_meeting:
+                _log(f"missed: in a meeting ({who}), set aside: {name!r}")
+            else:
+                _log(f"missed: set aside after {outcome.waited_seconds:.0f}s held while {who} played: {name!r}")
             return False
 
         outcome = getattr(self._sink, "last_hold", None)
@@ -1471,6 +1563,15 @@ class NarratorService:
             if stale:
                 self._set_aside(line, item, reason=REASON_STALE, waited=age)
                 _log(f"missed: stale backlog ({age:.0f}s old when its turn came), set aside: {line[:50]!r}")
+                return
+
+        # In a meeting the line is set aside before synthesis: no TTS call,
+        # no stall. An explicit replay (`missed --play`, hold=False) plays.
+        if item is None or bool(getattr(item, "hold", True)):
+            meeting = self._meeting_now()
+            if meeting:
+                self._set_aside(line, item, reason=REASON_MEETING, held_for=meeting)
+                _log(f"missed: in a meeting ({', '.join(meeting)}), set aside without synthesis: {line[:50]!r}")
                 return
 
         # Name the desk only when the speaker changes (ADR-016). A cache hit

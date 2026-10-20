@@ -56,6 +56,9 @@ SOUND_YIELD_FIELDS = (
     Field("players", "str_list"),
     Field("max_wait_seconds", "number", minimum=0),
     Field("poll_seconds", "number", minimum=0),
+    Field("meeting_hold", "bool"),
+    Field("meeting_apps", "str_list"),
+    Field("meeting_summary", "bool"),
 )
 
 

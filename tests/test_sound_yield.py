@@ -627,5 +627,241 @@ class TestPlayersList(unittest.TestCase):
         self.assertIn("the players list and exceptions cannot apply", format_assessment(a))
 
 
+# --- meetings: a second blocker; set aside at once, never a stall (ADR-018) ---
+
+from sound_yield import (  # noqa: E402
+    DEFAULT_MEETING_MINUTES,
+    MAX_MEETING_MINUTES,
+    REASON_MEETING,
+    REASON_SOUND,
+    MeetingFlag,
+    parse_meeting_minutes,
+    run_meeting_action,
+)
+
+TEAMS = AudioProcess(pid=601, bundle_id="com.microsoft.teams2", running_output=True, running_input=True)
+TEAMS_OUT = AudioProcess(pid=601, bundle_id="com.microsoft.teams2", running_output=True, running_input=False)
+CROWN = AudioProcess(pid=602, bundle_id="com.redjay.crown-talk", running_output=False, running_input=True)
+CHROME_MEET = AudioProcess(pid=603, bundle_id="com.google.Chrome", running_output=True, running_input=True)
+SPEECHD = AudioProcess(pid=604, bundle_id="", running_output=True, running_input=True)
+MEETING_TABLE = dict(TABLE)
+MEETING_TABLE.update({
+    601: (1, "/Applications/MSTeams.app/Contents/MacOS/MSTeams"),
+    602: (1, "/Applications/CrownTalk.app/Contents/MacOS/CrownTalk"),
+    603: (1, "/Applications/Chrome.app/Contents/MacOS/Chrome"),
+    604: (1, "/System/Library/PrivateFrameworks/CoreSpeech.framework/corespeechd"),
+})
+
+
+def _meeting_gate(tmp, probe, *, config=None, log=None):
+    """A gate whose manual meeting flag shares the fake clock."""
+    clock = FakeClock()
+    flag = MeetingFlag(tmp / "meeting.json", clock=clock.now)
+    gate = SoundYieldGate(
+        store=_store(tmp, config),
+        probe=probe,
+        process_table=FakeTable(MEETING_TABLE),
+        own_pid=lambda: OWN_PID,
+        mpv_pid_path=tmp / "mpv.pid",
+        clock=clock.now,
+        sleeper=clock.sleep,
+        log=log or (lambda m: None),
+        meeting_flag=flag,
+    )
+    return gate, clock, flag
+
+
+class TestMeetingHold(unittest.TestCase):
+    def setUp(self):
+        self._tmp = tempfile.TemporaryDirectory()
+        self.tmp = Path(self._tmp.name)
+
+    def tearDown(self):
+        self._tmp.cleanup()
+
+    def test_teams_holding_the_microphone_is_set_aside_at_once(self):
+        logs: list[str] = []
+        gate, clock, _ = _meeting_gate(self.tmp, FakeProbe([[TEAMS]]), log=logs.append)
+        a = gate.assess()
+        self.assertTrue(a.hold)
+        self.assertEqual(a.reason, REASON_MEETING)
+        self.assertEqual([p.pid for p in a.meeting], [601])
+        self.assertEqual(a.blockers, [])
+        out = gate.wait_until_clear()
+        self.assertEqual((out.status, out.reason, out.waited_seconds), (EXPIRED, REASON_MEETING, 0.0))
+        self.assertTrue(out.in_meeting)
+        self.assertEqual(out.blockers, ("MSTeams (com.microsoft.teams2) (pid 601)",))
+        self.assertEqual(clock.sleeps, [], "a meeting never waits")
+        self.assertTrue(any("in a meeting" in m for m in logs))
+
+    def test_teams_with_output_only_is_an_ordinary_sound_hold(self):
+        gate, clock, _ = _meeting_gate(self.tmp, FakeProbe([[TEAMS_OUT], [TEAMS_OUT], []]))
+        a = gate.assess()  # consumes the first snapshot
+        self.assertEqual((a.reason, [p.pid for p in a.blockers], a.meeting), (REASON_SOUND, [601], []))
+        out = gate.wait_until_clear()  # holds on the second, resumes on the third
+        self.assertEqual((out.status, out.reason), (RESUMED, REASON_SOUND))
+        self.assertEqual(len(clock.sleeps), 1)
+
+    def test_crown_talk_on_the_microphone_is_not_a_meeting(self):
+        gate, _, _ = _meeting_gate(self.tmp, FakeProbe([[CROWN, SPEECHD]]))
+        a = gate.assess()
+        self.assertFalse(a.hold)
+        self.assertEqual(a.reason, "")
+        self.assertEqual([p.pid for p in a.mic], [602], "input only: listed as a microphone in use")
+        self.assertEqual([p.pid for p in a.others], [604], "input and output, not a meeting app: the player rules decide")
+        text = format_assessment(a)
+        self.assertIn("microphone in use: CrownTalk (com.redjay.crown-talk) (pid 602) — not a meeting app, does not hold", text)
+        self.assertIn("speech would play now", text)
+        self.assertEqual(gate.wait_until_clear().status, CLEAR)
+
+    def test_a_meeting_beats_the_exception_list(self):
+        gate, _, _ = _meeting_gate(
+            self.tmp, FakeProbe([[CHROME_MEET]]), config='[sound_yield]\nexceptions = ["com.google.Chrome"]\n'
+        )
+        a = gate.assess()
+        self.assertEqual((a.reason, [p.pid for p in a.meeting], a.excepted), (REASON_MEETING, [603], []))
+        # Chrome merely playing (a video) is still excepted.
+        gate2, _, _ = _meeting_gate(
+            self.tmp, FakeProbe([[replace(CHROME_MEET, running_input=False)]]),
+            config='[sound_yield]\nexceptions = ["com.google.Chrome"]\n',
+        )
+        b = gate2.assess()
+        self.assertEqual((b.hold, [p.pid for p in b.excepted]), (False, [603]))
+
+    def test_meeting_hold_can_be_switched_off_in_the_file(self):
+        gate, _, _ = _meeting_gate(self.tmp, FakeProbe([[TEAMS]]), config='[sound_yield]\nmeeting_hold = false\n')
+        a = gate.assess()
+        # Teams is a player too: its output holds as sound, not as a meeting.
+        self.assertEqual((a.reason, a.meeting, [p.pid for p in a.blockers]), (REASON_SOUND, [], [601]))
+
+    def test_manual_meeting_mode_holds_and_expires_with_the_clock(self):
+        gate, clock, flag = _meeting_gate(self.tmp, FakeProbe([[]]))
+        self.assertIsNone(flag.read())
+        self.assertEqual(flag.describe(), "meeting mode: off")
+        state = flag.set(DEFAULT_MEETING_MINUTES, note="yield meeting on")
+        self.assertEqual(state.minutes_left(clock.now()), 60)
+        a = gate.assess()
+        self.assertEqual((a.hold, a.reason, a.manual_meeting), (True, REASON_MEETING, state))
+        self.assertEqual(a.meeting_names(), ("meeting mode (manual)",))
+        out = gate.wait_until_clear()
+        self.assertEqual((out.status, out.reason, out.blockers), (EXPIRED, REASON_MEETING, ("meeting mode (manual)",)))
+        self.assertIn("meeting mode: on until", format_assessment(a, now=clock.now()))
+        self.assertIn("60 min left", flag.describe())
+        clock.t += 59 * 60
+        self.assertIn("1 min left", flag.describe())
+        clock.t += 61
+        self.assertIsNone(flag.read(), "past its end the mode is off by itself")
+        self.assertFalse(gate.assess().hold)
+        self.assertEqual(flag.describe(), "meeting mode: off")
+
+    def test_manual_meeting_mode_survives_yield_off_and_the_fallback(self):
+        gate, _, flag = _meeting_gate(self.tmp, FakeProbe([[TEAMS]]), config='[sound_yield]\nenabled = false\n')
+        self.assertFalse(gate.assess().hold, "yield off: no probe, no hold")
+        self.assertEqual(gate._probe.list_calls, 0)
+        flag.set(30)
+        a = gate.assess()
+        self.assertEqual((a.hold, a.reason, a.mode), (True, REASON_MEETING, MODE_DISABLED))
+        self.assertEqual(gate._probe.list_calls, 0, "yield off still never probes")
+        self.assertEqual(gate.wait_until_clear().reason, REASON_MEETING)
+        self.assertIn("speech is set aside (meeting mode)", format_assessment(a))
+        # Device fallback: it cannot name a process, so it never declares a meeting by itself.
+        other = self.tmp / "fallback"
+        other.mkdir()
+        gate2, _, flag2 = _meeting_gate(other, FakeProbe(process_list_available=False, device=True))
+        b = gate2.assess()
+        self.assertEqual((b.mode, b.reason), (MODE_DEVICE_FALLBACK, REASON_SOUND))
+        flag2.set(30)
+        self.assertEqual(gate2.assess().reason, REASON_MEETING)
+
+    def test_a_meeting_starting_during_a_sound_hold_sets_the_line_aside(self):
+        gate, clock, _ = _meeting_gate(self.tmp, FakeProbe([[MUSIC], [MUSIC], [MUSIC, TEAMS]]))
+        out = gate.wait_until_clear()
+        self.assertEqual((out.status, out.reason), (EXPIRED, REASON_MEETING))
+        self.assertEqual(out.blockers, ("MSTeams (com.microsoft.teams2) (pid 601)",))
+        self.assertGreater(out.waited_seconds, 0.0)
+        self.assertLess(out.waited_seconds, 180.0)
+
+    def test_no_process_list_means_no_meeting_and_fails_open(self):
+        gate, _, _ = _meeting_gate(self.tmp, FakeProbe(process_list_available=False, device=False))
+        a = gate.assess()
+        self.assertEqual((a.hold, a.reason, a.mode), (False, "", MODE_DEVICE_FALLBACK))
+        gate2, _, _ = _meeting_gate(self.tmp, FakeProbe(process_list_available=False, device=None))
+        b = gate2.assess()
+        self.assertEqual((b.hold, b.reason, b.mode), (False, "", MODE_UNAVAILABLE))
+        self.assertEqual(gate2.wait_until_clear().status, UNAVAILABLE)
+
+    def test_settings_carry_the_meeting_keys_and_round_trip(self):
+        s = SoundYieldSettings.from_mapping(
+            {"meeting_hold": False, "meeting_apps": ["us.zoom.xos", "com.microsoft.teams2"], "meeting_summary": False}
+        )
+        self.assertEqual((s.meeting_hold, s.meeting_apps, s.meeting_summary), (False, ("us.zoom.xos", "com.microsoft.teams2"), False))
+        self.assertTrue(s.is_meeting_app(AudioProcess(pid=1, bundle_id="us.zoom.xos")))
+        self.assertFalse(s.is_meeting_app(AudioProcess(pid=1, bundle_id="com.apple.FaceTime")))
+        back = SoundYieldSettings.from_mapping(tomllib.loads(s.to_toml())["sound_yield"])
+        self.assertEqual((back.meeting_hold, back.meeting_apps, back.meeting_summary), (s.meeting_hold, s.meeting_apps, s.meeting_summary))
+        bad = SoundYieldSettings.from_mapping({"meeting_hold": "yes", "meeting_summary": 1, "meeting_apps": 7})
+        self.assertEqual((bad.meeting_hold, bad.meeting_summary, bad.meeting_apps), (True, True, sy.DEFAULT_MEETING_APPS))
+        self.assertEqual(len(bad.problems), 3)
+        defaults = SoundYieldSettings()
+        self.assertIn("com.hnc.Discord", defaults.meeting_apps)
+        self.assertIn("meeting hold: ON", format_settings(defaults))
+        self.assertIn("one spoken line says how many lines were missed", format_settings(defaults))
+
+    def test_parse_meeting_minutes(self):
+        self.assertEqual(parse_meeting_minutes(["45m"]), 45)
+        self.assertEqual(parse_meeting_minutes(["for", "2h"]), 120)
+        self.assertEqual(parse_meeting_minutes(["1h30m"]), 90)
+        self.assertEqual(parse_meeting_minutes(["90"]), 90)
+        self.assertEqual(parse_meeting_minutes(["8h"]), MAX_MEETING_MINUTES)
+        for bad in (["9h"], ["0m"], ["soon"], [], ["481"]):
+            with self.assertRaises(ValueError):
+                parse_meeting_minutes(bad)
+
+    def test_run_action_meeting_verbs_share_the_flag_file(self):
+        store = _store(self.tmp)
+        clock = FakeClock()
+        flag = MeetingFlag(self.tmp / "meeting.json", clock=clock.now)
+        self.assertEqual(run_action("meeting", [], store=store, meeting_flag=flag).text, "meeting mode: off")
+        r = run_action("meeting", ["on"], store=store, meeting_flag=flag)
+        self.assertTrue(r.ok)
+        self.assertIn("meeting mode: on until", r.text)
+        self.assertIn("60 min left", r.text)
+        self.assertIn("set aside as missed", r.text)
+        self.assertTrue((self.tmp / "meeting.json").exists())
+        r = run_action("meeting", ["for", "45m"], store=store, meeting_flag=flag)
+        self.assertIn("45 min left", r.text)
+        r = run_action("meeting", ["2h"], store=store, meeting_flag=flag)
+        self.assertIn("120 min left", r.text)
+        r = run_action("meeting", ["for", "9h"], store=store, meeting_flag=flag)
+        self.assertFalse(r.ok)
+        self.assertIn("8 h", r.text)
+        r = run_action("meeting", ["banana"], store=store, meeting_flag=flag)
+        self.assertFalse(r.ok)
+        self.assertIn("status | on | off | for", r.text)
+        self.assertIn("meeting mode: on until", run_action("status", store=store, meeting_flag=flag).text)
+        r = run_action("meeting", ["off"], store=store, meeting_flag=flag)
+        self.assertEqual(r.text, "meeting mode: off (was on)")
+        self.assertFalse((self.tmp / "meeting.json").exists())
+        self.assertEqual(run_action("meeting", ["off"], store=store, meeting_flag=flag).text, "meeting mode: off (it was not on)")
+        self.assertIn("meeting mode: off", run_action("status", store=store, meeting_flag=flag).text)
+        self.assertIn("meeting", ACTIONS)
+
+    def test_check_names_the_meeting(self):
+        gate, _, _ = _meeting_gate(self.tmp, FakeProbe([[TEAMS, CROWN]]))
+        text = run_action("check", store=gate.store, gate=gate).text
+        self.assertIn("in a meeting: MSTeams (com.microsoft.teams2) (pid 601) holds the microphone — speech is set aside as missed", text)
+        self.assertIn("microphone in use: CrownTalk", text)
+        self.assertIn("speech would be SET ASIDE at once", text)
+
+    def test_a_corrupt_or_unreadable_flag_reads_as_off(self):
+        gate, _, flag = _meeting_gate(self.tmp, FakeProbe([[]]))
+        (self.tmp / "meeting.json").write_text("{not json")
+        self.assertIsNone(flag.read())
+        self.assertFalse(gate.assess().hold)
+        (self.tmp / "meeting.json").write_text('{"until": "soon"}')
+        self.assertIsNone(flag.read())
+        self.assertEqual(run_meeting_action(["off"], flag=flag).text, "meeting mode: off (it was not on)")
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=1)

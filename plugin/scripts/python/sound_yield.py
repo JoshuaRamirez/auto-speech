@@ -20,6 +20,17 @@ auto-speech's own playback never counts: the calling process, the mpv it
 spawned, and any process whose command line (or an ancestor's) carries
 "auto-speech" are ignored.
 
+A meeting is a second kind of blocker (his 2026-10-20 12:24: "if I'm in a
+meeting, I don't want you to talk"). A process on the meeting-apps list
+whose process object reports `kAudioProcessPropertyIsRunningInput` (the
+same property walk, one more flag per object; no audio is captured) puts
+the gate in a meeting, and so does his own time-boxed `yield meeting on`
+(a small state file beside the missed list). A meeting never stalls the
+queue: the hold expires at once with reason "meeting", and the daemon sets
+the line aside on the missed list, then speaks one summary line when the
+meeting ends. A process holding the microphone that is not a meeting app
+(his CrownTalk, the system's speech daemon) is listed and never holds.
+
 Three collaborators, all injectable for tests:
 
   SoundYieldStore     the settings file (~/.config/auto-speech/sound-yield.toml)
@@ -34,6 +45,7 @@ names: enabled / exceptions / max_wait_seconds / poll_seconds.
 from __future__ import annotations
 
 import ctypes
+import json
 import logging
 import os
 import struct
@@ -42,6 +54,7 @@ import sys
 import time
 import tomllib
 from dataclasses import dataclass, field, replace
+from datetime import datetime
 from pathlib import Path
 
 from state_paths import state_path
@@ -96,6 +109,37 @@ DEFAULT_PLAYERS = (
     "com.anthropic.claudefordesktop",
 )
 
+# Apps whose open microphone means a meeting (his 2026-10-20 12:32: the
+# listed meeting apps, Discord included). A browser on the list covers Meet;
+# any other app holding the microphone is "mic in use, not a meeting app".
+DEFAULT_MEETING_HOLD = True
+DEFAULT_MEETING_APPS = (
+    "com.microsoft.teams2",
+    "com.microsoft.teams",
+    "us.zoom.xos",
+    "com.apple.FaceTime",
+    "com.google.Chrome",
+    "com.apple.Safari",
+    "com.apple.WebKit.GPU",
+    "company.thebrowser.Browser",  # Arc
+    "com.microsoft.edgemac",
+    "org.mozilla.firefox",
+    "org.mozilla.plugincontainer",
+    "com.brave.Browser",
+    "com.tinyspeck.slackmacgap",  # Slack huddles
+    "com.cisco.webexmeetingsapp",
+    "com.webex.meetingmanager",
+    "com.hnc.Discord",
+)
+DEFAULT_MEETING_SUMMARY = True
+DEFAULT_MEETING_MINUTES = 60  # `yield meeting on` without a duration
+MAX_MEETING_MINUTES = 8 * 60  # `yield meeting for 9h` is refused
+MEETING_FILE_ENV = "AUTO_SPEECH_MEETING_FILE"
+
+# Why the gate holds (Assessment.reason / HoldOutcome.reason).
+REASON_SOUND = "sound"  # another app plays sound: wait, then set aside
+REASON_MEETING = "meeting"  # a meeting: set aside at once, never wait
+
 OWN_COMMAND_MARKER = "auto-speech"
 MPV_PID_PATH = state_path("auto-speech-mpv.pid")
 
@@ -133,6 +177,9 @@ class SoundYieldSettings:
     players: tuple[str, ...] = DEFAULT_PLAYERS
     max_wait_seconds: float = DEFAULT_MAX_WAIT_SECONDS
     poll_seconds: float = DEFAULT_POLL_SECONDS
+    meeting_hold: bool = DEFAULT_MEETING_HOLD
+    meeting_apps: tuple[str, ...] = DEFAULT_MEETING_APPS
+    meeting_summary: bool = DEFAULT_MEETING_SUMMARY
     config_path: Optional[str] = None
     problems: tuple[str, ...] = ()  # what was ignored while loading, for the doctor/status
 
@@ -170,7 +217,20 @@ class SoundYieldSettings:
             problems.append(f"[{SECTION}] poll_seconds should be a number > 0, got {poll!r}")
             poll = DEFAULT_POLL_SECONDS
 
-        known = {"enabled", "exceptions", "hold_for", "players", "max_wait_seconds", "poll_seconds"}
+        meeting_hold = section.get("meeting_hold", DEFAULT_MEETING_HOLD)
+        if not isinstance(meeting_hold, bool):
+            problems.append(f"[{SECTION}] meeting_hold should be true or false, got {meeting_hold!r}")
+            meeting_hold = DEFAULT_MEETING_HOLD
+        meeting_apps = cls._name_list(section, "meeting_apps", list(DEFAULT_MEETING_APPS), problems)
+        meeting_summary = section.get("meeting_summary", DEFAULT_MEETING_SUMMARY)
+        if not isinstance(meeting_summary, bool):
+            problems.append(f"[{SECTION}] meeting_summary should be true or false, got {meeting_summary!r}")
+            meeting_summary = DEFAULT_MEETING_SUMMARY
+
+        known = {
+            "enabled", "exceptions", "hold_for", "players", "max_wait_seconds", "poll_seconds",
+            "meeting_hold", "meeting_apps", "meeting_summary",
+        }
         for key in section:
             if key == "after_max_wait":
                 problems.append(
@@ -187,6 +247,9 @@ class SoundYieldSettings:
             players=tuple(players),
             max_wait_seconds=float(max_wait),
             poll_seconds=float(poll),
+            meeting_hold=meeting_hold,
+            meeting_apps=tuple(meeting_apps),
+            meeting_summary=meeting_summary,
             config_path=config_path,
             problems=tuple(problems),
         )
@@ -218,6 +281,7 @@ class SoundYieldSettings:
     def to_toml(self) -> str:
         exceptions = ", ".join(_toml_string(e) for e in self.exceptions)
         players = ", ".join(_toml_string(e) for e in self.players)
+        meeting_apps = ", ".join(_toml_string(e) for e in self.meeting_apps)
         return (
             f"[{SECTION}]\n"
             f"enabled = {'true' if self.enabled else 'false'}\n"
@@ -226,6 +290,9 @@ class SoundYieldSettings:
             f"exceptions = [{exceptions}]\n"
             f"max_wait_seconds = {self.max_wait_seconds:g}\n"
             f"poll_seconds = {self.poll_seconds:g}\n"
+            f"meeting_hold = {'true' if self.meeting_hold else 'false'}\n"
+            f"meeting_apps = [{meeting_apps}]\n"
+            f"meeting_summary = {'true' if self.meeting_summary else 'false'}\n"
         )
 
     def is_exception(self, proc: "AudioProcess") -> bool:
@@ -235,6 +302,10 @@ class SoundYieldSettings:
     def is_player(self, proc: "AudioProcess") -> bool:
         """True when `proc` is on the players list (see `_matches`)."""
         return _matches(self.players, proc)
+
+    def is_meeting_app(self, proc: "AudioProcess") -> bool:
+        """True when `proc` is on the meeting-apps list (see `_matches`)."""
+        return _matches(self.meeting_apps, proc)
 
 
 def _matches(entries: Iterable[str], proc: "AudioProcess") -> bool:
@@ -388,6 +459,7 @@ class AudioProcess:
     bundle_id: str = ""
     name: str = ""
     running_output: bool = True
+    running_input: bool = False  # the process holds the microphone (a meeting, or CrownTalk)
 
     def label(self) -> str:
         parts = [self.name or "?"]
@@ -410,6 +482,7 @@ _SEL_PROCESS_OBJECT_LIST = "prs#"  # kAudioHardwarePropertyProcessObjectList
 _SEL_PROCESS_PID = "ppid"  # kAudioProcessPropertyPID
 _SEL_PROCESS_BUNDLE_ID = "pbid"  # kAudioProcessPropertyBundleID
 _SEL_PROCESS_IS_RUNNING_OUTPUT = "piro"  # kAudioProcessPropertyIsRunningOutput (14.2+)
+_SEL_PROCESS_IS_RUNNING_INPUT = "piri"  # kAudioProcessPropertyIsRunningInput (14.2+): holds the microphone
 _SEL_DEFAULT_OUTPUT_DEVICE = "dOut"  # kAudioHardwarePropertyDefaultOutputDevice
 _SEL_DEVICE_IS_RUNNING_SOMEWHERE = "gone"  # kAudioDevicePropertyDeviceIsRunningSomewhere
 _SCOPE_GLOBAL = "glob"
@@ -528,8 +601,10 @@ class CoreAudioProbe:
     # -- public ---------------------------------------------------------------
 
     def playing_processes(self) -> list[AudioProcess]:
-        """Every process Core Audio says is running output right now
-        (bundle id when it has one; name is filled in by the gate)."""
+        """Every process Core Audio says is running output or input right
+        now (bundle id when it has one; name is filled in by the gate).
+        `running_input` is a property read on the same process object, not
+        a tap: nothing is captured and no permission is asked."""
         self._load()
         try:
             objects = self._get_u32_list(_SYSTEM_OBJECT, _SEL_PROCESS_OBJECT_LIST)
@@ -545,14 +620,20 @@ class CoreAudioProbe:
                 # One stale object can vanish between the list read and
                 # the flag read; skip it rather than give up on the list.
                 continue
-            if not running:
+            try:
+                recording = self._get_u32(obj, _SEL_PROCESS_IS_RUNNING_INPUT)
+            except ProbeUnavailable:
+                recording = 0  # an older macOS without the input flag: no meeting detection
+            if not running and not recording:
                 continue
             try:
                 pid = self._get_u32(obj, _SEL_PROCESS_PID)
             except ProbeUnavailable:
                 continue
             bundle = self._get_cfstring(obj, _SEL_PROCESS_BUNDLE_ID)
-            out.append(AudioProcess(pid=int(pid), bundle_id=bundle, running_output=True))
+            out.append(
+                AudioProcess(pid=int(pid), bundle_id=bundle, running_output=bool(running), running_input=bool(recording))
+            )
         return out
 
     def device_running_somewhere(self) -> bool:
@@ -612,6 +693,121 @@ class ProcessTable:
 
 
 # --------------------------------------------------------------------------
+# His own meeting mode: a time-boxed flag file
+# --------------------------------------------------------------------------
+
+
+def default_meeting_path() -> Path:
+    override = os.environ.get(MEETING_FILE_ENV)
+    if override:
+        return Path(override)
+    return Path.home() / ".local" / "state" / "auto-speech" / "meeting.json"
+
+
+def parse_meeting_minutes(words: Iterable[str]) -> int:
+    """`45m`, `45min`, `2h`, `1h30m`, `90` (minutes), `for 45m`. Raises
+    ValueError with the reason when the words are not a duration, are under
+    one minute, or run past the 8 h cap."""
+    text = " ".join(str(w).strip().lower() for w in words if str(w).strip())
+    if text.startswith("for "):
+        text = text[4:].strip()
+    if not text:
+        raise ValueError("say how long, like 45m or 2h")
+    if text.isdigit():
+        minutes = int(text)
+    else:
+        import re
+
+        m = re.fullmatch(r"(?:(\d+)\s*h(?:ours?|rs?)?)?\s*(?:(\d+)\s*m(?:in(?:utes?)?)?)?", text)
+        if not m or not (m.group(1) or m.group(2)):
+            raise ValueError(f"not a duration: {text!r} (say 45m, 2h or 1h30m)")
+        minutes = int(m.group(1) or 0) * 60 + int(m.group(2) or 0)
+    if minutes < 1:
+        raise ValueError("a meeting lasts at least one minute")
+    if minutes > MAX_MEETING_MINUTES:
+        raise ValueError(f"the longest meeting mode is {MAX_MEETING_MINUTES // 60} h (say yield meeting on again later)")
+    return minutes
+
+
+@dataclass(frozen=True)
+class MeetingState:
+    """His manual meeting mode while it is on."""
+
+    until: float  # epoch seconds
+    set_at: float
+    note: str = ""
+
+    def minutes_left(self, now: float) -> int:
+        return max(0, int((self.until - now + 59) // 60))
+
+    def describe(self, now: float) -> str:
+        end = datetime.fromtimestamp(self.until).strftime("%H:%M")
+        return f"on until {end} (manual, {self.minutes_left(now)} min left)"
+
+
+class MeetingFlag:
+    """`~/.local/state/auto-speech/meeting.json` (AUTO_SPEECH_MEETING_FILE
+    overrides it): {until, set_at, note}. Past `until` the flag reads as
+    off, so a forgotten `meeting on` never mutes him for good."""
+
+    def __init__(self, path: Path | str | None = None, *, clock: Callable[[], float] = time.time) -> None:
+        self._path = Path(path) if path is not None else default_meeting_path()
+        self._clock = clock
+
+    @property
+    def path(self) -> Path:
+        return self._path
+
+    def now(self) -> float:
+        return self._clock()
+
+    def read(self) -> Optional[MeetingState]:
+        try:
+            raw = self._path.read_text(encoding="utf-8")
+        except OSError:
+            return None
+        try:
+            data = json.loads(raw) if raw.strip() else {}
+        except ValueError:
+            return None
+        if not isinstance(data, dict):
+            return None
+        try:
+            until = float(data.get("until", 0.0))
+            set_at = float(data.get("set_at", 0.0))
+        except (TypeError, ValueError):
+            return None
+        if until <= self._clock():
+            return None
+        return MeetingState(until=until, set_at=set_at, note=str(data.get("note") or ""))
+
+    def set(self, minutes: int, note: str = "") -> MeetingState:
+        minutes = max(1, min(int(minutes), MAX_MEETING_MINUTES))
+        now = self._clock()
+        state = MeetingState(until=now + minutes * 60.0, set_at=now, note=note)
+        self._path.parent.mkdir(parents=True, exist_ok=True)
+        tmp = self._path.with_name(self._path.name + ".tmp")
+        tmp.write_text(json.dumps({"until": state.until, "set_at": state.set_at, "note": state.note}) + "\n", encoding="utf-8")
+        os.replace(tmp, self._path)
+        return state
+
+    def clear(self) -> bool:
+        """True when a meeting mode was on."""
+        was_on = self.read() is not None
+        try:
+            self._path.unlink()
+        except FileNotFoundError:
+            pass
+        except OSError:
+            return was_on
+        return was_on
+
+    def describe(self) -> str:
+        state = self.read()
+        return "meeting mode: " + (state.describe(self._clock()) if state is not None else "off")
+
+
+# --------------------------------------------------------------------------
 # The gate
 # --------------------------------------------------------------------------
 
@@ -627,7 +823,21 @@ class Assessment:
     excepted: list[AudioProcess] = field(default_factory=list)  # playing, but on the exception list
     others: list[AudioProcess] = field(default_factory=list)  # running output, not a player: does not hold
     own: list[AudioProcess] = field(default_factory=list)  # auto-speech's own playback
+    meeting: list[AudioProcess] = field(default_factory=list)  # meeting apps holding the microphone
+    mic: list[AudioProcess] = field(default_factory=list)  # holding the microphone, not a meeting app: does not hold
+    manual_meeting: Optional[MeetingState] = None  # his `yield meeting on`, while it lasts
+    reason: str = ""  # REASON_MEETING | REASON_SOUND | "" when nothing holds
     note: str = ""
+
+    @property
+    def in_meeting(self) -> bool:
+        return self.reason == REASON_MEETING
+
+    def meeting_names(self) -> tuple[str, ...]:
+        names = [p.label() for p in self.meeting]
+        if self.manual_meeting is not None:
+            names.append("meeting mode (manual)")
+        return tuple(names)
 
 
 @dataclass(frozen=True)
@@ -635,6 +845,11 @@ class HoldOutcome:
     status: str  # CLEAR | RESUMED | EXPIRED | ABORTED | DISABLED | UNAVAILABLE
     waited_seconds: float = 0.0
     blockers: tuple[str, ...] = ()
+    reason: str = ""  # REASON_SOUND | REASON_MEETING for a hold; "" otherwise
+
+    @property
+    def in_meeting(self) -> bool:
+        return self.reason == REASON_MEETING
 
     @property
     def may_play(self) -> bool:
@@ -655,10 +870,12 @@ class SoundYieldGate:
         clock: Callable[[], float] = time.monotonic,
         sleeper: Callable[[float], None] = time.sleep,
         log: Callable[[str], None] | None = None,
+        meeting_flag: MeetingFlag | None = None,
     ) -> None:
         self._store = store or SoundYieldStore()
         self._probe = probe or CoreAudioProbe()
         self._table = process_table or ProcessTable()
+        self._meeting_flag = meeting_flag or MeetingFlag()
         self._own_pid = own_pid
         self._mpv_pid_path = mpv_pid_path
         self._clock = clock
@@ -672,6 +889,16 @@ class SoundYieldGate:
 
     def settings(self) -> SoundYieldSettings:
         return self._store.load()
+
+    @property
+    def meeting_flag(self) -> MeetingFlag:
+        return self._meeting_flag
+
+    def manual_meeting(self) -> Optional[MeetingState]:
+        try:
+            return self._meeting_flag.read()
+        except Exception:  # noqa: BLE001 — a flag that cannot be read is off
+            return None
 
     # -- own-process rule -----------------------------------------------------
 
@@ -704,31 +931,55 @@ class SoundYieldGate:
 
     def assess(self, settings: SoundYieldSettings | None = None) -> Assessment:
         settings = settings if settings is not None else self._store.load()
+        manual = self.manual_meeting()
         if not settings.enabled:
-            return Assessment(hold=False, mode=MODE_DISABLED, settings=settings)
+            # `yield off`: no probe, no sound hold, no mic-detected meeting; his
+            # own `yield meeting on` still holds, since he set it by hand.
+            result = Assessment(hold=False, mode=MODE_DISABLED, settings=settings, manual_meeting=manual)
+            if manual is not None:
+                result.hold, result.reason = True, REASON_MEETING
+            return result
 
         try:
             playing = self._probe.playing_processes()
         except ProbeUnavailable as exc:
-            return self._assess_fallback(settings, str(exc))
+            return self._finish(self._assess_fallback(settings, str(exc)), manual)
 
+        result = Assessment(hold=False, mode=MODE_PROCESS_LIST, settings=settings)
         if not playing:
-            return Assessment(hold=False, mode=MODE_PROCESS_LIST, settings=settings)
+            return self._finish(result, manual)
 
         table = self._table.snapshot()
         own_mpv = self._own_mpv_pid()
-        result = Assessment(hold=False, mode=MODE_PROCESS_LIST, settings=settings)
         for proc in playing:
             named = replace(proc, name=ProcessTable.name_of(table, proc.pid)) if not proc.name else proc
             if self._is_own(named.pid, table, own_mpv):
                 result.own.append(named)
+            elif named.running_input and settings.meeting_hold and settings.is_meeting_app(named):
+                # Before the exceptions: Chrome on the exception list still
+                # means a meeting when Meet holds the microphone.
+                result.meeting.append(named)
+            elif named.running_input and not named.running_output:
+                result.mic.append(named)  # CrownTalk, the speech daemon: not a meeting
             elif settings.is_exception(named):
                 result.excepted.append(named)
             elif settings.hold_for == HOLD_FOR_PLAYERS and not settings.is_player(named):
                 result.others.append(named)
             else:
                 result.blockers.append(named)
-        result.hold = bool(result.blockers)
+        return self._finish(result, manual)
+
+    @staticmethod
+    def _finish(result: Assessment, manual: Optional[MeetingState]) -> Assessment:
+        """Settle hold and reason: a meeting (detected or manual) wins over
+        sound, since a meeting sets the line aside at once; sound waits."""
+        result.manual_meeting = manual
+        if result.meeting or manual is not None:
+            result.hold, result.reason = True, REASON_MEETING
+        elif result.blockers:
+            result.hold, result.reason = True, REASON_SOUND
+        else:
+            result.hold, result.reason = False, ""
         return result
 
     def _assess_fallback(self, settings: SoundYieldSettings, reason: str) -> Assessment:
@@ -778,6 +1029,11 @@ class SoundYieldGate:
         begins, so the caller can record the line as held."""
         settings = self._store.load()
         first = self.assess(settings)
+        if first.in_meeting:
+            # A meeting never waits: set aside now, no synthesis, no stall.
+            names = first.meeting_names()
+            self._log(f"sound-yield: in a meeting ({', '.join(names)}); setting this speech aside as missed")
+            return HoldOutcome(EXPIRED, 0.0, names, REASON_MEETING)
         if first.mode == MODE_DISABLED:
             return HoldOutcome(DISABLED)
         if first.mode == MODE_UNAVAILABLE:
@@ -801,7 +1057,7 @@ class SoundYieldGate:
             if should_abort is not None and should_abort():
                 waited = self._clock() - started
                 self._log(f"sound-yield: hold aborted after {waited:.1f}s")
-                return HoldOutcome(ABORTED, waited, last_names)
+                return HoldOutcome(ABORTED, waited, last_names, REASON_SOUND)
             waited = self._clock() - started
             budget = max(0.0, settings.max_wait_seconds - already)
             if waited >= budget:
@@ -809,21 +1065,26 @@ class SoundYieldGate:
                     f"sound-yield: longest wait ({settings.max_wait_seconds:g}s) reached; "
                     "setting this speech aside as missed"
                 )
-                return HoldOutcome(EXPIRED, waited, last_names)
+                return HoldOutcome(EXPIRED, waited, last_names, REASON_SOUND)
             self._sleep(min(settings.poll_seconds, max(0.0, budget - waited)))
             # Re-read settings each poll so `yield off` / `yield add` release a hold in progress.
             settings = self._store.load()
             current = self.assess(settings)
+            if current.in_meeting:
+                waited = self._clock() - started
+                names = current.meeting_names()
+                self._log(f"sound-yield: a meeting began during the hold ({', '.join(names)}); setting this speech aside as missed")
+                return HoldOutcome(EXPIRED, waited, names, REASON_MEETING)
             if current.mode == MODE_DISABLED:
                 waited = self._clock() - started
                 self._log(f"sound-yield: switched off during hold; playing after {waited:.1f}s")
-                return HoldOutcome(DISABLED, waited, last_names)
+                return HoldOutcome(DISABLED, waited, last_names, REASON_SOUND)
             if current.mode == MODE_UNAVAILABLE:
-                return HoldOutcome(UNAVAILABLE, self._clock() - started, last_names)
+                return HoldOutcome(UNAVAILABLE, self._clock() - started, last_names, REASON_SOUND)
             if not current.hold:
                 waited = self._clock() - started
                 self._log(f"sound-yield: other sound stopped; playing after {waited:.1f}s")
-                return HoldOutcome(RESUMED, waited, last_names)
+                return HoldOutcome(RESUMED, waited, last_names, REASON_SOUND)
             last_names = tuple(p.label() for p in current.blockers)
 
 
@@ -850,12 +1111,21 @@ def format_settings(settings: SoundYieldSettings) -> str:
         if settings.hold_for == HOLD_FOR_PLAYERS
         else "any app that plays sound, except the exceptions"
     )
+    meeting_apps = ", ".join(settings.meeting_apps) if settings.meeting_apps else "none"
+    meeting = (
+        "ON — speech is set aside as missed while a meeting app holds the microphone"
+        if settings.meeting_hold
+        else "OFF — an open microphone never holds; only `yield meeting on` does"
+    )
     lines = [
         f"sound yield: {state}",
         f"holds for: {rule}",
         f"players (apps whose sound holds speech): {players}",
         f"exceptions (apps whose sound does not hold speech): {exceptions}",
         f"longest hold: {settings.max_wait_seconds:g} s, then set aside as missed (auto-speech missed)",
+        f"meeting hold: {meeting}",
+        f"meeting apps (an open microphone here is a meeting): {meeting_apps}",
+        f"after a meeting: {'one spoken line says how many lines were missed' if settings.meeting_summary else 'no summary line'}",
         f"config: {where}",
     ]
     for problem in settings.problems:
@@ -863,19 +1133,28 @@ def format_settings(settings: SoundYieldSettings) -> str:
     return "\n".join(lines)
 
 
-def format_assessment(assessment: Assessment) -> str:
+def format_assessment(assessment: Assessment, *, now: float | None = None) -> str:
     lines: list[str] = []
     s = assessment.settings
+    manual = assessment.manual_meeting
+    if manual is not None:
+        lines.append(f"meeting mode: {manual.describe(time.time() if now is None else now)} — speech is set aside as missed")
     if assessment.mode == MODE_DISABLED:
-        lines.append("sound yield is OFF; speech would play now")
+        lines.append("sound yield is OFF; " + ("speech is set aside (meeting mode)" if manual is not None else "speech would play now"))
         return "\n".join(lines)
     if assessment.mode == MODE_UNAVAILABLE:
-        lines.append(f"no audio probe available ({assessment.note}); speech would play now")
+        lines.append(f"no audio probe available ({assessment.note}); " + ("speech is set aside (meeting mode)" if manual is not None else "speech would play now"))
         return "\n".join(lines)
-    playing = assessment.blockers + assessment.excepted + assessment.others + assessment.own
-    if not playing:
+    playing = (
+        assessment.meeting + assessment.mic + assessment.blockers + assessment.excepted + assessment.others + assessment.own
+    )
+    if not playing and manual is None:
         lines.append("nothing else is playing sound; speech would play now")
     else:
+        for p in assessment.meeting:
+            lines.append(f"in a meeting: {p.label()} holds the microphone — speech is set aside as missed")
+        for p in assessment.mic:
+            lines.append(f"microphone in use: {p.label()} — not a meeting app, does not hold")
         for p in assessment.blockers:
             lines.append(f"playing: {p.label()} — holds speech")
         for p in assessment.excepted:
@@ -884,7 +1163,9 @@ def format_assessment(assessment: Assessment) -> str:
             lines.append(f"playing: {p.label()} — not on the players list, does not hold")
         for p in assessment.own:
             lines.append(f"playing: {p.label()} — auto-speech's own, does not hold")
-        if assessment.hold:
+        if assessment.in_meeting:
+            lines.append("speech would be SET ASIDE at once (a meeting; auto-speech missed lists it; one summary line follows the meeting)")
+        elif assessment.hold:
             lines.append(f"speech would HOLD (up to {s.max_wait_seconds:g} s, then set aside as missed)")
         else:
             lines.append("speech would play now")
@@ -901,7 +1182,9 @@ def format_assessment(assessment: Assessment) -> str:
 ACTIONS = (
     "status", "on", "off", "add", "remove", "clear", "check",
     "hold-for", "player-add", "player-remove", "player-reset",
+    "meeting",
 )
+MEETING_WORDS = ("status", "on", "off", "for")
 
 
 @dataclass(frozen=True)
@@ -910,12 +1193,40 @@ class ActionResult:
     text: str
 
 
+def run_meeting_action(words: Iterable[str], *, flag: MeetingFlag) -> ActionResult:
+    """`yield meeting [status | on | off | for <duration>]` (the MCP tool:
+    action "meeting", the words in `apps`). `on` is 60 minutes; `for 45m`,
+    `for 2h`, `for 1h30m` up to 8 h; past the end the mode is off by itself."""
+    words = [str(w).strip().lower() for w in words if str(w).strip()]
+    verb = words[0] if words else "status"
+    if verb == "status":
+        if len(words) > 1:
+            return ActionResult(False, "yield meeting status takes no other word")
+        return ActionResult(True, flag.describe())
+    if verb == "off":
+        was_on = flag.clear()
+        return ActionResult(True, ("meeting mode: off (was on)" if was_on else "meeting mode: off (it was not on)"))
+    if verb == "on" and len(words) == 1:
+        state = flag.set(DEFAULT_MEETING_MINUTES, note="yield meeting on")
+        return ActionResult(True, f"meeting mode: {state.describe(flag.now())}; speech is set aside as missed until then")
+    if verb in ("on", "for") or words[0][0].isdigit():
+        rest = words[1:] if verb in ("on", "for") else words
+        try:
+            minutes = parse_meeting_minutes(rest)
+        except ValueError as exc:
+            return ActionResult(False, f"yield meeting: {exc}")
+        state = flag.set(minutes, note=f"yield meeting for {' '.join(rest)}")
+        return ActionResult(True, f"meeting mode: {state.describe(flag.now())}; speech is set aside as missed until then")
+    return ActionResult(False, f"yield meeting: say {' | '.join(MEETING_WORDS)} <duration>, not {verb!r}")
+
+
 def run_action(
     action: str | None,
     apps: Iterable[str] = (),
     *,
     store: SoundYieldStore | None = None,
     gate: SoundYieldGate | None = None,
+    meeting_flag: MeetingFlag | None = None,
 ) -> ActionResult:
     """One verb for the CLI (`auto-speech yield <action> [apps…]`) and the
     MCP tool (`sound_yield(action, apps)`), so both say the same thing."""
@@ -924,8 +1235,12 @@ def run_action(
     apps = [str(a).strip() for a in apps if str(a).strip()]
     if action not in ACTIONS:
         return ActionResult(False, f"yield: unknown action {action!r} (expected {' | '.join(ACTIONS)})")
+    if action == "meeting":
+        flag = meeting_flag or (gate.meeting_flag if gate is not None else MeetingFlag())
+        return run_meeting_action(apps, flag=flag)
     if action == "status":
-        return ActionResult(True, format_settings(store.load()))
+        flag = meeting_flag or (gate.meeting_flag if gate is not None else MeetingFlag())
+        return ActionResult(True, format_settings(store.load()) + "\n" + flag.describe())
     if action in ("on", "off"):
         settings = store.set_enabled(action == "on")
         return ActionResult(True, format_settings(settings))
@@ -964,7 +1279,7 @@ def run_action(
         settings = store.reset_players()
         return ActionResult(True, "players reset to the defaults\n" + format_settings(settings))
     # check
-    gate = gate or SoundYieldGate(store=store)
+    gate = gate or SoundYieldGate(store=store, meeting_flag=meeting_flag)
     return ActionResult(True, format_assessment(gate.assess()))
 
 
