@@ -21,6 +21,7 @@ import json
 import os
 import re
 import queue
+import shutil
 import signal
 import subprocess
 import sys
@@ -67,6 +68,14 @@ from sound_yield import ABORTED, DEFAULT_MAX_WAIT_SECONDS, REASON_MEETING as HOL
 from priority_arbiter import Priority, PriorityArbiter, QueueItem, QueueProxyFacade
 from speaker import Announcer, Plan
 from unix_ipc_server import _DaemonSocketServer, control_payload
+from speech_priority import (
+    DEFAULT_LOAD_SCALE_CAP,
+    DEFAULT_RETRY_LOAD_PER_CORE,
+    DEFAULT_RETRY_WAIT_SECONDS,
+    LoadWatch,
+    raise_own_priority,
+    set_thread_qos_user_interactive,
+)
 from tts_executor import SynthesisTimeout, TTSExecutor
 from resilient_synthesizer import ResilientSynthesizer
 from tts_engine import TTSEngine
@@ -81,6 +90,8 @@ DEPTH_FILE = state_path("auto-speech-narration-depth")
 # A queue that is non-empty while this stands still is a stalled narrator.
 PROGRESS_FILE = state_path("auto-speech-narration-progress")
 SYNTHESIS_TIMEOUT_FLOOR_SECONDS = 30.0
+DEFAULT_TIMEOUT_RETRIES = 3          # ADR-019: a timed-out line is queued again this many times
+RETRY_DIR = state_path("auto-speech-retry")   # the WAV of a cut-off line, kept for its replay
 WATERMARK_FILE = state_path("auto-speech-narrator-daemon.watermark")
 DEFAULT_SOCKET_PATH = state_path("auto-speech-daemon.sock")
 SOCKET_FILE = Path(os.environ.get("AUTO_SPEECH_DAEMON_SOCK", str(DEFAULT_SOCKET_PATH)))
@@ -348,6 +359,10 @@ class NarratorService:
         signal.signal(signal.SIGTERM, self._on_signal)
         signal.signal(signal.SIGINT, self._on_signal)
         _log(f"started pid={os.getpid()} provider={self._config['provider']}")
+        try:
+            _log(f"priority: {raise_own_priority().describe()}")
+        except Exception as exc:  # noqa: BLE001 — never let the boost stop the daemon
+            _log(f"priority: not raised ({exc!r})")
         self._update_depth(0)
         _sweep_stale_session_markers()
 
@@ -1003,9 +1018,140 @@ class NarratorService:
         except OSError:
             pass
 
+    # -- speech under load (ADR-019) ------------------------------------------
+
+    def _cfg(self, key: str, default: float) -> float:
+        cfg = getattr(self, "_config", None)
+        if not isinstance(cfg, dict):
+            return float(default)
+        try:
+            return float(cfg.get(key, default))
+        except (TypeError, ValueError):
+            return float(default)
+
+    @property
+    def load_watch(self) -> LoadWatch:
+        watch = getattr(self, "_load_watch", None)
+        if watch is None:
+            watch = LoadWatch()
+            self._load_watch = watch
+        return watch
+
+    def _load_scale(self) -> float:
+        """How much a budget stretches under load: the load per core, capped
+        by load_timeout_scale_cap (default 4), never under 1."""
+        return self.load_watch.scale(self._cfg("load_timeout_scale_cap", DEFAULT_LOAD_SCALE_CAP))
+
+    def _await_load(self, item: QueueItem) -> bool:
+        """A retried line waits for the load per core to fall under
+        retry_load_per_core (up to retry_wait_seconds), then goes ahead.
+        True: play it now. False: an interrupt or a preemption came first;
+        the line is back on the queue, unchanged, for the next pass."""
+        threshold = self._cfg("retry_load_per_core", DEFAULT_RETRY_LOAD_PER_CORE)
+        deadline = self._cfg("retry_wait_seconds", DEFAULT_RETRY_WAIT_SECONDS)
+
+        def should_stop() -> bool:
+            return bool(getattr(self, "_interrupted", False) or getattr(self, "_preempted", False))
+
+        self._progress("waiting for load", expect=deadline)
+        outcome = self.load_watch.wait_until_below(threshold, deadline_seconds=deadline, should_stop=should_stop)
+        load = self.load_watch.load_per_core()
+        name = (item.line_text or str(item.payload))[:50]
+        if outcome == "stopped":
+            _log(f"retry {item.retries} of {name!r} waits again: interrupted or preempted while the load was {load:.1f}/core")
+            try:
+                self._tts_queue.put(item)
+            except Exception as exc:  # noqa: BLE001
+                _log(f"retry requeue error: {exc!r}")
+            return False
+        _log(f"retry {item.retries} of {name!r} goes ahead: load {load:.1f}/core ({outcome})")
+        return True
+
+    def _retry(self, text: str, item: Optional[QueueItem], *, reason: str, wav: Optional[Path] = None,
+               held: Optional[MissedLine] = None) -> bool:
+        """Queue a timed-out line again, whole (ADR-019): the words when its
+        synthesis timed out, its finished WAV when its playback stalled, so a
+        cut-off line replays from the start without a second synthesis.
+        False when the line has used its retries (timeout_retries, default
+        3) or came without an item: the caller sets it aside."""
+        if item is None:
+            return False
+        limit = int(self._cfg("timeout_retries", DEFAULT_TIMEOUT_RETRIES))
+        if item.retries >= limit:
+            _log(f"retries spent ({item.retries} of {limit}) for {text[:50]!r}: {reason}")
+            return False
+        payload: Any = text
+        if wav is not None:
+            payload = str(self._keep_retry_wav(wav))
+        again = QueueItem(
+            priority=item.priority,
+            payload=payload,
+            source_hash=item.source_hash,
+            session_id=item.session_id,
+            voice_id=item.voice_id,
+            speed=item.speed,
+            enqueued_at=item.enqueued_at,
+            request_id=item.request_id,
+            missed_id=(held.id if held is not None else item.missed_id),
+            hold=item.hold,
+            retries=item.retries + 1,
+            line_text=text,
+        )
+        try:
+            self._tts_queue.put(again)
+        except Exception as exc:  # noqa: BLE001
+            _log(f"retry queue error: {exc!r}")
+            return False
+        _log(f"retry {again.retries} of {limit} queued for {text[:50]!r} ({reason}); it waits for the load to fall")
+        return True
+
+    def _keep_retry_wav(self, wav: Path) -> Path:
+        """The finished WAV of a cut-off line, copied under RETRY_DIR so the
+        synthesis temp file can go; a WAV already there is reused."""
+        wav = Path(wav)
+        try:
+            if wav.parent == RETRY_DIR:
+                return wav
+            RETRY_DIR.mkdir(parents=True, exist_ok=True)
+            kept = RETRY_DIR / f"{new_id()}.wav"
+            shutil.copyfile(wav, kept)
+            return kept
+        except OSError as exc:
+            _log(f"retry wav not kept ({exc!r}); the line is synthesized again")
+            return wav
+
+    def _drop_retry_wav(self, path: Path, item: Any) -> None:
+        """A retry WAV is removed once its item is done with it: played, or
+        set aside for good. A WAV queued again for one more retry stays."""
+        try:
+            if Path(path).parent != RETRY_DIR:
+                return
+            still_queued = any(
+                isinstance(q, QueueItem) and str(q.payload) == str(path)
+                for q in self._queued_items()
+            )
+            if not still_queued:
+                Path(path).unlink(missing_ok=True)
+        except Exception:  # noqa: BLE001
+            pass
+
+    def _queued_items(self) -> list[Any]:
+        arbiter = getattr(self, "_priority_arbiter", None)
+        items: list[Any] = []
+        if arbiter is not None:
+            for band in ("_p1", "_p2", "_p3", "_p4"):
+                items.extend(list(getattr(arbiter, band, ())))
+            return items
+        q = getattr(self, "_tts_queue", None)
+        inner = getattr(q, "queue", None)
+        if inner is not None:
+            items.extend(list(inner))
+        return items
+
     def _synthesis_timeout(self, text: str, profile: Optional[VoiceProfile]) -> Optional[float]:
         """The budget for one synthesis: the line's spoken length times
-        synthesis_timeout_factor, never under the floor; None when off."""
+        synthesis_timeout_factor, never under the floor, stretched by the
+        load scale (ADR-019); None when off."""
         factor = float(self._config.get("synthesis_timeout_factor", 3.0)) if isinstance(getattr(self, "_config", None), dict) else 3.0
         if factor <= 0:
             return None
@@ -1016,7 +1162,7 @@ class NarratorService:
         if cps <= 0:
             cps = FALLBACK_CHARS_PER_SEC
         spoken = len(text) / cps
-        return max(SYNTHESIS_TIMEOUT_FLOOR_SECONDS, spoken * factor)
+        return max(SYNTHESIS_TIMEOUT_FLOOR_SECONDS, spoken * factor) * self._load_scale()
 
     def _submit_synthesis(self, synth: Any, text: str, profile: Any, out: Path, budget: Optional[float]) -> bool:
         """Run one synthesis on the executor, under its budget when the
@@ -1034,15 +1180,18 @@ class NarratorService:
         return submit(synth.synthesize_one, text, profile, out)
 
     def _play_timeout(self, path: Path) -> Optional[float]:
-        """The budget for one play: the clip's length plus
-        play_timeout_margin_seconds; None when off or the length is unknown."""
+        """The wall-clock budget for one play, used by the sink only while
+        mpv's position cannot be read (ADR-019; a clip still advancing is
+        never cut off): twice the clip's length plus
+        play_timeout_margin_seconds, stretched by the load scale; None when
+        off or the length is unknown."""
         margin = float(self._config.get("play_timeout_margin_seconds", 15.0)) if isinstance(getattr(self, "_config", None), dict) else 15.0
         if margin <= 0:
             return None
         duration = _wav_duration_seconds(path)
         if duration <= 0:
             return None
-        return duration + margin
+        return (duration * 2.0 + margin) * self._load_scale()
 
     def _get_summarizer(self) -> Summarizer:
         lock = getattr(self, "_summarizer_lock", None)
@@ -1086,7 +1235,7 @@ class NarratorService:
         self._tts_initialized = True
 
     def _tts_worker(self) -> None:
-        _log("tts_worker thread started")
+        _log("tts_worker thread started" + (" (QoS user-interactive)" if set_thread_qos_user_interactive() else ""))
         self._ensure_tts_initialized()
         while True:
             state_lock = getattr(self, "_state_lock", None)
@@ -1111,6 +1260,10 @@ class NarratorService:
                 item_p = phase.priority
                 item_obj = phase
                 phase = phase.payload
+
+            if isinstance(item_obj, QueueItem) and item_obj.retries > 0:
+                if not self._await_load(item_obj):
+                    continue   # put back for later: an interrupt or a preemption came first
 
             if state_lock:
                 with state_lock:
@@ -1142,10 +1295,12 @@ class NarratorService:
                             self._play_cached(
                                 Path(phase),
                                 item_obj if isinstance(item_obj, QueueItem) else None,
+                                text=getattr(item_obj, "line_text", "") or "",
                             )
                         except Exception as exc:  # noqa: BLE001
                             _log(f"play_cache error: {exc!r}")
                         finally:
+                            self._drop_retry_wav(Path(phase), item_obj)
                             if state_lock:
                                 with state_lock:
                                     if self._engine_state == "PLAYING":
@@ -1418,9 +1573,13 @@ class NarratorService:
         try:
             self._sink_play(path, hold=hold, already_waited=age, on_hold=on_hold, timeout=budget)
         except PlaybackError as exc:
-            if "timed out" not in str(exc):
+            if "timed out" not in str(exc) and "stalled" not in str(exc):
                 raise
-            # mpv was killed by the sink; the line is set aside and the worker moves on.
+            # mpv was killed by the sink. The whole line is queued again
+            # (ADR-019); only past its retries is it set aside.
+            if self._retry(text, item, reason=str(exc), wav=Path(path), held=held.get("line")):
+                _log(f"playback cut off ({exc}); the whole line is queued again: {name!r}")
+                return False
             self._set_aside(text, item, reason=REASON_TIMEOUT, waited=age, existing=held.get("line"))
             _log(f"missed: {exc}; playback abandoned, set aside: {name!r}")
             return False
@@ -1646,7 +1805,11 @@ class NarratorService:
                     try:
                         has_audio = self._submit_synthesis(synth, spoken_line, profile, temp_wav, budget)
                     except SynthesisTimeout as exc:
-                        # The line is set aside for him to replay; the worker moves on.
+                        # Queued again to synthesize once the load falls (ADR-019);
+                        # set aside for him to replay only past its retries.
+                        if self._retry(line, item, reason=str(exc)):
+                            _log(f"synthesis timed out ({exc}); the line is queued again: {line[:50]!r}")
+                            return
                         self._set_aside(line, item, reason=REASON_TIMEOUT)
                         _log(f"missed: {exc}; synthesis abandoned, set aside: {line[:50]!r}")
                         return

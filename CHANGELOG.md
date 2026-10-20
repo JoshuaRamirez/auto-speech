@@ -10,6 +10,18 @@ The Chrome extension under `chrome-extension/` is versioned independently
 ## [Unreleased]
 
 ### Added
+- **Speech holds up under load (ADR-019).** His 2026-10-20 14:02, after a
+  load of 272 on 16 cores timed five lines out and cut one off: the daemon
+  clears any background clamp, puts its speech threads at user-interactive
+  QoS and runs `say` and mpv under `taskpolicy -t 0 -l 0`; a niced start
+  goes through `launchctl submit` so the daemon runs at nice 0. A play ends
+  only on a stall (`play_stall_seconds`, mpv's position read over IPC),
+  never on the wall clock while the clip advances; budgets stretch with the
+  load per core (`load_timeout_scale_cap`); a timed-out line is queued
+  again whole, its WAV kept for a cut-off play, after a wait for the load
+  to fall (`timeout_retries`, `retry_load_per_core`, `retry_wait_seconds`),
+  and only past its retries is it set aside. `tests/test_speech_under_load.py`
+  (19 cases, one a short niced load test with the real `say` and mpv, silent).
 - **No speech during a meeting (ADR-018).** His 2026-10-20 12:24: "if I'm
   in a meeting, I don't want you to talk." The sound-yield gate has a second
   blocker kind, *meeting*: a process on the `meeting_apps` list (Teams, Zoom,

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import sys
 import tempfile
+import os
 import unittest
 import wave
 from pathlib import Path
@@ -23,6 +24,13 @@ from voice_profile import VoiceProfile  # noqa: E402
 
 
 class TestAppleSayEngine(unittest.TestCase):
+    def setUp(self) -> None:
+        # The argv assertions below read the bare `say` command: the taskpolicy
+        # wrap (ADR-019) is off for them; test_speech_under_load covers it.
+        patcher = mock.patch.dict(os.environ, {"AUTO_SPEECH_QOS_BOOST": "0"})
+        patcher.start()
+        self.addCleanup(patcher.stop)
+
     """Test suite for AppleSayEngine voice resolution, rate calibration, and synthesis."""
 
     def test_voice_discovery_prefers_ava_premium(self) -> None:

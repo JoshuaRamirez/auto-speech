@@ -60,6 +60,22 @@ max_queue_depth = 32
 synthesis_timeout_factor = 3.0
 play_timeout_margin_seconds = 15.0
 
+# Speech under load (ADR-019, 2026-10-20: a load of 272 on 16 cores timed five
+# lines out and cut one off mid-sentence). A play is never cut off while the
+# clip is still advancing: the sink reads mpv's position and ends a play only
+# after play_stall_seconds with no progress (0 turns the stall watch off; the
+# wall-clock budget above then applies). Synthesis and wall-clock budgets grow
+# with the load per core, up to load_timeout_scale_cap times (0: no growth).
+# A line that still times out is queued again up to timeout_retries times;
+# each retry first waits (up to retry_wait_seconds) for the load per core to
+# fall under retry_load_per_core, then plays the whole line. Only after the
+# last retry is it set aside on the missed list.
+play_stall_seconds = 15.0
+load_timeout_scale_cap = 4.0
+timeout_retries = 3
+retry_load_per_core = 2.0
+retry_wait_seconds = 180.0
+
 # Optional: override the Ollama API host. Only used when provider="ollama".
 # Defaults to AUTO_SPEECH_OLLAMA_HOST env var, then http://127.0.0.1:11434.
 # ollama_host = "http://127.0.0.1:11434"

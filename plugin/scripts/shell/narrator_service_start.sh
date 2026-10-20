@@ -41,6 +41,26 @@ if [[ -f "$PID_FILE" ]]; then
     fi
 fi
 
+# Speech under load (ADR-019): a daemon inherits its spawner's nice value and
+# cannot lower it. When this script runs niced (a desk's background command),
+# the daemon is started through launchd instead, which runs it at nice 0.
+NICE_NOW="$(python3 -c 'import os; print(os.nice(0))' 2>/dev/null || echo 0)"
+LAUNCHD_LABEL="${AUTO_SPEECH_LAUNCHD_LABEL:-dev.auto-speech.narrator}"
+if [[ "${AUTO_SPEECH_START_VIA_LAUNCHD:-auto}" != "never" && "$NICE_NOW" -gt 0 ]] && command -v launchctl >/dev/null 2>&1; then
+    launchctl remove "$LAUNCHD_LABEL" >/dev/null 2>&1 || true
+    if launchctl submit -l "$LAUNCHD_LABEL" -o "$OUT_FILE" -e "$OUT_FILE" -- "$VENV/bin/python" "$SERVICE" >/dev/null 2>&1; then
+        echo "narrator daemon submitted to launchd as $LAUNCHD_LABEL (this shell is niced $NICE_NOW; launchd starts it at nice 0)"
+        for _ in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15; do
+            if [[ -f "$PID_FILE" ]] && narrator_pid_is_ours "$(cat "$PID_FILE" 2>/dev/null || true)"; then
+                echo "narrator daemon started (pid=$(cat "$PID_FILE"))"
+                exit 0
+            fi
+            sleep 0.2
+        done
+        echo "narrator daemon: launchd start gave no pid file in 3 s; falling back to a direct start" >&2
+    fi
+fi
+
 python3 - "$VENV/bin/python" "$SERVICE" "$OUT_FILE" <<'PY' &
 import os, sys
 py, service, log = sys.argv[1], sys.argv[2], sys.argv[3]
