@@ -11,6 +11,10 @@ from pathlib import Path
 SRC = Path(__file__).resolve().parents[1] / "plugin" / "scripts" / "python"
 sys.path.insert(0, str(SRC))
 
+from quiet_audio import ensure_quiet, real_audio_allowed  # noqa: E402
+
+ensure_quiet()  # the suite never plays sound unless AUTO_SPEECH_TEST_REAL_AUDIO=1
+
 from audio_transcript import AudioTranscript
 from chunk_planner import ChunkPlanner
 from playback_consumer import AfplayLauncher, PlaybackConsumer
@@ -37,7 +41,12 @@ def main() -> int:
 
     tmpdir = Path(tempfile.mkdtemp(prefix="auto-speech-test-play-"))
 
-    listen = "--listen" in sys.argv or os.environ.get("AUTO_SPEECH_TEST_LISTEN") == "1"
+    # Listening is real audio: it needs the opt-in AUTO_SPEECH_TEST_REAL_AUDIO=1 as
+    # well as --listen (or AUTO_SPEECH_TEST_LISTEN=1); otherwise the launcher is silent.
+    wants_listen = "--listen" in sys.argv or os.environ.get("AUTO_SPEECH_TEST_LISTEN") == "1"
+    listen = wants_listen and real_audio_allowed()
+    if wants_listen and not listen:
+        print("[test] --listen ignored: set AUTO_SPEECH_TEST_REAL_AUDIO=1 to hear it")
     launcher = AfplayLauncher() if listen else SilentLauncher()
 
     # Generate WAVs ahead of time so we isolate consumer behavior.

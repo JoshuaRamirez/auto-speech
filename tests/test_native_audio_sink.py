@@ -5,6 +5,7 @@ from __future__ import annotations
 import shutil
 import signal
 import subprocess
+import os
 import sys
 import tempfile
 import threading
@@ -16,6 +17,10 @@ from unittest import mock
 
 SRC = Path(__file__).resolve().parents[1] / "plugin" / "scripts" / "python"
 sys.path.insert(0, str(SRC))
+
+from quiet_audio import ensure_quiet  # noqa: E402
+
+ensure_quiet()  # the suite never plays sound unless AUTO_SPEECH_TEST_REAL_AUDIO=1
 
 import native_audio_sink  # noqa: E402
 
@@ -69,6 +74,7 @@ class TestNativeAudioSink(unittest.TestCase):
         with (
             mock.patch("shutil.which", return_value="/opt/homebrew/bin/mpv"),
             mock.patch("subprocess.Popen", return_value=mock_proc) as mock_popen,
+            mock.patch.dict(os.environ, {"AUTO_SPEECH_MPV_AO": ""}),  # mpv's default output: the argv without --ao
         ):
             try:
                 sink = NativeAudioSink()
