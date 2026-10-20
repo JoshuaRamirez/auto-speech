@@ -152,3 +152,8 @@ module that owns it. Release-by-release history is in
   `--hermetic` (stdlib-only subset for CI) and `--web` lanes. The sound-yield
   gate and the sink hold are tested against a fake audio layer; tests that
   drive a real sink against a mocked mpv disable the gate.
+- **Silent by default.** No test plays sound: `run_all.sh` exports
+  `AUTO_SPEECH_MPV_AO=null` (mpv's null output) and every test that can
+  reach mpv calls `tests/quiet_audio.ensure_quiet()` at import, so a bare
+  `pytest` or `python tests/test_x.py` is silent too. Real audio in a test
+  needs the opt-in `AUTO_SPEECH_TEST_REAL_AUDIO=1`.

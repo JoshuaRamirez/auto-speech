@@ -23,6 +23,10 @@ from pathlib import Path
 SRC = Path(__file__).resolve().parents[1] / "plugin" / "scripts" / "python"
 sys.path.insert(0, str(SRC))
 
+from quiet_audio import ensure_quiet  # noqa: E402
+
+ensure_quiet()  # the suite never plays sound unless AUTO_SPEECH_TEST_REAL_AUDIO=1
+
 _TMP = tempfile.mkdtemp(prefix="auto-speech-hang-")
 os.environ["AUTO_SPEECH_TMP_ROOT"] = _TMP
 os.environ["AUTO_SPEECH_MISSED_FILE"] = str(Path(_TMP) / "missed.json")

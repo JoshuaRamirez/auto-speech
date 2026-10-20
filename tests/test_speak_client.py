@@ -23,6 +23,10 @@ SRC = Path(__file__).resolve().parents[1] / "plugin" / "scripts" / "python"
 if str(SRC) not in sys.path:
     sys.path.insert(0, str(SRC))
 
+from quiet_audio import ensure_quiet  # noqa: E402
+
+ensure_quiet()  # the suite never plays sound unless AUTO_SPEECH_TEST_REAL_AUDIO=1
+
 # Isolation: never touch the live service's files when run standalone; the
 # runner (tests/run_all.sh) sets AUTO_SPEECH_TMP_ROOT itself.
 os.environ.setdefault("AUTO_SPEECH_TMP_ROOT", tempfile.mkdtemp(prefix="auto-speech-tests-"))
