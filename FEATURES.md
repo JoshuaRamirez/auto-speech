@@ -147,13 +147,22 @@ module that owns it. Release-by-release history is in
   disk, logs, daemon, queue, progress (stalled: a non-empty queue with no
   step past its budget), scope, MCP registration, config validation
   (autoplay, narrator, sound-yield), venv-vs-lock drift.
-- **Playback cannot hang**: every synthesis runs under a budget sized to
-  the line (`synthesis_timeout_factor` × its spoken length, floor 30 s) and
-  every play under the clip's length plus `play_timeout_margin_seconds`; a
-  line past its budget is set aside on the missed list as "timed out" and
-  the worker moves on, with a stuck synthesis worker abandoned for a fresh
-  one (`tts_executor.py`). The worker stamps each step to
-  `/tmp/auto-speech-narration-progress` for the doctor.
+- **Playback cannot hang, and is never cut off** (ADR-019): every synthesis
+  runs under a budget sized to the line (`synthesis_timeout_factor` × its
+  spoken length, floor 30 s), stretched by the load per core up to
+  `load_timeout_scale_cap`; a play ends only after `play_stall_seconds` with
+  no progress (mpv's position read over IPC), never on the wall clock while
+  the clip advances. A line past its budget is queued again whole (its WAV
+  kept for a cut-off play) after a wait for the load to fall
+  (`retry_load_per_core`, `retry_wait_seconds`), up to `timeout_retries`;
+  only then is it set aside on the missed list as "timed out". A stuck
+  synthesis worker is abandoned for a fresh one (`tts_executor.py`). The
+  worker stamps each step to `/tmp/auto-speech-narration-progress`.
+- **Speech has priority under load** (ADR-019, `speech_priority.py`): the
+  daemon clears any background clamp, runs its speech threads at
+  user-interactive QoS and `say` and mpv under `taskpolicy -t 0 -l 0`
+  (`AUTO_SPEECH_QOS_BOOST=0` turns that off); a niced start goes through
+  `launchctl submit` so the daemon runs at nice 0.
 - **Self-update**: SessionStart bootstrap hook runs `uv sync` when
   `uv.lock` changes (`self_update.py`).
 - **Idempotent installers** for deps, plugin commands, hooks, MCP

@@ -31,6 +31,7 @@ _TMP = tempfile.mkdtemp(prefix="auto-speech-hang-")
 os.environ["AUTO_SPEECH_TMP_ROOT"] = _TMP
 os.environ["AUTO_SPEECH_MISSED_FILE"] = str(Path(_TMP) / "missed.json")
 
+from speech_priority import LoadWatch  # noqa: E402
 import narrator_service  # noqa: E402
 from missed_speech import REASON_TIMEOUT, MissedList  # noqa: E402
 from native_audio_sink import PlaybackError  # noqa: E402
@@ -102,6 +103,7 @@ def _service(sink, synth, config=None):
     svc._tts_executor = TTSExecutor(engine=object(), synth=synth)
     svc._tts_initialized = True
     svc._missed = MissedList(Path(_TMP) / "missed.json")
+    svc._load_watch = LoadWatch(cores=1, load_fn=lambda: 0.0, clock=lambda: 0.0, sleep=lambda t: None)   # a quiet machine: no ADR-019 stretch
     return svc
 
 
@@ -148,10 +150,10 @@ def test_synthesis_budget_is_sized_to_the_line_with_a_floor() -> None:
     assert svc._synthesis_timeout(long_line, PROFILE) is None
 
 
-def test_play_budget_is_the_clip_length_plus_the_margin() -> None:
+def test_play_budget_is_twice_the_clip_length_plus_the_margin() -> None:
     svc = _service(_RecordingSink(), _QuickSynth())
     clip = _silent_wav(2.0)
-    assert abs(svc._play_timeout(clip) - 17.0) < 0.05
+    assert abs(svc._play_timeout(clip) - 19.0) < 0.05   # twice the clip plus the margin (ADR-019): a wall clock for a play whose position cannot be read
     svc._config["play_timeout_margin_seconds"] = 0
     assert svc._play_timeout(clip) is None
     assert svc._play_timeout(Path(_TMP) / "missing.wav") is None
@@ -190,7 +192,7 @@ def test_play_budget_reaches_the_sink_and_a_timeout_is_set_aside() -> None:
     svc._speak("a short line")
     assert len(sink.played) == 1
     _path, budget = sink.played[0]
-    assert budget is not None and abs(budget - 15.5) < 0.1, budget
+    assert budget is not None and abs(budget - 16.0) < 0.1, budget   # 2 × 0.5 s + 15 (ADR-019)
 
     sink = _RecordingSink(raise_timeout=True)
     svc = _service(sink, _QuickSynth(0.5))
@@ -235,7 +237,7 @@ def main() -> int:
         test_executor_timeout_abandons_the_stuck_worker_and_serves_the_next_call,
         test_executor_without_timeout_waits_as_before,
         test_synthesis_budget_is_sized_to_the_line_with_a_floor,
-        test_play_budget_is_the_clip_length_plus_the_margin,
+        test_play_budget_is_twice_the_clip_length_plus_the_margin,
         test_stuck_synthesis_is_set_aside_and_the_worker_moves_on,
         test_play_budget_reaches_the_sink_and_a_timeout_is_set_aside,
         test_a_sink_without_the_budget_keyword_still_plays,

@@ -42,6 +42,8 @@ class QueueItem:
     request_id: str = ""
     missed_id: str = ""  # set when this is a replay of a line on the missed list
     hold: bool = True  # False: play over other apps' sound (an explicit replay)
+    retries: int = 0  # how many times this line timed out and was queued again (ADR-019)
+    line_text: str = ""  # the words of a WAV payload (a cut-off line replayed whole)
 
     def __post_init__(self) -> None:
         if self.enqueued_at is None:
