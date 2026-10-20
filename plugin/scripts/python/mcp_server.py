@@ -290,8 +290,14 @@ SOUND_YIELD_TOOL = {
         "'player-add'/'player-remove'/'player-reset' edit the players list; "
         "'add'/'remove'/'clear' edit the exceptions, apps whose sound never "
         "holds (bundle ids like com.apple.Music or names like Music); "
-        "'check' says who is playing right now and whether speech would hold. "
-        "Same verbs as `auto-speech yield` and the [sound_yield] config."
+        "'check' says who is playing right now, who holds the microphone, and "
+        "whether speech would hold. A meeting app holding the microphone "
+        "(Teams, Zoom, FaceTime, a browser on Meet, Slack, Webex, Discord) is "
+        "a meeting: speech is set aside as missed at once, and one line after "
+        "the meeting says how many were missed. 'meeting' with apps=['on'] "
+        "(60 min), ['off'], ['for', '45m'] (8 h at most) or ['status'] is "
+        "his own meeting mode. Same verbs as `auto-speech yield` and the "
+        "[sound_yield] config."
     ),
     "inputSchema": {
         "type": "object",
@@ -299,12 +305,12 @@ SOUND_YIELD_TOOL = {
             "action": {
                 "type": "string",
                 "enum": list(SOUND_YIELD_ACTIONS),
-                "description": "status | on | off | add | remove | clear | check | hold-for | player-add | player-remove | player-reset",
+                "description": "status | on | off | add | remove | clear | check | hold-for | player-add | player-remove | player-reset | meeting",
             },
             "apps": {
                 "type": "array",
                 "items": {"type": "string"},
-                "description": "For add/remove/player-add/player-remove: bundle ids or app names; for hold-for: [\"players\"] or [\"any\"].",
+                "description": "For add/remove/player-add/player-remove: bundle ids or app names; for hold-for: [\"players\"] or [\"any\"]; for meeting: [\"status\"], [\"on\"], [\"off\"] or [\"for\", \"45m\"].",
             },
         },
         "required": ["action"],

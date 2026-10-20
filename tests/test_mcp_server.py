@@ -1312,6 +1312,33 @@ def test_sound_yield_player_verbs_and_hold_for_write_the_shared_config() -> None
     assert res["result"]["isError"] is True
 
 
+def test_sound_yield_meeting_is_his_own_switch_with_the_cli_words() -> None:
+    from sound_yield import MeetingFlag
+
+    srv, store, tmp = _yield_server()
+    flag_path = tmp / "meeting.json"
+    old = os.environ.get("AUTO_SPEECH_MEETING_FILE")
+    os.environ["AUTO_SPEECH_MEETING_FILE"] = str(flag_path)
+    try:
+        res = _call_tool(srv, "sound_yield", {"action": "meeting"})
+        assert res["result"]["content"][0]["text"] == "meeting mode: off"
+        res = _call_tool(srv, "sound_yield", {"action": "meeting", "apps": ["for", "45m"]})
+        text = res["result"]["content"][0]["text"]
+        assert res["result"]["isError"] is False
+        assert "meeting mode: on until" in text and "45 min left" in text
+        assert MeetingFlag(flag_path).read() is not None
+        res = _call_tool(srv, "sound_yield", {"action": "meeting", "apps": ["for", "9h"]})
+        assert res["result"]["isError"] is True
+        res = _call_tool(srv, "sound_yield", {"action": "meeting", "apps": ["off"]})
+        assert res["result"]["content"][0]["text"] == "meeting mode: off (was on)"
+        assert not flag_path.exists()
+    finally:
+        if old is None:
+            os.environ.pop("AUTO_SPEECH_MEETING_FILE", None)
+        else:
+            os.environ["AUTO_SPEECH_MEETING_FILE"] = old
+
+
 def test_sound_yield_check_reports_the_live_assessment() -> None:
     from sound_yield import MODE_PROCESS_LIST, Assessment, AudioProcess, SoundYieldSettings, SoundYieldStore
 
@@ -1489,7 +1516,7 @@ def test_sound_yield_tool_schema() -> None:
     assert schema["required"] == ["action"]
     assert schema["properties"]["action"]["enum"] == [
         "status", "on", "off", "add", "remove", "clear", "check",
-        "hold-for", "player-add", "player-remove", "player-reset",
+        "hold-for", "player-add", "player-remove", "player-reset", "meeting",
     ]
     assert schema["properties"]["apps"]["items"] == {"type": "string"}
     assert schema["additionalProperties"] is False
@@ -1567,6 +1594,7 @@ TESTS = [
     test_sound_yield_on_off_add_remove_clear_write_the_shared_config,
     test_sound_yield_player_verbs_and_hold_for_write_the_shared_config,
         test_sound_yield_check_reports_the_live_assessment,
+        test_sound_yield_meeting_is_his_own_switch_with_the_cli_words,
     test_sound_yield_tool_schema,
     test_missed_requires_a_known_action,
     test_missed_list_is_the_default_and_matches_the_cli_text,

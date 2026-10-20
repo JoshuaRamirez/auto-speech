@@ -9,6 +9,27 @@ The Chrome extension under `chrome-extension/` is versioned independently
 
 ## [Unreleased]
 
+### Added
+- **No speech during a meeting (ADR-018).** His 2026-10-20 12:24: "if I'm
+  in a meeting, I don't want you to talk." The sound-yield gate has a second
+  blocker kind, *meeting*: a process on the `meeting_apps` list (Teams, Zoom,
+  FaceTime, the browsers for Meet, Slack, Webex, Discord) whose Core Audio
+  process object reports input running, read in the same property walk as
+  the output flag (no audio captured, no permission, no prompt), or his own
+  time-boxed `auto-speech yield meeting on` (60 min; `for 45m`, 8 h at most;
+  `off`; `status`), also the MCP tool `sound_yield(action="meeting")` and
+  `/auto-speech-meeting`. A meeting never waits: each line goes to the
+  missed list at once with reason `meeting`, without synthesis, and when the
+  meeting ends the daemon speaks one line, "You missed N lines during the
+  meeting." A process holding the microphone that is not a meeting app (his
+  CrownTalk, the speech daemon) never holds. `[sound_yield]` keys
+  `meeting_hold`, `meeting_apps`, `meeting_summary`; flag file
+  `~/.local/state/auto-speech/meeting.json` (`AUTO_SPEECH_MEETING_FILE`);
+  `yield status` / `yield check` say the meeting state; the missed list
+  counts `meeting` lines. Tests: the gate against a fake probe, table and
+  clock, the daemon's set-aside and summary, the CLI and MCP verbs, all
+  silent.
+
 ### Changed
 - **The test suite never plays sound.** His 2026-10-20 10:40: "turn off the
   speech tests". `NativeAudioSink` takes an mpv audio output (`--ao`) from
