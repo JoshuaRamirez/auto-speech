@@ -22,6 +22,11 @@ from unittest import mock
 
 SRC = Path(__file__).resolve().parents[1] / "plugin" / "scripts" / "python"
 sys.path.insert(0, str(SRC))
+
+from quiet_audio import ensure_quiet  # noqa: E402
+
+ensure_quiet()  # the suite never plays sound unless AUTO_SPEECH_TEST_REAL_AUDIO=1
+
 import tts_engine  # noqa: E402
 import web_server  # noqa: E402
 

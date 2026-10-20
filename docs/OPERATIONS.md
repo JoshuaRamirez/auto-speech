@@ -123,6 +123,13 @@ both, and stops any daemon a test started there, so a test run cannot
 reach the live service. A development checkout that must run its own
 daemon sets the same variable before `narrator_service_start.sh`.
 
+No test plays sound. `tests/run_all.sh` exports `AUTO_SPEECH_MPV_AO=null`, so
+mpv plays to its null output, and every test that can reach mpv sets the same
+at import (`tests/quiet_audio.py`; `tests/conftest.py` for a bare `pytest`).
+The variable is the sink's: a daemon started with `AUTO_SPEECH_MPV_AO=null`
+is silent too, and unset it leaves mpv's default output. A test that must be
+heard runs only with the explicit opt-in `AUTO_SPEECH_TEST_REAL_AUDIO=1`.
+
 ## Muting & scoping
 
 - **One session only:** `/auto-speech-scope solo` makes only the current

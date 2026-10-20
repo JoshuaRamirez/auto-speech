@@ -9,6 +9,22 @@ The Chrome extension under `chrome-extension/` is versioned independently
 
 ## [Unreleased]
 
+### Changed
+- **The test suite never plays sound.** His 2026-10-20 10:40: "turn off the
+  speech tests". `NativeAudioSink` takes an mpv audio output (`--ao`) from
+  `AUTO_SPEECH_MPV_AO` or its new `audio_output` argument; `tests/run_all.sh`
+  exports `AUTO_SPEECH_MPV_AO=null`, and every test that can reach mpv calls
+  `tests/quiet_audio.ensure_quiet()` at import (a `tests/conftest.py` does the
+  same for a bare `pytest`), so no test run opens the speakers. Real audio in
+  a test needs the explicit opt-in `AUTO_SPEECH_TEST_REAL_AUDIO=1`; the
+  consumer test's `--listen` is ignored without it. `tests/test_quiet_tests.py`
+  covers the option, the helper, the runner's export and the wiring.
+- **The MCP server tests read a private HOME.** `tests/test_mcp_server.py`
+  builds servers without `home=`, which read this machine's global mute flag
+  (`~/.claude/auto-speech.disabled`), enrollment and scope; the suite failed
+  at 10:47 on 2026-10-20 while his global mute was on. The test file now sets
+  HOME to a temporary directory at import.
+
 ### Fixed
 - **Playback cannot hang on one line.** On 2026-10-19 the narrator sat in
   one synthesis from 09:37 to 14:49 (the log's last line was that line's

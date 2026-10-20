@@ -30,6 +30,11 @@ SRC = Path(__file__).resolve().parents[1] / "plugin" / "scripts" / "python"
 if str(SRC) not in sys.path:
     sys.path.insert(0, str(SRC))
 
+# Hermetic home: McpServer reads the global mute flag (~/.claude/auto-speech.disabled),
+# the enrollment and the scope under HOME, so a server built without home= must never
+# see this machine's (the suite failed at 10:47 on 2026-10-20 when his global mute was on).
+os.environ["HOME"] = tempfile.mkdtemp(prefix="auto-speech-mcp-home-")
+
 # The caller's Claude Code session must not leak into these tests: the server
 # falls back to CLAUDE_CODE_SESSION_ID / CLAUDE_SESSION_ID when a call names
 # no session, which would turn every "without session" case into a
