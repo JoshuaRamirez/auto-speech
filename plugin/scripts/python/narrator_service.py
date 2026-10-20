@@ -67,6 +67,8 @@ from narrator_summarizer import Summarizer, load_summarizer
 from sound_yield import ABORTED, DEFAULT_MAX_WAIT_SECONDS, REASON_MEETING as HOLD_REASON_MEETING, SoundYieldGate
 from priority_arbiter import Priority, PriorityArbiter, QueueItem, QueueProxyFacade
 from speaker import Announcer, Plan
+from speech_history import SpeechHistory
+from speech_player import PlayerLauncher
 from unix_ipc_server import _DaemonSocketServer, control_payload
 from speech_priority import (
     DEFAULT_LOAD_SCALE_CAP,
@@ -276,6 +278,8 @@ class NarratorService:
         sound_yield_gate: SoundYieldGate | Any | None = None,
         missed: MissedList | None = None,
         speaker: Announcer | None = None,
+        history: SpeechHistory | None = None,
+        player: PlayerLauncher | Any | None = None,
     ) -> None:
         self._config = config if config is not None else load_config()
         self._classifier = PhaseClassifier(silence_seconds=0.5, max_events_per_phase=1)
@@ -316,6 +320,11 @@ class NarratorService:
         self._missed: MissedList = missed if missed is not None else MissedList()
         # Names the desk only when the speaker changes (ADR-016).
         self._speaker: Announcer = speaker if speaker is not None else Announcer(log=_log)
+        # Every line heard goes into the speech history as a WAV and a
+        # sidecar, the last N kept; the player opens on it when he turns it
+        # on, never while a hold stands (ADR-020).
+        self._history: SpeechHistory = history if history is not None else SpeechHistory()
+        self._player = player if player is not None else PlayerLauncher(holding=self._hold_stands, log=_log)
         self._last_hold_ended_at: Optional[float] = None
         self._sink_takes_hold_kwargs: Optional[bool] = None
         # The meeting watch (ADR-018): the main loop asks the gate every
@@ -1546,7 +1555,7 @@ class NarratorService:
             kwargs["timeout"] = timeout
         play(path, **kwargs)
 
-    def _play_item(self, path: Path, item: Optional[QueueItem], *, text: str) -> bool:
+    def _play_item(self, path: Path, item: Optional[QueueItem], *, text: str, session_id: Optional[str] = None) -> bool:
         """Play through the sink with the missed-list bookkeeping around the
         hold: held → on the list as held; longest wait or interrupted while
         held → stays on the list as missed; played → off the list. Returns
@@ -1624,7 +1633,64 @@ class NarratorService:
                     missed.remove(item.missed_id)
             except Exception as exc:  # noqa: BLE001
                 _log(f"missed list write error: {exc!r}")
+        self._heard(path, item, text=text, session_id=session_id)
         return True
+
+    # -- the speech history (ADR-020) ---------------------------------------------
+
+    def _hold_stands(self) -> bool:
+        """True while a meeting or another app's sound holds speech; the
+        player never pops up then. No gate: nothing holds."""
+        gate = getattr(self, "_yield_gate", None)
+        if gate is None:
+            return False
+        return bool(getattr(gate.assess(), "hold", False))
+
+    def _sender_name(self, session_id: Optional[str]) -> Optional[str]:
+        speaker = getattr(self, "_speaker", None)
+        if speaker is None or not session_id:
+            return None
+        try:
+            return speaker.name_for(session_id)
+        except Exception:  # noqa: BLE001
+            return None
+
+    def _heard(self, path: Path, item: Optional[QueueItem], *, text: str, session_id: Optional[str] = None) -> None:
+        """The line was heard: export it to the history, then hand it to the
+        player launcher. Never raises; a failure is logged and speech goes on."""
+        history = getattr(self, "_history", None)
+        if history is None:
+            return
+        sid = session_id or (getattr(item, "session_id", None) if item is not None else None)
+        priority = getattr(item, "priority", None) if item is not None else getattr(self, "_active_priority", None)
+        profile = getattr(self, "_profile", None)
+        voice_id = (getattr(item, "voice_id", None) if item is not None else None) or getattr(profile, "voice_id", "") or ""
+        speed = getattr(item, "speed", None) if item is not None else None
+        if speed is None:
+            speed = getattr(profile, "speed", 1.0) if profile is not None else 1.0
+        try:
+            line = history.export(
+                path,
+                text=text,
+                session_id=sid,
+                sender=self._sender_name(sid),
+                priority=int(priority) if priority is not None else None,
+                voice_id=str(voice_id),
+                speed=float(speed),
+                source_hash=getattr(item, "source_hash", None) if item is not None else None,
+            )
+        except Exception as exc:  # noqa: BLE001
+            _log(f"history export error: {exc!r}")
+            return
+        if line is None:
+            return
+        player = getattr(self, "_player", None)
+        if player is None:
+            return
+        try:
+            player.after_line(line)
+        except Exception as exc:  # noqa: BLE001
+            _log(f"player launch error: {exc!r}")
 
     # -- speaker names: "<desk> here," only when who is talking changes -------
 
@@ -1698,7 +1764,7 @@ class NarratorService:
                 except Exception as exc:  # noqa: BLE001
                     _log(f"speaker clip playback error: {exc!r}")
                     return False
-        heard = self._play_item(path, item, text=text)
+        heard = self._play_item(path, item, text=text, session_id=sid)
         if heard:
             self._speaker_spoken(sid)
         return heard
@@ -1870,7 +1936,7 @@ class NarratorService:
                     self._engine_state = "PLAYING"
 
                 _log(f"playing audio ({play_target.stat().st_size} bytes)...")
-                if self._play_item(play_target, item, text=spoken_line):
+                if self._play_item(play_target, item, text=spoken_line, session_id=sid):
                     self._speaker_spoken(sid)
             else:
                 _log(f"no speakable audio generated for: {line[:50]!r}")

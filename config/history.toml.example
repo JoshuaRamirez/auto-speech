@@ -1,0 +1,23 @@
+# auto-speech speech history: every line played, kept as a WAV and a sidecar.
+#
+# Copy to ~/.config/auto-speech/history.toml and edit, or point
+# AUTO_SPEECH_HISTORY_CONFIG=/path/to/file.toml at a custom one.
+# `auto-speech history …` and the MCP tool `history` write this same file,
+# with the same names. The daemon reads it on every line. Defaults shown.
+# The lines live in ~/.local/state/auto-speech/history/ ($AUTO_SPEECH_HISTORY_DIR).
+
+[history]
+# The switch. true: each line heard is copied into the history with its
+# sidecar (text, time, sender, priority, duration, word timings).
+# false: nothing is exported; what is kept stays.
+enabled = true
+
+# N: only the last `keep` lines are kept; the oldest past it are deleted
+# after each export (and at once when `keep` is lowered). 200 lines is
+# about 190 MB at the measured mean clip (ADR-020).
+keep = 200
+
+# Open the UI Utility's player on each line after it plays. Never during a
+# meeting or while another app's sound holds speech; nothing happens while
+# the utility is not installed.
+player = false

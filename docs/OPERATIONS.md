@@ -78,7 +78,7 @@ sync with it:
 
 ## Configuration & env-var precedence
 
-User config lives in `~/.config/auto-speech/{autoplay,narrator,sound-yield,speaker}.toml`
+User config lives in `~/.config/auto-speech/{autoplay,narrator,sound-yield,speaker,history}.toml`
 (copy from the `*.toml.example` files). A typo never crashes the tool — it
 falls back to defaults — but `/auto-speech-doctor` surfaces it as a WARN.
 
@@ -119,6 +119,20 @@ sound, is one JSON file: `~/.local/state/auto-speech/missed.json`
 the isolated state directory). The daemon writes it; `auto-speech missed`
 reads it, `missed --play` replays through the daemon, `missed --clear`
 empties it under the same file lock.
+
+The speech history (ADR-020) is every line played, as a WAV and a JSON
+sidecar, in `~/.local/state/auto-speech/history/` (`$AUTO_SPEECH_HISTORY_DIR`).
+Its settings are `[history]` in `history.toml` (`$AUTO_SPEECH_HISTORY_CONFIG`):
+`enabled` (true), `keep` (200: the last N lines; the oldest past it are
+deleted after each export), `player` (false: open the UI Utility's player
+after each line, never during a hold, nothing while it is not installed).
+`auto-speech history keep N` and the MCP tool `history(action="keep",
+count=N)` write the same file; the daemon reads it on every line, so no
+restart is needed. `history` lists the newest lines with their WAV paths,
+`history list --json` the sidecars; `history status` says how much is
+kept and why the player would or would not open. Word timings are
+estimated (`word_timings.source = "estimate"`): `say` reports none.
+`tests/run_all.sh` points both variables into its isolated state directory.
 
 ## Runtime state and isolation
 

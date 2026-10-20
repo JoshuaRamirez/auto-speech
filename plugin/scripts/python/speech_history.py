@@ -1,0 +1,545 @@
+"""The speech history: every line auto-speech played, as a WAV and a sidecar.
+
+His 13:38, 2026-10-20 (the Master Desk #m1020-1339-68ee): "Each time the
+Desk speaks, a small player pops up and plays the line's WAV … A history
+button shows everything said before. Only the last N WAVs are kept (N
+configurable), so the disk never fills."
+
+Auto-speech owns the history; the player only shows what it is handed.
+Three parts, each testable on its own:
+
+- HistorySettings / HistoryStore: ~/.config/auto-speech/history.toml
+  ([history] enabled, keep, player). `keep` is N, the same name in the
+  config, the CLI (`auto-speech history keep N`) and the MCP tool
+  (`history(action="keep", count=N)`). Default DEFAULT_KEEP (ADR-020).
+- SpeechHistory: the store on disk. One line is two files under the
+  history dir, `<stamp>-<id>.wav` and `<stamp>-<id>.json` (the sidecar);
+  the sidecar is written last, so a line with no sidecar is not in the
+  history. After each export the oldest lines past `keep` are deleted.
+- estimate_word_timings: `say -o` gives no word timings, so each word's
+  span is estimated from its length and the pause after it, and the
+  sidecar says so (`word_timings.source = "estimate"`).
+
+Only a line that was heard is exported: the daemon calls `export()` after
+the sink played it, so a line the meeting hold or the sound yield set
+aside has nothing exported until it plays. `run_action` is the one verb
+behind `auto-speech history …` and the MCP tool `history`. See
+docs/decisions/ADR-020.
+"""
+
+from __future__ import annotations
+
+import fcntl
+import json
+import os
+import re
+import secrets
+import shutil
+import sys
+import time
+import tomllib
+import wave
+from dataclasses import dataclass, replace
+from datetime import datetime
+from pathlib import Path
+from typing import Any, Callable, Optional
+
+CONFIG_FILE_NAME = "history.toml"
+CONFIG_ENV = "AUTO_SPEECH_HISTORY_CONFIG"
+DIR_ENV = "AUTO_SPEECH_HISTORY_DIR"
+SECTION = "history"
+
+DEFAULT_ENABLED = True
+DEFAULT_KEEP = 200  # ADR-020: about 190 MB at the measured mean clip, the last ~4 h of his busiest day
+DEFAULT_PLAYER = False  # the player opens after a line only when he turns it on
+MIN_KEEP = 1
+
+SIDECAR_VERSION = 1
+TIMING_ESTIMATE = "estimate"
+TIMING_SYNTHESIZER = "synthesizer"
+ESTIMATE_METHOD = "word length in characters, plus a pause after commas and sentence ends, spread over the clip's duration"
+
+ORPHAN_GRACE_SECONDS = 60.0  # a WAV this young without its sidecar may be an export still being written
+
+PRIORITY_NAMES = {1: "user interrupt", 2: "explicit", 3: "autoplay", 4: "narration"}
+
+ACTIONS = ("list", "status", "on", "off", "keep", "player-on", "player-off")
+DEFAULT_LIST_LIMIT = 20
+
+
+def default_config_path() -> Path:
+    override = os.environ.get(CONFIG_ENV)
+    if override:
+        return Path(override)
+    return Path.home() / ".config" / "auto-speech" / CONFIG_FILE_NAME
+
+
+def default_history_dir() -> Path:
+    override = os.environ.get(DIR_ENV)
+    if override:
+        return Path(override)
+    return Path.home() / ".local" / "state" / "auto-speech" / "history"
+
+
+# --------------------------------------------------------------------------
+# Settings file
+# --------------------------------------------------------------------------
+
+
+@dataclass(frozen=True)
+class HistorySettings:
+    enabled: bool = DEFAULT_ENABLED
+    keep: int = DEFAULT_KEEP
+    player: bool = DEFAULT_PLAYER
+    config_path: Optional[str] = None
+    problems: tuple[str, ...] = ()
+
+    @classmethod
+    def from_mapping(cls, section: object, config_path: Optional[str] = None) -> "HistorySettings":
+        problems: list[str] = []
+        if not isinstance(section, dict):
+            section = {}
+            if config_path is not None:
+                problems.append(f"[{SECTION}] is not a table; using defaults")
+
+        enabled = section.get("enabled", DEFAULT_ENABLED)
+        if not isinstance(enabled, bool):
+            problems.append(f"[{SECTION}] enabled should be true or false, got {enabled!r}")
+            enabled = DEFAULT_ENABLED
+
+        keep = section.get("keep", DEFAULT_KEEP)
+        if isinstance(keep, bool) or not isinstance(keep, int) or keep < MIN_KEEP:
+            problems.append(f"[{SECTION}] keep should be a whole number >= {MIN_KEEP}, got {keep!r}")
+            keep = DEFAULT_KEEP
+
+        player = section.get("player", DEFAULT_PLAYER)
+        if not isinstance(player, bool):
+            problems.append(f"[{SECTION}] player should be true or false, got {player!r}")
+            player = DEFAULT_PLAYER
+
+        return cls(
+            enabled=enabled,
+            keep=int(keep),
+            player=player,
+            config_path=config_path,
+            problems=tuple(problems),
+        )
+
+    def to_toml(self) -> str:
+        lines = [
+            "# auto-speech: every line played, kept as a WAV and a sidecar; the last `keep` lines (ADR-020).",
+            f"[{SECTION}]",
+            f"enabled = {'true' if self.enabled else 'false'}",
+            f"keep = {self.keep}",
+            f"player = {'true' if self.player else 'false'}",
+        ]
+        return "\n".join(lines) + "\n"
+
+
+class HistoryStore:
+    """Reads and writes history.toml. Missing file = defaults."""
+
+    def __init__(self, path: Path | str | None = None) -> None:
+        self._path = Path(path) if path is not None else default_config_path()
+
+    @property
+    def path(self) -> Path:
+        return self._path
+
+    def load(self) -> HistorySettings:
+        p = self._path
+        if not p.is_file():
+            return HistorySettings()
+        try:
+            raw = tomllib.loads(p.read_text(encoding="utf-8"))
+        except (OSError, UnicodeDecodeError, tomllib.TOMLDecodeError) as exc:
+            print(f"[history] could not parse {p}: {exc}; using defaults", file=sys.stderr)
+            return HistorySettings(config_path=str(p), problems=(f"{p}: could not parse TOML ({exc})",))
+        section = raw.get(SECTION) if isinstance(raw, dict) else None
+        if section is None:
+            return HistorySettings(config_path=str(p))
+        return HistorySettings.from_mapping(section, config_path=str(p))
+
+    def save(self, settings: HistorySettings) -> HistorySettings:
+        p = self._path
+        p.parent.mkdir(parents=True, exist_ok=True)
+        tmp = p.with_name(p.name + ".tmp")
+        tmp.write_text(settings.to_toml(), encoding="utf-8")
+        os.replace(tmp, p)
+        return replace(settings, config_path=str(p), problems=())
+
+    def set_enabled(self, enabled: bool) -> HistorySettings:
+        return self.save(replace(self.load(), enabled=bool(enabled)))
+
+    def set_keep(self, keep: int) -> HistorySettings:
+        return self.save(replace(self.load(), keep=int(keep)))
+
+    def set_player(self, player: bool) -> HistorySettings:
+        return self.save(replace(self.load(), player=bool(player)))
+
+
+# --------------------------------------------------------------------------
+# Word timings
+# --------------------------------------------------------------------------
+
+_WORD = re.compile(r"\S+")
+_SENTENCE_END = re.compile(r"[.!?…:;]+[\"'”’)\]]*$")
+_CLAUSE_END = re.compile(r"[,—–]+[\"'”’)\]]*$")
+SENTENCE_PAUSE_CHARS = 6.0  # a sentence end weighs like six more letters of speech
+CLAUSE_PAUSE_CHARS = 3.0
+
+
+def estimate_word_timings(text: str, duration: float) -> list[dict[str, Any]]:
+    """Each word of `text` with an estimated start and end in seconds, in
+    the UI Utility's shape (`{"w", "start", "end"}`). A word's share of the
+    clip is its letters plus the pause after it; the pause is silence, so a
+    word ends before the next one starts. Empty when there is no text or no
+    duration."""
+    words = _WORD.findall(text or "")
+    if not words or not duration or duration <= 0:
+        return []
+    spans: list[tuple[str, float, float]] = []
+    for w in words:
+        speech = float(max(1, len(re.sub(r"\W", "", w)) or len(w)))
+        if _SENTENCE_END.search(w):
+            pause = SENTENCE_PAUSE_CHARS
+        elif _CLAUSE_END.search(w):
+            pause = CLAUSE_PAUSE_CHARS
+        else:
+            pause = 0.0
+        spans.append((w, speech, pause))
+    spans[-1] = (spans[-1][0], spans[-1][1], 0.0)  # nothing to pause before after the last word
+    total = sum(s + p for _, s, p in spans)
+    scale = float(duration) / total
+    out: list[dict[str, Any]] = []
+    t = 0.0
+    for w, speech, pause in spans:
+        start = t
+        end = start + speech * scale
+        out.append({"w": w, "start": round(start, 3), "end": round(end, 3)})
+        t = end + pause * scale
+    out[-1]["end"] = round(float(duration), 3)
+    return out
+
+
+def wav_duration_seconds(path: Path) -> float:
+    try:
+        with wave.open(str(path), "rb") as w:
+            rate = w.getframerate()
+            return w.getnframes() / float(rate) if rate else 0.0
+    except (OSError, EOFError, wave.Error):
+        return 0.0
+
+
+# --------------------------------------------------------------------------
+# The history on disk
+# --------------------------------------------------------------------------
+
+
+@dataclass(frozen=True)
+class HistoryLine:
+    """One exported line: its sidecar, read back."""
+
+    id: str
+    stem: str  # "<stamp>-<id>": the name of both files without the suffix
+    sidecar: dict[str, Any]
+    wav: Path
+    json: Path
+
+    @property
+    def text(self) -> str:
+        return str(self.sidecar.get("text") or "")
+
+    @property
+    def spoken_at(self) -> float:
+        try:
+            return float(self.sidecar.get("spoken_at_epoch") or 0.0)
+        except (TypeError, ValueError):
+            return 0.0
+
+    def to_dict(self) -> dict[str, Any]:
+        return {**self.sidecar, "wav_path": str(self.wav), "sidecar_path": str(self.json)}
+
+
+class SpeechHistory:
+    """The history dir. The daemon is the writer; `keep` from the CLI or MCP
+    prunes too, under the same file lock. Every write is atomic (tmp +
+    rename), WAV first and sidecar last."""
+
+    def __init__(
+        self,
+        directory: Path | str | None = None,
+        *,
+        store: HistoryStore | None = None,
+        clock: Callable[[], float] = time.time,
+    ) -> None:
+        self._dir = Path(directory) if directory is not None else default_history_dir()
+        self._store = store or HistoryStore()
+        self._clock = clock
+
+    @property
+    def directory(self) -> Path:
+        return self._dir
+
+    def settings(self) -> HistorySettings:
+        return self._store.load()
+
+    # -- locking ---------------------------------------------------------------
+
+    def _locked(self, fn: Callable[[], Any]) -> Any:
+        self._dir.mkdir(parents=True, exist_ok=True)
+        with open(self._dir / ".lock", "a+", encoding="utf-8") as lock:
+            fcntl.flock(lock.fileno(), fcntl.LOCK_EX)
+            try:
+                return fn()
+            finally:
+                fcntl.flock(lock.fileno(), fcntl.LOCK_UN)
+
+    # -- export ----------------------------------------------------------------
+
+    def export(
+        self,
+        wav: Path | str,
+        *,
+        text: str,
+        session_id: Optional[str] = None,
+        sender: Optional[str] = None,
+        priority: Optional[int] = None,
+        voice_id: str = "",
+        speed: float = 1.0,
+        source_hash: Optional[str] = None,
+        word_timings: Optional[list[dict[str, Any]]] = None,
+        spoken_at: Optional[float] = None,
+    ) -> Optional[HistoryLine]:
+        """Copy the played WAV into the history with its sidecar, then prune
+        to `keep`. None when the history is off. `word_timings` from a
+        synthesizer that gives them are kept as given; otherwise they are
+        estimated and marked so."""
+        settings = self._store.load()
+        if not settings.enabled:
+            return None
+        src = Path(wav)
+        when = float(spoken_at) if spoken_at is not None else self._clock()
+        line_id = secrets.token_hex(4)
+        local = datetime.fromtimestamp(when)
+        stem = f"{local.strftime('%Y%m%d-%H%M%S')}-{int((when % 1) * 1000):03d}-{line_id}"
+        duration = wav_duration_seconds(src)
+        if word_timings is not None:
+            timings = {"source": TIMING_SYNTHESIZER, "words": list(word_timings)}
+        else:
+            timings = {
+                "source": TIMING_ESTIMATE,
+                "method": ESTIMATE_METHOD,
+                "words": estimate_word_timings(text, duration),
+            }
+        p = int(priority) if priority is not None else None
+        sidecar = {
+            "version": SIDECAR_VERSION,
+            "id": line_id,
+            "text": text or "",
+            "spoken_at": local.isoformat(timespec="milliseconds"),
+            "spoken_at_epoch": round(when, 3),
+            "sender": {"session_id": session_id or None, "name": sender or None},
+            "priority": p,
+            "priority_name": PRIORITY_NAMES.get(p) if p is not None else None,
+            "duration_seconds": round(duration, 3),
+            "word_timings": timings,
+            "wav": f"{stem}.wav",
+            "voice_id": voice_id or "",
+            "speed": float(speed),
+            "source_hash": source_hash or None,
+        }
+
+        def go() -> HistoryLine:
+            dst_wav = self._dir / f"{stem}.wav"
+            dst_json = self._dir / f"{stem}.json"
+            tmp_wav = self._dir / f".{stem}.wav.tmp"
+            shutil.copyfile(src, tmp_wav)
+            os.replace(tmp_wav, dst_wav)
+            tmp_json = self._dir / f".{stem}.json.tmp"
+            tmp_json.write_text(json.dumps(sidecar, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
+            os.replace(tmp_json, dst_json)
+            self._prune_unlocked(settings.keep)
+            return HistoryLine(id=line_id, stem=stem, sidecar=sidecar, wav=dst_wav, json=dst_json)
+
+        return self._locked(go)
+
+    # -- reads -------------------------------------------------------------------
+
+    def _read_unlocked(self) -> list[HistoryLine]:
+        if not self._dir.is_dir():
+            return []
+        out: list[HistoryLine] = []
+        for js in sorted(self._dir.glob("*.json")):
+            if js.name.startswith("."):
+                continue
+            try:
+                data = json.loads(js.read_text(encoding="utf-8"))
+            except (OSError, ValueError):
+                continue
+            if not isinstance(data, dict):
+                continue
+            out.append(
+                HistoryLine(
+                    id=str(data.get("id") or js.stem.rsplit("-", 1)[-1]),
+                    stem=js.stem,
+                    sidecar=data,
+                    wav=js.with_suffix(".wav"),
+                    json=js,
+                )
+            )
+        return out
+
+    def load(self) -> list[HistoryLine]:
+        """Every line in the history, oldest first."""
+        return self._read_unlocked()
+
+    def get(self, line_id: str) -> Optional[HistoryLine]:
+        for line in self._read_unlocked():
+            if line.id == line_id or line.stem == line_id:
+                return line
+        return None
+
+    def size_bytes(self) -> int:
+        total = 0
+        if not self._dir.is_dir():
+            return 0
+        for f in self._dir.iterdir():
+            try:
+                if f.is_file() and not f.name.startswith("."):
+                    total += f.stat().st_size
+            except OSError:
+                pass
+        return total
+
+    # -- pruning ---------------------------------------------------------------
+
+    def _prune_unlocked(self, keep: int) -> int:
+        """Delete the oldest lines past `keep`, and any WAV left without its
+        sidecar (an export cut short). Returns how many lines went."""
+        lines = self._read_unlocked()
+        removed = 0
+        for line in lines[: max(0, len(lines) - max(MIN_KEEP, int(keep)))]:
+            line.wav.unlink(missing_ok=True)
+            line.json.unlink(missing_ok=True)
+            removed += 1
+        now = self._clock()
+        for wav in self._dir.glob("*.wav"):
+            if wav.name.startswith(".") or wav.with_suffix(".json").exists():
+                continue
+            try:
+                if now - wav.stat().st_mtime > ORPHAN_GRACE_SECONDS:
+                    wav.unlink(missing_ok=True)
+            except OSError:
+                pass
+        return removed
+
+    def prune(self, keep: Optional[int] = None) -> int:
+        k = int(keep) if keep is not None else self._store.load().keep
+        if not self._dir.is_dir():
+            return 0
+        return self._locked(lambda: self._prune_unlocked(k))
+
+
+# --------------------------------------------------------------------------
+# One verb for the CLI and the MCP tool
+# --------------------------------------------------------------------------
+
+
+@dataclass(frozen=True)
+class ActionResult:
+    ok: bool
+    text: str
+
+
+def _mb(n: int) -> str:
+    return f"{n / 1_000_000:.1f} MB"
+
+
+def format_status(settings: HistorySettings, history: SpeechHistory, player_note: str = "") -> str:
+    lines = history.load()
+    out = [
+        f"speech history: {'on' if settings.enabled else 'off'}",
+        f"keep: the last {settings.keep} line{'s' if settings.keep != 1 else ''}",
+        f"held now: {len(lines)} line{'s' if len(lines) != 1 else ''}, {_mb(history.size_bytes())}",
+        f"player after each line: {'on' if settings.player else 'off'}" + (f" ({player_note})" if player_note else ""),
+        f"dir: {history.directory}",
+    ]
+    if settings.config_path:
+        out.append(f"config: {settings.config_path}")
+    for p in settings.problems:
+        out.append(f"warning: {p}")
+    return "\n".join(out)
+
+
+def _hms(epoch: float) -> str:
+    try:
+        return datetime.fromtimestamp(epoch).strftime("%Y-%m-%d %H:%M:%S")
+    except (OverflowError, OSError, ValueError):
+        return "----------- --:--:--"
+
+
+def format_lines(lines: list[HistoryLine], total: int) -> str:
+    if not lines:
+        return "speech history: nothing played yet"
+    head = f"speech history: the last {len(lines)} of {total} line{'s' if total != 1 else ''}, newest first"
+    out = [head]
+    for line in lines:
+        sc = line.sidecar
+        who = (sc.get("sender") or {}).get("name") or "-"
+        dur = float(sc.get("duration_seconds") or 0.0)
+        est = " (timings estimated)" if (sc.get("word_timings") or {}).get("source") == TIMING_ESTIMATE else ""
+        out.append(f"  {line.id}  {_hms(line.spoken_at)}  {dur:.1f} s  {who}{est}")
+        out.append(f"      {line.text}")
+        out.append(f"      {line.wav}")
+    return "\n".join(out)
+
+
+def run_action(
+    action: str | None,
+    *,
+    count: int | None = None,
+    as_json: bool = False,
+    store: HistoryStore | None = None,
+    history: SpeechHistory | None = None,
+    player_note: Callable[[HistorySettings], str] | None = None,
+) -> ActionResult:
+    """`auto-speech history <action> …` and the MCP tool `history(action, …)`.
+    `count` is the number for `keep`, and how many lines `list` shows."""
+    store = store or HistoryStore()
+    history = history or SpeechHistory(store=store)
+    action = (action or "list").strip().lower()
+    if action not in ACTIONS:
+        return ActionResult(False, f"history: unknown action {action!r} (expected {' | '.join(ACTIONS)})")
+
+    def status(settings: HistorySettings, head: str = "") -> ActionResult:
+        note = player_note(settings) if player_note is not None else ""
+        body = format_status(settings, history, note)
+        return ActionResult(True, (head + "\n" if head else "") + body)
+
+    if action == "list":
+        limit = DEFAULT_LIST_LIMIT
+        if count is not None:
+            if isinstance(count, bool) or not isinstance(count, int) or count < 1:
+                return ActionResult(False, f"history list: count must be a whole number >= 1, got {count!r}")
+            limit = count
+        lines = history.load()
+        shown = list(reversed(lines))[:limit]
+        if as_json:
+            return ActionResult(True, json.dumps({"total": len(lines), "lines": [x.to_dict() for x in shown]}, indent=2, ensure_ascii=False))
+        return ActionResult(True, format_lines(shown, len(lines)))
+    if action == "status":
+        return status(store.load())
+    if action in ("on", "off"):
+        return status(store.set_enabled(action == "on"))
+    if action in ("player-on", "player-off"):
+        return status(store.set_player(action == "player-on"))
+    # keep
+    if count is None or isinstance(count, bool) or not isinstance(count, int):
+        return ActionResult(False, f"history keep: give how many lines to keep, a whole number (default {DEFAULT_KEEP})")
+    if count < MIN_KEEP:
+        return ActionResult(False, f"history keep: must be >= {MIN_KEEP}, got {count}")
+    settings = store.set_keep(count)
+    removed = history.prune(count)
+    head = f"pruned the {removed} oldest line{'s' if removed != 1 else ''}" if removed else ""
+    return status(settings, head)
