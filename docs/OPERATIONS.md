@@ -162,6 +162,21 @@ heard runs only with the explicit opt-in `AUTO_SPEECH_TEST_REAL_AUDIO=1`.
   replays it in that order over any other sound; `missed --clear` forgets
   it. Lines still held play by themselves when the sound stops.
 
+## Speech under load (ADR-019)
+
+The daemon logs one `priority:` line at start (`nice 0; background clamp cleared; thread QoS user-interactive`). A
+nice above 0 there means its spawner was niced: `narrator_service_start.sh` avoids that by starting through
+`launchctl submit` (label `dev.auto-speech.narrator`) whenever the script itself runs niced. `say` and mpv run under
+`taskpolicy -t 0 -l 0`; `AUTO_SPEECH_QOS_BOOST=0` turns the wrap off.
+
+A play is watched by mpv's position over IPC and ends only after `play_stall_seconds` (default 15,
+`AUTO_SPEECH_PLAY_STALL_SECONDS`) with no progress; a clip that is still advancing is never cut off. Budgets grow with
+the one-minute load per core up to `load_timeout_scale_cap` (default 4). A timed-out line shows in the log as
+`retry N of 3 queued … it waits for the load to fall`, then `retry N … goes ahead: load X/core`; its WAV, for a cut-off
+play, is kept under `auto-speech-retry/` in the state dir until it plays. Only past `timeout_retries` does the line
+reach the missed list as "timed out". The load test: `python3 tests/test_speech_under_load.py` (about fifteen
+seconds, burners at nice 19, silent).
+
 ## Troubleshooting
 
 | Symptom | Check | Likely fix |

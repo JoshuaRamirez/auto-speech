@@ -74,13 +74,18 @@ class TestNativeAudioSink(unittest.TestCase):
         with (
             mock.patch("shutil.which", return_value="/opt/homebrew/bin/mpv"),
             mock.patch("subprocess.Popen", return_value=mock_proc) as mock_popen,
-            mock.patch.dict(os.environ, {"AUTO_SPEECH_MPV_AO": ""}),  # mpv's default output: the argv without --ao
+            mock.patch.dict(os.environ, {"AUTO_SPEECH_MPV_AO": "", "AUTO_SPEECH_QOS_BOOST": "0"}),  # mpv's default output: the argv without --ao; no taskpolicy wrap
         ):
             try:
                 sink = NativeAudioSink()
                 sink.play(wav_path)
 
-                mock_popen.assert_called_once_with(
+                mock_popen.assert_called_once()
+                argv = mock_popen.call_args[0][0]
+                ipc = [a for a in argv if a.startswith("--input-ipc-server=")]
+                self.assertEqual(len(ipc), 1, argv)   # the stall watch's socket (ADR-019)
+                self.assertEqual(
+                    [a for a in argv if not a.startswith("--input-ipc-server=")],
                     [
                         "/opt/homebrew/bin/mpv",
                         "--really-quiet",
@@ -90,9 +95,8 @@ class TestNativeAudioSink(unittest.TestCase):
                         "--input-media-keys=no",
                         str(wav_path),
                     ],
-                    stdout=subprocess.DEVNULL,
-                    stderr=subprocess.PIPE,
                 )
+                self.assertEqual(mock_popen.call_args[1], {"stdout": subprocess.DEVNULL, "stderr": subprocess.PIPE})
                 mock_proc.communicate.assert_called_once()
                 self.assertFalse(sink.was_interrupted)
                 self.assertFalse(sink.is_playing)
@@ -209,7 +213,10 @@ class TestNativeAudioSink(unittest.TestCase):
         mock_proc.poll.return_value = None
 
         custom_bin = "/custom/bin/my_mpv"
-        with mock.patch("subprocess.Popen", return_value=mock_proc) as mock_popen:
+        with (
+            mock.patch("subprocess.Popen", return_value=mock_proc) as mock_popen,
+            mock.patch.dict(os.environ, {"AUTO_SPEECH_QOS_BOOST": "0"}),   # the bare argv, no taskpolicy wrap
+        ):
             try:
                 sink = NativeAudioSink(mpv_path=custom_bin)
                 sink.play(wav_path)
