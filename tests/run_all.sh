@@ -39,10 +39,14 @@ export AUTO_SPEECH_TMP_ROOT="$STATE_DIR"
 export AUTO_SPEECH_DAEMON_SOCK="$STATE_DIR/auto-speech-daemon.sock"
 export AUTO_SPEECH_MISSED_FILE="$STATE_DIR/missed.json"
 export AUTO_SPEECH_MEETING_FILE="$STATE_DIR/meeting.json"
+export AUTO_SPEECH_HISTORY_DIR="$STATE_DIR/history"
+export AUTO_SPEECH_HISTORY_CONFIG="$STATE_DIR/history.toml"
 echo "[isolation] AUTO_SPEECH_TMP_ROOT=$STATE_DIR"
 echo "[isolation] AUTO_SPEECH_DAEMON_SOCK=$AUTO_SPEECH_DAEMON_SOCK"
 echo "[isolation] AUTO_SPEECH_MISSED_FILE=$AUTO_SPEECH_MISSED_FILE"
 echo "[isolation] AUTO_SPEECH_MEETING_FILE=$AUTO_SPEECH_MEETING_FILE"
+echo "[isolation] AUTO_SPEECH_HISTORY_DIR=$AUTO_SPEECH_HISTORY_DIR"
+echo "[isolation] AUTO_SPEECH_HISTORY_CONFIG=$AUTO_SPEECH_HISTORY_CONFIG"
 # No test plays sound (his 2026-10-20 10:40 "turn off the speech tests"): mpv goes to
 # its null output unless AUTO_SPEECH_TEST_REAL_AUDIO=1 is set on purpose. Each test
 # that can reach mpv also sets this itself (tests/quiet_audio.py), so a bare run is silent too.
@@ -128,6 +132,7 @@ CHEAP=(
     test_sound_yield.py
     test_missed_speech.py
     test_speaker.py
+    test_speech_history.py
     test_speak_client.py
     test_cli_dispatcher.py
     test_ipc_command_key.py

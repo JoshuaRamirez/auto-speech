@@ -22,6 +22,29 @@ The Chrome extension under `chrome-extension/` is versioned independently
   to fall (`timeout_retries`, `retry_load_per_core`, `retry_wait_seconds`),
   and only past its retries is it set aside. `tests/test_speech_under_load.py`
   (19 cases, one a short niced load test with the real `say` and mpv, silent).
+- **Every line played is kept as a WAV and a sidecar; the last 200
+  (ADR-020).** His 2026-10-20 13:38 (the Master Desk #m1020-1339-68ee): "A
+  history button shows everything said before. Only the last N WAVs are
+  kept (N configurable), so the disk never fills." When the sink has played
+  a line the daemon copies its WAV into `~/.local/state/auto-speech/history/`
+  (`AUTO_SPEECH_HISTORY_DIR`) with a JSON sidecar: the text, when it was
+  spoken, the sender (session and desk name), priority, duration and word
+  timings. `say` gives no word timings, so they are estimated from word
+  length and punctuation pauses and marked `source: "estimate"`. A line set
+  aside by the meeting hold or the sound yield exports nothing until it
+  plays. N is `keep`, the same name in `[history] keep`
+  (`~/.config/auto-speech/history.toml`), `auto-speech history keep N` and
+  MCP `history(action="keep", count=N)`, 200 by default (about 190 MB at
+  the measured mean clip); the oldest past N are deleted after every
+  export. `auto-speech history [list|status|on|off|keep|player-on|player-off]`
+  and the MCP tool `history` list the lines newest first with their WAV
+  paths (`--json` / `as_json` for the sidecars). A player launcher behind
+  `[history] player` (default off) never opens during a hold and does
+  nothing while the UI Utility is not installed; driving it by the
+  utility's contract is the next step. `tests/run_all.sh` isolates the
+  history dir and config. Tests: the store, the estimate, pruning, the
+  shared verb, the launcher, the daemon's export only when heard, all
+  silent.
 - **No speech during a meeting (ADR-018).** His 2026-10-20 12:24: "if I'm
   in a meeting, I don't want you to talk." The sound-yield gate has a second
   blocker kind, *meeting*: a process on the `meeting_apps` list (Teams, Zoom,

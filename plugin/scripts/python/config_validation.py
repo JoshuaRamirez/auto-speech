@@ -76,6 +76,14 @@ SPEAKER_FIELDS = (
 )
 
 
+# Mirrors the keys read by speech_history.HistorySettings.from_mapping.
+HISTORY_FIELDS = (
+    Field("enabled", "bool"),
+    Field("keep", "int", minimum=1),
+    Field("player", "bool"),
+)
+
+
 def _is_int(v: object) -> bool:
     # bool is a subclass of int in Python; TOML booleans are not integers.
     return isinstance(v, int) and not isinstance(v, bool)
@@ -151,10 +159,11 @@ def validate_toml_file(path: Path, section_name: str, fields: tuple[Field, ...])
 
 
 def validate_user_configs(config_dir: Path) -> list[str]:
-    """All problems across the user's autoplay.toml, narrator.toml, sound-yield.toml and speaker.toml."""
+    """All problems across the user's autoplay.toml, narrator.toml, sound-yield.toml, speaker.toml and history.toml."""
     problems: list[str] = []
     problems += validate_toml_file(config_dir / "autoplay.toml", "autoplay", AUTOPLAY_FIELDS)
     problems += validate_toml_file(config_dir / "narrator.toml", "narrator", NARRATOR_FIELDS)
     problems += validate_toml_file(config_dir / "sound-yield.toml", "sound_yield", SOUND_YIELD_FIELDS)
     problems += validate_toml_file(config_dir / "speaker.toml", "speaker", SPEAKER_FIELDS)
+    problems += validate_toml_file(config_dir / "history.toml", "history", HISTORY_FIELDS)
     return problems

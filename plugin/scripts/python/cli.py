@@ -28,6 +28,7 @@ from self_update import needs_sync
 from missed_speech import run_action as run_missed_action
 from sound_yield import run_action as run_sound_yield_action
 from speaker import run_action as run_speaker_action
+from speech_history import run_action as run_history_action
 from speak import send_speech_request
 
 EXIT_OK = 0
@@ -673,6 +674,31 @@ def handle_speaker(args: argparse.Namespace, store: Any | None = None, names: An
     return EXIT_OK
 
 
+def handle_history(args: argparse.Namespace, store: Any | None = None, history: Any | None = None) -> int:
+    """`auto-speech history [list|status|on|off|keep N|player-on|player-off]`:
+    every line played, kept as a WAV and a sidecar, the last N (same verbs
+    as the MCP tool `history`, same names as the [history] config)."""
+    from speech_player import PlayerLauncher
+
+    action = getattr(args, "history_action", None) or "list"
+    count = getattr(args, "count", None)
+    if action == "list":
+        count = getattr(args, "limit", None)
+    result = run_history_action(
+        action,
+        count=count,
+        as_json=bool(getattr(args, "json", False)),
+        store=store,
+        history=history,
+        player_note=lambda settings: PlayerLauncher(store).note(settings),
+    )
+    if not result.ok:
+        print(result.text, file=sys.stderr)
+        return EXIT_INVALID_INPUT
+    print(result.text)
+    return EXIT_OK
+
+
 def handle_missed(args: argparse.Namespace, client: Any | None = None, missed: Any | None = None) -> int:
     """`auto-speech missed [--play | --clear]`: the lines held or set aside
     while another app played sound (same verbs as the MCP tool `missed`)."""
@@ -1111,6 +1137,22 @@ def build_parser() -> argparse.ArgumentParser:
     p_sp_who = sub_sp.add_parser("who", help="Say what a session would be announced as.")
     p_sp_who.add_argument("session_id", nargs="?", default=None, help="Defaults to this shell's session.")
 
+    p_hi = subparsers.add_parser(
+        "history",
+        help="Every line played, kept as a WAV and a sidecar (the last N): list it, size it, and the player switch.",
+    )
+    sub_hi = p_hi.add_subparsers(dest="history_action", metavar="<action>")
+    p_hi_ls = sub_hi.add_parser("list", help="The lines played, newest first, with their WAV paths (default).")
+    p_hi_ls.add_argument("--limit", type=int, default=None, help="How many lines to show (default 20).")
+    p_hi_ls.add_argument("--json", action="store_true", help="Each line's sidecar as JSON, with its WAV and sidecar paths.")
+    sub_hi.add_parser("status", help="Show the switch, keep, what is held now and the player switch.")
+    sub_hi.add_parser("on", help="Export every line played (default).")
+    sub_hi.add_parser("off", help="Export nothing; what is kept stays.")
+    p_hi_keep = sub_hi.add_parser("keep", help="Keep the last N lines; the oldest past N are deleted.")
+    p_hi_keep.add_argument("count", type=int, help="N, a whole number >= 1 (default 200).")
+    sub_hi.add_parser("player-on", help="Open the player on each line after it plays (never during a hold).")
+    sub_hi.add_parser("player-off", help="Never open the player (default).")
+
     # 9. hook
     p_hk = subparsers.add_parser("hook", help="Lifecycle hook execution.")
     sub_hk = p_hk.add_subparsers(dest="hook_action", metavar="<action>")
@@ -1194,6 +1236,8 @@ def main(
             return handle_missed(args, client=client)
         elif args.subcommand == "speaker":
             return handle_speaker(args)
+        elif args.subcommand == "history":
+            return handle_history(args)
         elif args.subcommand == "hook":
             return handle_hook(args)
         elif args.subcommand == "doctor":

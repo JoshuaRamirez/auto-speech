@@ -414,6 +414,11 @@ class Announcer:
         prefix = f"{spoken_name} here,"
         return Plan(text=f"{prefix} {text}", session_id=sid, name=spoken_name, prefix=prefix)
 
+    def name_for(self, session_id: Optional[str]) -> Optional[str]:
+        """The desk name for a session, whether or not the line names it
+        aloud (the speech history records who sent each line)."""
+        return self._names.name_for(session_id)
+
     def spoken(self, session_id: Optional[str]) -> None:
         """The line for `session_id` was heard: it is now the last speaker.
         A line with no session moves nothing."""
