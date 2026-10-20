@@ -23,6 +23,11 @@ from pathlib import Path
 from state_paths import state_path
 from typing import Any, Callable
 
+import tempfile
+
+from mpv_ipc import MpvIpc, MpvIpcError
+from speech_priority import boosted_argv
+
 from sound_yield import (
     ABORTED,
     EXPIRED,
@@ -45,6 +50,22 @@ MPV_PID_PATH = state_path("auto-speech-mpv.pid")
 # to nothing: the test suite sets it so no test can reach the speakers
 # (his 2026-10-20 10:40 "turn off the speech tests").
 AUDIO_OUTPUT_ENV = "AUTO_SPEECH_MPV_AO"
+
+
+PLAY_STALL_ENV = "AUTO_SPEECH_PLAY_STALL_SECONDS"
+DEFAULT_PLAY_STALL_SECONDS = 15.0
+
+
+def play_stall_from_env() -> float:
+    """The stall watch's window from AUTO_SPEECH_PLAY_STALL_SECONDS; the
+    default when unset or unreadable; 0 turns the watch off."""
+    raw = os.environ.get(PLAY_STALL_ENV, "").strip()
+    if not raw:
+        return DEFAULT_PLAY_STALL_SECONDS
+    try:
+        return max(0.0, float(raw))
+    except ValueError:
+        return DEFAULT_PLAY_STALL_SECONDS
 
 
 def audio_output_from_env() -> str | None:
@@ -139,6 +160,24 @@ class NativeAudioSink:
         self._hold_abort = threading.Event()
         self._holding_since: float | None = None
         self._last_hold: HoldOutcome | None = None
+        self._stall_seconds: float = play_stall_from_env()
+        self._ipc_path: Path | None = None
+        self._last_position: float | None = None
+
+    @property
+    def stall_seconds(self) -> float:
+        """How long mpv may report no progress before the play is given up
+        (ADR-019). 0: no stall watch; the wall-clock budget alone applies."""
+        return self._stall_seconds
+
+    @stall_seconds.setter
+    def stall_seconds(self, value: float) -> None:
+        self._stall_seconds = max(0.0, float(value))
+
+    @property
+    def last_position(self) -> float | None:
+        """mpv's last reported time-pos of the current or latest play."""
+        return self._last_position
 
     @property
     def audio_output(self) -> str | None:
@@ -158,8 +197,82 @@ class NativeAudioSink:
         ]
         if self._audio_output:
             argv.append(f"--ao={self._audio_output}")
+        if self._ipc_path is not None:
+            argv.append(f"--input-ipc-server={self._ipc_path}")
         argv.append(str(wav_path))
         return argv
+
+    def _new_ipc_path(self) -> Path | None:
+        """A fresh socket path for one play's progress reads; None when the
+        stall watch is off (no socket, no flag on mpv's command line)."""
+        if self._stall_seconds <= 0:
+            return None
+        return Path(tempfile.gettempdir()) / f"auto-speech-mpv-{os.getpid()}-{int(time.time() * 1000) % 100000000}.sock"
+
+    def _read_progress(self) -> tuple[float, bool] | None:
+        """mpv's (time-pos, paused) over its socket; None when it cannot be
+        read (mpv still starting, the socket gone, or no socket at all)."""
+        path = self._ipc_path
+        if path is None:
+            return None
+        try:
+            pos_reply = MpvIpc.send(["get_property", "time-pos"], path)
+            pause_reply = MpvIpc.send(["get_property", "pause"], path)
+        except MpvIpcError:
+            return None
+        pos = pos_reply.get("data")
+        if not isinstance(pos, (int, float)):
+            return None
+        return float(pos), bool(pause_reply.get("data", False))
+
+    def _wait_for_exit(self, proc: subprocess.Popen, path: Path, timeout: float | None) -> tuple[Any, Any]:
+        """Wait for mpv to finish, watching its progress (ADR-019). The play
+        is ended early only when mpv reports no progress for stall_seconds
+        (a stall, raised as PlaybackError "stalled"), or, while its position
+        cannot be read at all, when the wall-clock `timeout` passes (raised
+        as PlaybackError "timed out"). A clip that is still advancing is
+        never cut off, whatever the wall clock says."""
+        start = time.monotonic()
+        last_advance = start
+        last_pos: float | None = None
+        ever_read = False          # once mpv has reported a position, the wall clock is off for good
+        stall = float(self._stall_seconds)
+        self._last_position = None
+        while True:
+            now = time.monotonic()
+            slice_s = 1.0
+            if timeout is not None and not ever_read:
+                slice_s = max(0.05, min(1.0, (start + timeout) - now))
+            called_at = time.monotonic()
+            try:
+                return proc.communicate(timeout=slice_s)
+            except subprocess.TimeoutExpired:
+                pass
+            if time.monotonic() - called_at < 0.01:   # a mock that raises at once: do not spin
+                time.sleep(0.05)
+            now = time.monotonic()
+            progress = self._read_progress()
+            if progress is not None:
+                ever_read = True
+                pos, paused = progress
+                self._last_position = pos
+                if paused or last_pos is None or pos != last_pos:
+                    last_pos, last_advance = pos, now
+                elif stall > 0 and now - last_advance >= stall:
+                    self.interrupt()
+                    raise PlaybackError(f"Playback stalled for {stall:.0f}s at {pos:.1f}s: {path}")
+                continue
+            if ever_read:
+                # mpv closed its socket (it is finishing) or stopped answering: a stall
+                # only after the window with no progress; the wall clock never applies.
+                if stall > 0 and now - last_advance >= stall:
+                    self.interrupt()
+                    raise PlaybackError(f"Playback stalled for {stall:.0f}s at {last_pos or 0.0:.1f}s: {path}")
+                continue
+            # No position was ever read: only then does the wall clock count.
+            if timeout is not None and now - start >= timeout:
+                self.interrupt()
+                raise PlaybackError(f"Playback timed out after {timeout}s: {path}")
 
     def _resolve_mpv(self) -> str:
         """Resolve mpv binary path, raising MpvNotInstalledError if not found."""
@@ -211,8 +324,9 @@ class NativeAudioSink:
                 return
             with self._state_lock:
                 self._interrupted = False
+                self._ipc_path = self._new_ipc_path()
                 proc = subprocess.Popen(
-                    self.mpv_argv(mpv_bin, wav_path),
+                    boosted_argv(self.mpv_argv(mpv_bin, wav_path)),
                     stdout=subprocess.DEVNULL,
                     stderr=subprocess.PIPE,
                 )
@@ -223,11 +337,10 @@ class NativeAudioSink:
                     pass
 
             try:
-                stdout, stderr = proc.communicate(timeout=timeout)
+                stdout, stderr = self._wait_for_exit(proc, path, timeout)
                 retcode = proc.returncode
-            except subprocess.TimeoutExpired:
-                self.interrupt()
-                raise PlaybackError(f"Playback timed out after {timeout}s: {path}")
+            except PlaybackError:
+                raise
             except Exception:
                 self.interrupt()
                 raise
@@ -241,6 +354,13 @@ class NativeAudioSink:
                                 MPV_PID_PATH.unlink(missing_ok=True)
                         except (OSError, ValueError):
                             pass
+                    ipc = self._ipc_path
+                    self._ipc_path = None
+                if ipc is not None:
+                    try:
+                        ipc.unlink()
+                    except OSError:
+                        pass
 
             # If interrupted, return cleanly without error.
             if interrupted or retcode in (-signal.SIGTERM, -signal.SIGKILL, 143, 137):

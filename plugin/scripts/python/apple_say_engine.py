@@ -16,6 +16,7 @@ import tempfile
 from pathlib import Path
 from typing import TYPE_CHECKING, Optional
 
+from speech_priority import boosted_argv
 from tts_engine import TTSGenerationError
 
 if TYPE_CHECKING:
@@ -223,7 +224,7 @@ class AppleSayEngine:
             else:
                 cmd.extend(["--", text])
 
-            res = subprocess.run(cmd, capture_output=True, text=True, check=False)
+            res = subprocess.run(boosted_argv(cmd), capture_output=True, text=True, check=False)
             if res.returncode != 0:
                 raise TTSGenerationError(f"say command failed with exit {res.returncode}: {res.stderr.strip()}")
 

@@ -45,6 +45,11 @@ NARRATOR_FIELDS = (
     Field("ollama_host", "str"),
     Field("synthesis_timeout_factor", "number", minimum=0),
     Field("play_timeout_margin_seconds", "number", minimum=0),
+    Field("play_stall_seconds", "number", minimum=0),
+    Field("load_timeout_scale_cap", "number", minimum=0),
+    Field("timeout_retries", "int", minimum=0),
+    Field("retry_load_per_core", "number", minimum=0),
+    Field("retry_wait_seconds", "number", minimum=0),
 )
 
 
