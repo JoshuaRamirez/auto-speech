@@ -54,6 +54,8 @@ from mpv_ipc import MpvIpc
 from missed_speech import ACTIONS as MISSED_ACTIONS, run_action as run_missed_action
 from sound_yield import ACTIONS as SOUND_YIELD_ACTIONS, run_action as run_sound_yield_action
 from speaker import ACTIONS as SPEAKER_ACTIONS, run_action as run_speaker_action
+from speech_history import ACTIONS as HISTORY_ACTIONS, run_action as run_history_action
+from speech_player import PlayerLauncher
 from transcript_locator import TranscriptLocator
 
 SERVER_NAME = "auto-speech"
@@ -377,6 +379,48 @@ SPEAKER_TOOL = {
     },
 }
 
+HISTORY_TOOL = {
+    "name": "history",
+    "title": "Every line played, kept as a WAV and a sidecar, up to max_gb on disk",
+    "description": (
+        "Each line auto-speech plays is kept as a WAV with a JSON sidecar "
+        "(its text, when it was spoken, who sent it, priority, duration, "
+        "and word timings, estimated and marked so when the synthesizer "
+        "gives none). The store holds up to `max_gb` on disk (20 GB by "
+        "default), the oldest pruned first. A line set aside by a meeting or "
+        "another app's sound is kept only once it plays. 'list' (default) "
+        "shows the newest `keep` lines (200) with their WAV paths ('count' "
+        "how many, 'as_json' for the sidecars); 'status' shows the settings; "
+        "'on'/'off' switch the export; 'max-gb' bounds the store ('gb'); "
+        "'keep' sets how many of the newest lines the player's view shows "
+        "('count'; deletes nothing); 'player-on'/'player-off' switch the player that opens "
+        "after each line (default off, never during a hold). Same verbs as "
+        "`auto-speech history` and the [history] config."
+    ),
+    "inputSchema": {
+        "type": "object",
+        "properties": {
+            "action": {
+                "type": "string",
+                "enum": list(HISTORY_ACTIONS),
+                "description": "list | status | on | off | max-gb | keep | player-on | player-off (default list)",
+            },
+            "count": {
+                "type": "integer",
+                "minimum": 1,
+                "description": "For keep: N, how many of the newest lines the player's view shows. For list: how many to show (default keep).",
+            },
+            "gb": {
+                "type": "number",
+                "exclusiveMinimum": 0,
+                "description": "For max-gb: the most the store may hold on disk, in GB (default 20).",
+            },
+            "as_json": {"type": "boolean", "default": False, "description": "For list: the sidecars as JSON."},
+        },
+        "additionalProperties": False,
+    },
+}
+
 DOCTOR_TOOL = {
     "name": "doctor",
     "title": "Run system health checks and diagnostics",
@@ -412,6 +456,7 @@ ALL_TOOLS = [
     SOUND_YIELD_TOOL,
     MISSED_TOOL,
     SPEAKER_TOOL,
+    HISTORY_TOOL,
     DOCTOR_TOOL,
 ]
 
@@ -481,6 +526,8 @@ class McpServer:
         missed_list=None,
         speaker_store=None,
         speaker_names=None,
+        history_store=None,
+        speech_history=None,
     ) -> None:
         self._home = Path(home) if home is not None else Path(os.path.expanduser("~"))
         self._spawn = spawner
@@ -524,6 +571,8 @@ class McpServer:
         self._missed_list = missed_list
         self._speaker_store = speaker_store
         self._speaker_names = speaker_names
+        self._history_store = history_store
+        self._speech_history = speech_history
 
     def _is_mpv_socket_alive(self) -> bool:
         if self._is_mpv_alive_fn is not None:
@@ -605,6 +654,7 @@ class McpServer:
             "sound_yield": self._call_sound_yield,
             "missed": self._call_missed,
             "speaker": self._call_speaker,
+            "history": self._call_history,
             "doctor": self._call_doctor,
         }
 
@@ -1458,6 +1508,40 @@ class McpServer:
             )
         except Exception as exc:  # noqa: BLE001
             return _ok(req_id, _tool_result(f"speaker failed: {exc}", is_error=True))
+        return _ok(req_id, _tool_result(result.text, is_error=not result.ok))
+
+    def _call_history(self, req_id: Any, args: dict) -> dict:
+        action = args.get("action", "list")
+        if not isinstance(action, str) or action.strip().lower() not in HISTORY_ACTIONS:
+            return _ok(
+                req_id,
+                _tool_result(
+                    f"invalid action: {action!r} (expected {', '.join(HISTORY_ACTIONS)})",
+                    is_error=True,
+                ),
+            )
+        count = args.get("count")
+        if count is not None and (isinstance(count, bool) or not isinstance(count, int)):
+            return _ok(req_id, _tool_result("count must be a whole number", is_error=True))
+        gb = args.get("gb")
+        if gb is not None and (isinstance(gb, bool) or not isinstance(gb, (int, float))):
+            return _ok(req_id, _tool_result("gb must be a number", is_error=True))
+        as_json = args.get("as_json", False)
+        if not isinstance(as_json, bool):
+            return _ok(req_id, _tool_result("as_json must be true or false", is_error=True))
+        store = self._history_store
+        try:
+            result = run_history_action(
+                action,
+                count=count,
+                gb=gb,
+                as_json=as_json,
+                store=store,
+                history=self._speech_history,
+                player_note=lambda settings: PlayerLauncher(store).note(settings),
+            )
+        except Exception as exc:  # noqa: BLE001
+            return _ok(req_id, _tool_result(f"history failed: {exc}", is_error=True))
         return _ok(req_id, _tool_result(result.text, is_error=not result.ok))
 
     def _call_doctor(self, req_id: Any, args: dict) -> dict:

@@ -71,6 +71,29 @@ module that owns it. Release-by-release history is in
 - **Replay cache**: content-addressed WAVs keyed by source hash; replay the
   n-th most recent (`cache_store.py`, `replay.py`, ADR-007, ADR-008).
 
+## Speech history
+- **Every line played, kept as a WAV and a sidecar** (ADR-020): after the
+  sink plays a line the daemon copies its WAV into
+  `~/.local/state/auto-speech/history/` with a JSON sidecar (text, spoken
+  at, sender session and desk name, priority, duration, word timings in the
+  UI Utility's `{w, start, end}` shape, estimated from word length and
+  pauses and marked `source: "estimate"` because `say` gives none; and the
+  desk-say file name, `origin_file`, when the caller passes it). A line
+  set aside by the meeting hold or the sound yield is exported only once it
+  plays. The store holds up to `max_gb` on disk (20 GB by default), the
+  oldest pruned first after each export; `keep` (200) is how many of the
+  newest lines the player's view shows and deletes nothing. The one WAV
+  store: Spoken Transcript reads it. `auto-speech history [list [--limit N]
+  [--json] | status | on | off | max-gb GB | keep N | player-on |
+  player-off]`, the MCP tool `history` (same actions, `count`, `gb`,
+  `as_json`) and `[history]` in
+  `~/.config/auto-speech/history.toml` (`speech_history.py`).
+- **Player launcher, default off** (ADR-020): with `[history] player = true`
+  the daemon hands each exported line to the launcher, which never opens
+  during a hold and does nothing while the UI Utility is not installed;
+  the contract wiring comes with the utility's published contract
+  (`speech_player.py`).
+
 ## Who is talking
 - **The desk is named only when the speaker changes** (v0.5.0, ADR-016):
   a line opens with "<desk> here," only when its session differs from the
@@ -129,11 +152,12 @@ module that owns it. Release-by-release history is in
 - **CLI** `bin/auto-speech` (`cli.py`): `speak`, `replay`, `pause`,
   `resume`, `restart`, `stop`, `seek`, `autoplay {on,off,status,mode,scope}`,
   `narrate {on,off,status,stop,config}`, `yield {status,on,off,hold-for,player-add,player-remove,player-reset,add,remove,
-  clear,check}`, `missed [--play|--clear]`, `hook {stop,narrator,bootstrap}`,
+  clear,check}`, `missed [--play|--clear]`, `history {list,status,on,off,max-gb,keep,player-on,player-off}`,
+  `hook {stop,narrator,bootstrap}`,
   `doctor`, `update`.
 - **MCP server** (`mcp_server.py`, stdio JSON-RPC): `speak`,
   `autoplay_turn`, `narrate_event`, `playback_control`, `session_configure`,
-  `sound_yield`, `missed`, `doctor` (ADR-014 for the fire-and-forget shape).
+  `sound_yield`, `missed`, `speaker`, `history`, `doctor` (ADR-014 for the fire-and-forget shape).
 - **Slash commands**: 8 curated (`plugin/commands/`) plus 17 extras
   (`plugin/commands-extra/`), every one prefixed `auto-speech-`.
 - **Web app** at `http://127.0.0.1:7860` (loopback only): paste-to-speak,
