@@ -44,7 +44,8 @@ fi
 # Speech under load (ADR-019): a daemon inherits its spawner's nice value and
 # cannot lower it. When this script runs niced (a desk's background command),
 # the daemon is started through launchd instead, which runs it at nice 0.
-NICE_NOW="$(python3 -c 'import os; print(os.nice(0))' 2>/dev/null || echo 0)"
+# getpriority, not nice(0): at nice 20 macOS's nice(0) fails EPERM, which read as 0.
+NICE_NOW="$(python3 -c 'import os; print(os.getpriority(os.PRIO_PROCESS, 0))' 2>/dev/null || echo 0)"
 LAUNCHD_LABEL="${AUTO_SPEECH_LAUNCHD_LABEL:-dev.auto-speech.narrator}"
 VIA_LAUNCHD="${AUTO_SPEECH_START_VIA_LAUNCHD:-auto}"
 # A daemon on a private state dir (the test runner's AUTO_SPEECH_TMP_ROOT) is
