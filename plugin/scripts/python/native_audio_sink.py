@@ -78,6 +78,9 @@ class AudioSinkError(RuntimeError):
     """Base exception for all NativeAudioSink errors."""
 
 
+MPV_FALLBACK_PATHS = ("/opt/homebrew/bin/mpv", "/usr/local/bin/mpv")
+
+
 class MpvNotInstalledError(AudioSinkError):
     """Raised when the mpv binary is not found on PATH."""
 
@@ -279,9 +282,14 @@ class NativeAudioSink:
         if self._custom_mpv_path:
             return self._custom_mpv_path
         binary = shutil.which("mpv")
-        if not binary:
-            raise MpvNotInstalledError("mpv not found on PATH. Install with: brew install mpv")
-        return binary
+        if binary:
+            return binary
+        # launchd and other sparse-PATH starters leave out Homebrew's bin:
+        # the 2026-10-20 20:02 narrator spoke nothing for two hours on that.
+        for fallback in MPV_FALLBACK_PATHS:
+            if os.path.isfile(fallback) and os.access(fallback, os.X_OK):
+                return fallback
+        raise MpvNotInstalledError("mpv not found on PATH or in " + ", ".join(MPV_FALLBACK_PATHS) + ". Install with: brew install mpv")
 
     def play(
         self,

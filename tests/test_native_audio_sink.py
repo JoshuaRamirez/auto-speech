@@ -57,12 +57,25 @@ class TestNativeAudioSink(unittest.TestCase):
         wav_path = _make_silent_wav(0.05)
         try:
             sink = NativeAudioSink()
-            with mock.patch("shutil.which", return_value=None):
+            with mock.patch("shutil.which", return_value=None), mock.patch("native_audio_sink.MPV_FALLBACK_PATHS", ("/nonexistent/mpv",)):
                 with self.assertRaises(MpvNotInstalledError) as ctx:
                     sink.play(wav_path)
                 self.assertIn("mpv not found on PATH", str(ctx.exception))
         finally:
             wav_path.unlink(missing_ok=True)
+
+    def test_mpv_off_path_is_found_at_its_homebrew_place(self) -> None:
+        # launchd's bare PATH leaves out /opt/homebrew/bin (2026-10-20 20:02).
+        fake = Path(tempfile.mkdtemp()) / "mpv"
+        fake.write_text("#!/bin/sh\n")
+        fake.chmod(0o755)
+        not_exec = fake.with_name("mpv-not-exec")
+        not_exec.write_text("")
+        sink = NativeAudioSink()
+        with mock.patch("shutil.which", return_value=None), mock.patch("native_audio_sink.MPV_FALLBACK_PATHS", (str(not_exec), str(fake))):
+            self.assertEqual(sink._resolve_mpv(), str(fake))
+        with mock.patch("shutil.which", return_value="/on/path/mpv"), mock.patch("native_audio_sink.MPV_FALLBACK_PATHS", (str(fake),)):
+            self.assertEqual(sink._resolve_mpv(), "/on/path/mpv", "PATH first")
 
     def test_play_successful_invokes_mpv(self) -> None:
         wav_path = _make_silent_wav(0.05)

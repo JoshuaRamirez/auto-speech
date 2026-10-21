@@ -94,6 +94,10 @@ PROGRESS_FILE = state_path("auto-speech-narration-progress")
 SYNTHESIS_TIMEOUT_FLOOR_SECONDS = 30.0
 DEFAULT_TIMEOUT_RETRIES = 3          # ADR-019: a timed-out line is queued again this many times
 RETRY_DIR = state_path("auto-speech-retry")   # the WAV of a cut-off line, kept for its replay
+# Each line's synthesis WAV and its fragments: a directory of the daemon's
+# own, so the clean-up glob after a line reads a few names, not the system
+# temp dir (56,785 entries on 2026-10-20, seconds per line under load).
+SYNTH_DIR = state_path("auto-speech-synth")
 WATERMARK_FILE = state_path("auto-speech-narrator-daemon.watermark")
 DEFAULT_SOCKET_PATH = state_path("auto-speech-daemon.sock")
 SOCKET_FILE = Path(os.environ.get("AUTO_SPEECH_DAEMON_SOCK", str(DEFAULT_SOCKET_PATH)))
@@ -1859,7 +1863,13 @@ class NarratorService:
             except Exception as exc:
                 _log(f"cache lookup error for {source_hash}: {exc}")
 
-        with tempfile.NamedTemporaryFile(prefix="narrator_", suffix=".wav", delete=False) as f:
+        try:
+            SYNTH_DIR.mkdir(parents=True, exist_ok=True)
+            synth_dir: Optional[Path] = SYNTH_DIR
+        except OSError as exc:
+            _log(f"synth dir {SYNTH_DIR} unavailable ({exc!r}); using the system temp dir")
+            synth_dir = None
+        with tempfile.NamedTemporaryFile(prefix="narrator_", suffix=".wav", delete=False, dir=synth_dir) as f:
             temp_wav = Path(f.name)
 
         try:

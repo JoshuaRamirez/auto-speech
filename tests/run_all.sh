@@ -41,12 +41,16 @@ export AUTO_SPEECH_MISSED_FILE="$STATE_DIR/missed.json"
 export AUTO_SPEECH_MEETING_FILE="$STATE_DIR/meeting.json"
 export AUTO_SPEECH_HISTORY_DIR="$STATE_DIR/history"
 export AUTO_SPEECH_HISTORY_CONFIG="$STATE_DIR/history.toml"
+# A daemon a test starts never goes through launchd, so it never takes the
+# live narrator's label (2026-10-20 20:02: a niced run replaced his narrator).
+export AUTO_SPEECH_START_VIA_LAUNCHD=never
 echo "[isolation] AUTO_SPEECH_TMP_ROOT=$STATE_DIR"
 echo "[isolation] AUTO_SPEECH_DAEMON_SOCK=$AUTO_SPEECH_DAEMON_SOCK"
 echo "[isolation] AUTO_SPEECH_MISSED_FILE=$AUTO_SPEECH_MISSED_FILE"
 echo "[isolation] AUTO_SPEECH_MEETING_FILE=$AUTO_SPEECH_MEETING_FILE"
 echo "[isolation] AUTO_SPEECH_HISTORY_DIR=$AUTO_SPEECH_HISTORY_DIR"
 echo "[isolation] AUTO_SPEECH_HISTORY_CONFIG=$AUTO_SPEECH_HISTORY_CONFIG"
+echo "[isolation] AUTO_SPEECH_START_VIA_LAUNCHD=never"
 # No test plays sound (his 2026-10-20 10:40 "turn off the speech tests"): mpv goes to
 # its null output unless AUTO_SPEECH_TEST_REAL_AUDIO=1 is set on purpose. Each test
 # that can reach mpv also sets this itself (tests/quiet_audio.py), so a bare run is silent too.
@@ -93,6 +97,7 @@ NEEDS_DEPS=(
 # Cheap unit tests first — failures here usually indicate a wider problem.
 CHEAP=(
     test_state_paths.py
+    test_narrator_start_label.py
     test_state_machine.py
     test_auto_speech_log.py
     test_doctor.py
