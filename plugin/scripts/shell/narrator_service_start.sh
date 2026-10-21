@@ -46,9 +46,25 @@ fi
 # the daemon is started through launchd instead, which runs it at nice 0.
 NICE_NOW="$(python3 -c 'import os; print(os.nice(0))' 2>/dev/null || echo 0)"
 LAUNCHD_LABEL="${AUTO_SPEECH_LAUNCHD_LABEL:-dev.auto-speech.narrator}"
-if [[ "${AUTO_SPEECH_START_VIA_LAUNCHD:-auto}" != "never" && "$NICE_NOW" -gt 0 ]] && command -v launchctl >/dev/null 2>&1; then
+VIA_LAUNCHD="${AUTO_SPEECH_START_VIA_LAUNCHD:-auto}"
+# A daemon on a private state dir (the test runner's AUTO_SPEECH_TMP_ROOT) is
+# never submitted under the live label: on 2026-10-20 20:02 a niced suite run
+# replaced his narrator with a test daemon that had none of the test's
+# environment, so it took the live socket and could not find mpv. Such a
+# daemon starts directly unless a label of its own is named.
+if [[ "$STATE_DIR" != "/tmp" && -z "${AUTO_SPEECH_LAUNCHD_LABEL:-}" ]]; then
+    VIA_LAUNCHD="never"
+fi
+if [[ "$VIA_LAUNCHD" != "never" && "$NICE_NOW" -gt 0 ]] && command -v launchctl >/dev/null 2>&1; then
+    # launchd gives a job a bare PATH and none of this shell's environment:
+    # hand on PATH with Homebrew's bin (mpv) and every AUTO_SPEECH_* setting.
+    JOB_PATH="/opt/homebrew/bin:/usr/local/bin:${PATH:-/usr/bin:/bin:/usr/sbin:/sbin}"
+    JOB_ENV=("PATH=$JOB_PATH")
+    while IFS= read -r kv; do
+        [[ -n "$kv" ]] && JOB_ENV+=("$kv")
+    done < <(env | grep -E '^AUTO_SPEECH_[A-Z0-9_]*=' || true)
     launchctl remove "$LAUNCHD_LABEL" >/dev/null 2>&1 || true
-    if launchctl submit -l "$LAUNCHD_LABEL" -o "$OUT_FILE" -e "$OUT_FILE" -- "$VENV/bin/python" "$SERVICE" >/dev/null 2>&1; then
+    if launchctl submit -l "$LAUNCHD_LABEL" -o "$OUT_FILE" -e "$OUT_FILE" -- /usr/bin/env "${JOB_ENV[@]}" "$VENV/bin/python" "$SERVICE" >/dev/null 2>&1; then
         echo "narrator daemon submitted to launchd as $LAUNCHD_LABEL (this shell is niced $NICE_NOW; launchd starts it at nice 0)"
         for _ in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15; do
             if [[ -f "$PID_FILE" ]] && narrator_pid_is_ours "$(cat "$PID_FILE" 2>/dev/null || true)"; then
