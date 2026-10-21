@@ -1538,7 +1538,7 @@ class McpServer:
                 as_json=as_json,
                 store=store,
                 history=self._speech_history,
-                player_note=lambda settings: PlayerLauncher(store).note(settings),
+                player_note=lambda settings: PlayerLauncher(store, start_worker=False).note(settings),
             )
         except Exception as exc:  # noqa: BLE001
             return _ok(req_id, _tool_result(f"history failed: {exc}", is_error=True))

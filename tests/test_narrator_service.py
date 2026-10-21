@@ -1624,6 +1624,61 @@ def test_an_export_failure_never_stops_speech() -> None:
     assert svc._player.lines == []
 
 
+def test_a_hung_ui_utility_never_delays_a_heard_line() -> None:
+    # The real launcher, player on, installed, its client never answering:
+    # _heard runs on the playback thread and must return at once (ADR-021).
+    import time
+    import wave
+
+    from speech_player import PlayerLauncher
+
+    class _NeverClient:
+        connected = False
+
+        def __init__(self, **kw) -> None:
+            pass
+
+        def connect(self) -> None:
+            time.sleep(2.0)
+
+        def hello(self) -> None:
+            time.sleep(2.0)
+
+        def open_player(self, **kw) -> None:
+            time.sleep(2.0)
+
+        def close(self) -> None:
+            pass
+
+    sink = _HoldSink()
+    svc = _history_service(sink)
+    svc._yield_gate.assess.return_value = MagicMock(hold=False)
+    svc._history._store.set_player(True)
+    tmp = Path(tempfile.mkdtemp(prefix="auto-speech-player-"))
+    svc._player = PlayerLauncher(
+        svc._history._store,
+        holding=svc._hold_stands,
+        installed=lambda: True,
+        client_factory=_NeverClient,
+        launch=lambda: None,
+        outcome_file=tmp / "player.json",
+    )
+    wav = tmp / "line.wav"
+    with wave.open(str(wav), "wb") as w:
+        w.setnchannels(1)
+        w.setsampwidth(2)
+        w.setframerate(24000)
+        w.writeframes(b"\x00\x00" * 2400)
+    try:
+        for i in range(3):
+            t0 = time.monotonic()
+            svc._heard(wav, None, text=f"line {i}")
+            assert time.monotonic() - t0 < 0.05, f"_heard took {time.monotonic() - t0:.3f} s"
+        assert len(svc._history.load()) == 3
+    finally:
+        svc._close_player()
+
+
 def test_the_player_is_told_a_hold_stands_from_the_gate() -> None:
     sink = _HoldSink()
     svc = _history_service(sink)
@@ -1703,6 +1758,7 @@ def main() -> int:
     test_a_line_set_aside_for_a_meeting_is_not_exported,
     test_a_held_line_is_exported_once_it_plays,
     test_an_export_failure_never_stops_speech,
+    test_a_hung_ui_utility_never_delays_a_heard_line,
     test_the_player_is_told_a_hold_stands_from_the_gate,
         test_tail_events_idle_shutdown_deferred_when_busy,
         test_stop_event_flushes_classifier_with_session_id,
