@@ -144,6 +144,7 @@ CHEAP=(
     test_daemon_client.py
     test_apple_say_engine.py
     test_native_audio_sink.py
+    test_mpv_ipc.py
     test_sound_yield.py
     test_missed_speech.py
     test_speaker.py
