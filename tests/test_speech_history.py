@@ -143,6 +143,35 @@ class TestWordTimings(unittest.TestCase):
         self.assertEqual(estimate_word_timings("", 3.0), [])
         self.assertEqual(estimate_word_timings("words here", 0.0), [])
 
+    def test_say_commands_are_not_words_and_slnc_is_silence(self):
+        # The desk's lines carry say markup (2026-10-21 08:53:18Z: "[[rate 180]] … [[slnc 600]] …").
+        words = estimate_word_timings("[[rate 180]] aaaa bbbb. [[slnc 600]] cccc dddd", 4.0)
+        self.assertEqual([w["w"] for w in words], ["aaaa", "bbbb.", "cccc", "dddd"])
+        plain = estimate_word_timings("aaaa bbbb. cccc dddd", 4.0)
+        gap = words[2]["start"] - words[1]["end"]
+        plain_gap = plain[2]["start"] - plain[1]["end"]
+        # The 600 ms comes out of the same 4 s, so the rest shrinks a little.
+        self.assertGreater(gap, 0.6, "the 600 ms silence sits after bbbb.")
+        self.assertGreater(gap, plain_gap)
+        self.assertEqual(words[-1]["end"], 4.0)
+        lead = estimate_word_timings("[[slnc 500]] aaaa bbbb", 2.0)
+        self.assertEqual(lead[0]["start"], 0.5)
+        glued = estimate_word_timings("aaaa[[rate 200]]bbbb", 2.0)
+        self.assertEqual([w["w"] for w in glued], ["aaaa", "bbbb"])
+
+    def test_silences_longer_than_the_clip_are_ignored(self):
+        words = estimate_word_timings("aaaa [[slnc 9000]] bbbb", 2.0)
+        self.assertEqual(words[0]["start"], 0.0)
+        self.assertEqual(words[-1]["end"], 2.0)
+        self.assertLess(words[1]["start"] - words[0]["end"], 0.01)
+
+    def test_strip_say_markup(self):
+        self.assertEqual(sh.strip_say_markup("[[rate 180]] The build is green. [[slnc 600]] Next."), "The build is green. Next.")
+        self.assertEqual(sh.strip_say_markup("Line one.\n[[slnc 300]] Line two."), "Line one.\nLine two.")
+        self.assertEqual(sh.strip_say_markup("No  markup\n\nkept as is "), "No  markup\n\nkept as is ")
+        self.assertEqual(sh.strip_say_markup("[[ RATE 200 ]]"), "")
+        self.assertEqual(sh.strip_say_markup("a [single] bracket stays"), "a [single] bracket stays")
+
 
 class TestExport(_Tmp):
     def test_writes_the_wav_and_a_full_sidecar(self):
@@ -187,6 +216,11 @@ class TestExport(_Tmp):
         for bad in (None, 7, "", "   ", "..", "/", "a\nb.txt", "x" * 256):
             self.assertEqual(clean_origin_file(bad), "", repr(bad))
         self.assertEqual(clean_origin_file(" a-desk.txt "), "a-desk.txt")
+
+    def test_the_sidecar_text_is_as_heard_without_say_markup(self):
+        sc = self.export("[[rate 180]] The build is green. [[slnc 600]] Tests pass.").sidecar
+        self.assertEqual(sc["text"], "The build is green. Tests pass.")
+        self.assertEqual([w["w"] for w in sc["word_timings"]["words"]], ["The", "build", "is", "green.", "Tests", "pass."])
 
     def test_synthesizer_timings_are_kept_as_given(self):
         given = [{"w": "Hi", "start": 0.1, "end": 0.4}]

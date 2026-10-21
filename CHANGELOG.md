@@ -103,6 +103,13 @@ The Chrome extension under `chrome-extension/` is versioned independently
   HOME to a temporary directory at import.
 
 ### Fixed
+- **The history's text is the line as heard, without `say` markup.** The
+  desk's lines carry `say` commands (`[[rate 180]] … [[slnc 600]] …`), which
+  went into the sidecar's `text` and were counted as words in the timing
+  estimate. The sidecar now keeps the text with every `[[…]]` command removed
+  (`strip_say_markup`; text without one is kept exactly), and the estimate
+  drops them as words and places each `[[slnc N]]` as N ms of silence where
+  it stands (ignored if the silences would fill the clip).
 - **A slow mpv no longer ends a line.** 2026-10-21 06:14:50Z, under load:
   `speak error: TimeoutError('timed out')`. The stall watch's progress read
   (ADR-019) got no reply from mpv in 5 s, and `MpvIpc.send` let the bare
