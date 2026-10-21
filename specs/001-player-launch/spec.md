@@ -8,6 +8,16 @@
 
 **Input**: User description: "Auto-speech launches and drives the UI Utility's player by its published contract (1339 T09): launch and drive the UI Utility by its contract, behind a setting that is off by default, keeping the meeting hold, using silent mode in tests, and never touching the live narrator's launchd label. The live narrator is not restarted." His words (2026-10-20 13:38): "Each time the Desk speaks, a small player pops up and plays the line's WAV. Controls: play, pause, fast-forward, back to the beginning, rewind, with a scrubber. Below the controls, the transcript, highlighting the current position … A history button shows everything said before."
 
+## Clarifications
+
+### Session 2026-10-21
+
+- Q: Should the player play the line again when it opens, when the narrator has already played it aloud? → A: No. It opens ready to play, at the start (`play` false); he presses play to hear it again.
+- Q: When he closes the player window himself, should the next line open it again? → A: Yes. The setting is the switch (`history player-off` turns it off); closing the window only puts that line away.
+- Q: Does auto-speech keep its connection to the UI Utility open while the player shows a line, or connect once per line? → A: It keeps one connection open for the panel's life, and reconnects and opens again on the next line if the connection is lost.
+- Q: Do the tests start the real UI Utility in its silent mode, or a stand-in? → A: A stand-in that speaks the contract on a private socket; the real app is never started by a test. The suite also sets the contract's silent switch and a private socket, so anything that did launch it would be silent and apart from his copy.
+- Q: Does this feature show the history of earlier lines in the player? → A: No. Contract v1 has one piece, the player, with one clip; the history stays `auto-speech history list`, and the player shows the newest line.
+
 ## User Scenarios & Testing *(mandatory)*
 
 ### User Story 1 - The line just spoken appears in the player (Priority: P1)
@@ -31,8 +41,8 @@ private socket, speak one line through the daemon's path; the stand-in receives 
    **Then** the same player shows the new line (one player, not one window per line).
 3. **Given** the UI Utility is not running, **When** a line is heard, **Then** it is launched in the
    background and then handed the line.
-4. **Given** the player is showing a line, **When** the line is handed over, **Then** it
-   [NEEDS CLARIFICATION: does the player play the line again on open (his "plays the line's WAV"), when the narrator has already played it aloud through mpv, or does it open ready to play?]
+4. **Given** a line has been played aloud, **When** it is handed to the player, **Then** the
+   player opens ready to play at the start and makes no sound until he presses play.
 
 ---
 
@@ -102,8 +112,12 @@ off / on and installed / on and not installed / on and last hand-over failed.
 - The WAV was pruned between export and hand-over: the line is skipped, logged.
 - Words are empty (a line with no text, e.g. a replay of a cached clip): the player still opens on
   the clip with an empty word list.
-- The UI Utility closes the panel (the user closed it): the next line opens it again, since the
-  setting is still on. [NEEDS CLARIFICATION: when he closes the player window himself, should the next line reopen it, or does closing it mean "not now" until some reset?]
+- He closes the player window: the next line opens it again, since the setting is still on;
+  `history player-off` is how he stops it.
+- The connection to the UI Utility drops (it quit or crashed): the next line reconnects, launching
+  it if needed, and opens the player again.
+- Earlier lines are not listed in the player (contract v1 has one clip per player); they stay in
+  `auto-speech history list`.
 - The contract version the utility speaks is not 1: nothing is opened, logged once.
 - Tests never start the real UI Utility; a test that needs one uses silent mode on a private
   socket, so no window and no sound.
@@ -120,13 +134,16 @@ off / on and installed / on and not installed / on and last hand-over failed.
   (`w`, `start`, `end`).
 - **FR-003**: The system MUST launch the UI Utility when its socket does not answer, in the
   background (never taking focus), and then retry the hand-over within a bounded wait.
-- **FR-004**: The system MUST reuse one player panel for successive lines.
+- **FR-004**: The system MUST reuse one player panel for successive lines, opened ready to play
+  (never playing on open), over one connection kept open for the panel's life.
 - **FR-005**: The hand-over MUST run off the speech path, never delay or stop a line, and keep only
   the newest pending line.
 - **FR-006**: Failures (no socket, refused request, timeout, wrong contract version) MUST be logged
   once per kind and shown in `history status`; they MUST NOT raise into the daemon.
-- **FR-007**: Tests MUST NOT start the real UI Utility outside silent mode, and MUST NOT touch the
-  live narrator's socket, pid file or launchd label.
+- **FR-007**: Tests MUST NOT start the real UI Utility; they use a stand-in on a private socket.
+  The suite MUST set the contract's silent switch and a private socket, and any launch made under
+  it MUST ask for silent mode. Tests MUST NOT touch the live narrator's socket, pid file or
+  launchd label.
 - **FR-008**: The player setting keeps its one name (`[history] player`, `history player-on|off`,
   MCP `history` actions `player-on|player-off`) and stays off by default.
 

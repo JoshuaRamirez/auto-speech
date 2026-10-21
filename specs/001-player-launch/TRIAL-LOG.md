@@ -42,3 +42,58 @@ it in order. Every SKILL.md's extension-hook checks were skipped as written ("if
 - 2 `[NEEDS CLARIFICATION]` markers left for clarify (see step 3).
 - Deviation: the skill's step 8c presents markers to the user as a choice table and waits; per the
   order, none goes to him, so they were left for clarify to answer as an agent.
+
+## 3. clarify — 01:34:06 → 01:34:30
+- Ran `.specify/scripts/bash/check-prerequisites.sh --json --paths-only`. It reported
+  `BRANCH: 001-player-launch` (it reads `.specify/feature.json`, not git) and the paths.
+- Scanned the spec against the skill's taxonomy. Asked and answered 5 questions (the skill's
+  maximum) myself, from the contract, the repo and the ADRs. None went to him. Integrated them
+  into `spec.md` (a new `## Clarifications` section, user story 1 scenario 4, edge cases, FR-004,
+  FR-007) and toggled one item in `checklists/requirements.md` (13/16 → 14/16).
+- Deviation: the skill asks one question at a time and waits for the user's letter; here the
+  agent answered each from the sources, as the order says.
+
+### The [NEEDS CLARIFICATION] markers, verbatim
+1. `[NEEDS CLARIFICATION: does the player play the line again on open (his "plays the line's WAV"), when the narrator has already played it aloud through mpv, or does it open ready to play?]`
+2. `[NEEDS CLARIFICATION: when he closes the player window himself, should the next line reopen it, or does closing it mean "not now" until some reset?]`
+
+### The questions clarify asked, verbatim, with the answer and its source
+1. **Question:** Should the player play the line again when it opens, when the narrator has
+   already played it aloud? (marker 1)
+   **A:** No. It opens ready to play, at the start (`play` false); he presses play to hear it
+   again.
+   **Source:** ADR-020 exports a line only after the sink played it (I-20.1), so by then he has
+   heard it; contract `open.play` defaults to false (rev 1.1); constitution I (no doubled sound).
+   His 13:38 "plays the line's WAV" is kept as the player's play control.
+   **REAL**: it changed the spec (scenario 1.4, FR-004) and fixes the plan's `open` request.
+2. **Question:** When he closes the player window himself, should the next line open it again?
+   (marker 2)
+   **A:** Yes. The setting is the switch (`history player-off` turns it off); closing the window
+   only puts that line away.
+   **Source:** ADR-020's player section ("after each line"), `config/history.toml.example`
+   (`player`: "Open the UI Utility's player on each line after it plays"); `closed` frees the id
+   (contract, Events).
+   **EMPTY**: the answer was already on disk.
+3. **Question:** Does auto-speech keep its connection to the UI Utility open while the player shows
+   a line, or connect once per line?
+   **A:** It keeps one connection open for the panel's life, and reconnects and opens again on the
+   next line if the connection is lost.
+   **Source:** the contract says a connection that opened a panel receives its events, and says
+   nothing about a panel outliving its connection; holding it is the reading that is safe either
+   way.
+   **REAL**: it changed FR-004 and the edge cases, and makes the plan a long-lived client on a
+   worker thread rather than a connect-per-line call.
+4. **Question:** Do the tests start the real UI Utility in its silent mode, or a stand-in?
+   **A:** A stand-in that speaks the contract on a private socket; the real app is never started by
+   a test. The suite also sets the contract's silent switch (`UI_UTILITY_SILENT=1`) and a private
+   socket (`UI_UTILITY_SOCK`), so anything that did launch it would be silent and apart from his
+   copy.
+   **Source:** contract "Launch": "A copy already running keeps its mode". A silent copy
+   started by a test would go on serving his live player with no window, and launching twice
+   leaves one copy. Constitution I.
+   **REAL**: it changed FR-007 and adds `run_all.sh` settings and a launch argument to the plan.
+5. **Question:** Does this feature show the history of earlier lines in the player?
+   **A:** No. Contract v1 has one piece, the player, with one clip; the history stays
+   `auto-speech history list`, and the player shows the newest line.
+   **Source:** contract `hello` → `"pieces":["player"]`, `open` takes one `clip`.
+   **EMPTY**: the answer was already on disk (it added one out-of-scope edge case line).
