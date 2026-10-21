@@ -367,6 +367,25 @@ class _ScriptedGate:
         return self.outcome
 
 
+class TestProgressRead(unittest.TestCase):
+    def test_a_slow_progress_read_is_no_progress_not_an_error(self) -> None:
+        # 2026-10-21 06:14:50Z: a slow reply ended a live line with TimeoutError.
+        from mpv_ipc import MpvIpcError
+
+        sink = NativeAudioSink()
+        sink._ipc_path = Path("/tmp/auto-speech-mpv-test.sock")
+        seen: list = []
+
+        def slow(cmd, path, *, timeout=None):
+            seen.append(timeout)
+            raise MpvIpcError("mpv did not reply in 1s")
+
+        with mock.patch.object(native_audio_sink.MpvIpc, "send", side_effect=slow):
+            self.assertIsNone(sink._read_progress())
+        self.assertEqual(seen, [NativeAudioSink._PROGRESS_READ_TIMEOUT])
+        self.assertLessEqual(NativeAudioSink._PROGRESS_READ_TIMEOUT, 1.0)
+
+
 class TestNativeAudioSinkSoundYield(unittest.TestCase):
     """The sink consults the gate before mpv starts; the gate is injected,
     so the audio layer is fully mocked here."""
@@ -527,6 +546,7 @@ def main() -> int:
         [
             loader.loadTestsFromTestCase(TestNativeAudioSink),
             loader.loadTestsFromTestCase(TestNativeAudioSinkSoundYield),
+            loader.loadTestsFromTestCase(TestProgressRead),
         ]
     )
     runner = unittest.TextTestRunner(verbosity=2)

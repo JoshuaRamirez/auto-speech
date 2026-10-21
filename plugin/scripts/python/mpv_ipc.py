@@ -19,8 +19,14 @@ class MpvIpc:
     _READ_BUFFER = 65536
 
     @staticmethod
-    def send(command: list | dict, socket_path: Path) -> dict:
+    def send(command: list | dict, socket_path: Path, *, timeout: float | None = None) -> dict:
         """Send `command` to mpv at `socket_path` and return the parsed reply.
+
+        `timeout` bounds the send and the wait for the reply (default
+        _READ_TIMEOUT_SECONDS). Every failure, a timeout included, is an
+        MpvIpcError: a slow mpv under load is a failed read, never an
+        exception that ends the line (the 2026-10-21 06:14:50Z line ended on
+        a bare TimeoutError from here).
 
         Accepts:
           - a list   → wrapped into `{"command": <list>}`
@@ -42,15 +48,17 @@ class MpvIpc:
 
         line = (json.dumps(envelope) + "\n").encode("utf-8")
 
+        sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
         try:
-            sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
             sock.settimeout(MpvIpc._CONNECT_TIMEOUT_SECONDS)
             sock.connect(str(socket_path))
-        except (FileNotFoundError, ConnectionRefusedError, OSError) as exc:
+        except OSError as exc:  # FileNotFoundError, ConnectionRefusedError, a timeout
+            sock.close()
             raise MpvIpcError(f"mpv socket unavailable at {socket_path}: {exc}") from exc
 
+        read_timeout = MpvIpc._READ_TIMEOUT_SECONDS if timeout is None else timeout
         try:
-            sock.settimeout(MpvIpc._READ_TIMEOUT_SECONDS)
+            sock.settimeout(read_timeout)
             sock.sendall(line)
             buf = b""
             while True:
@@ -65,12 +73,16 @@ class MpvIpc:
                         continue
                     try:
                         obj = json.loads(raw.decode("utf-8"))
-                    except json.JSONDecodeError as exc:
+                    except (json.JSONDecodeError, UnicodeDecodeError) as exc:
                         raise MpvIpcError(f"bad JSON from mpv: {raw!r} ({exc})") from exc
                     # Reply lines carry request_id or error; event lines do not.
                     if "request_id" in obj or "error" in obj:
                         return obj
                     # Else it's an async event; keep reading.
+        except (socket.timeout, TimeoutError) as exc:
+            raise MpvIpcError(f"mpv did not reply in {read_timeout:g}s at {socket_path}") from exc
+        except OSError as exc:
+            raise MpvIpcError(f"mpv socket error at {socket_path}: {exc}") from exc
         finally:
             try:
                 sock.close()

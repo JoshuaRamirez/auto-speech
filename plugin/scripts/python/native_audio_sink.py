@@ -128,6 +128,9 @@ class NativeAudioSink:
 
     _TERMINATE_TIMEOUT = 0.5  # Seconds to wait for SIGTERM before escalating to SIGKILL
     _KILL_TIMEOUT = 0.5  # Seconds to wait after SIGKILL
+    # One progress read may wait this long for mpv's reply. A read that misses counts as
+    # "no progress" for the stall window (ADR-019); it never ends the line on its own.
+    _PROGRESS_READ_TIMEOUT = 1.0
 
     def __init__(
         self,
@@ -219,8 +222,8 @@ class NativeAudioSink:
         if path is None:
             return None
         try:
-            pos_reply = MpvIpc.send(["get_property", "time-pos"], path)
-            pause_reply = MpvIpc.send(["get_property", "pause"], path)
+            pos_reply = MpvIpc.send(["get_property", "time-pos"], path, timeout=self._PROGRESS_READ_TIMEOUT)
+            pause_reply = MpvIpc.send(["get_property", "pause"], path, timeout=self._PROGRESS_READ_TIMEOUT)
         except MpvIpcError:
             return None
         pos = pos_reply.get("data")
