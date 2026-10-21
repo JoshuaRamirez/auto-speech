@@ -117,14 +117,15 @@ def raise_own_priority() -> PriorityReport:
     user-interactive QoS."""
     notes: list[str] = []
     try:
-        nice = os.nice(0)
+        # getpriority, not nice(0): at nice 20 macOS's nice(0) fails EPERM.
+        nice = os.getpriority(os.PRIO_PROCESS, 0)
     except OSError:
         nice = 0
     restored = False
     if nice > 0:
         try:
             os.setpriority(os.PRIO_PROCESS, 0, 0)
-            restored = os.nice(0) == 0
+            restored = os.getpriority(os.PRIO_PROCESS, 0) == 0
         except (OSError, PermissionError) as exc:
             notes.append(f"nice not restored: {exc.__class__.__name__}")
     bg_cleared = False
