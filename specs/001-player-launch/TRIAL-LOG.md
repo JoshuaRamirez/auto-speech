@@ -249,3 +249,13 @@ else was read before this note.
 - D1 (push): the Desk's answer at 01:39 is no push. JoshuaRamirez/auto-speech is public, and
   the 76 unpushed commits go beyond this order, so that question goes to him through the
   Master Desk. T027 is therefore a local --no-ff merge only, with no PR.
+- T025, run 2 (after the review fixes, at 01:48): run_all.sh 60 ran, 0 failed.
+  test_ui_utility_client.py ran 16 tests.
+- T027: merged locally with --no-ff as 2f6eeb6 at 01:49:06. There is no PR and
+  nothing was pushed (the Desk's 01:39). Local main is now 91 commits ahead of origin/main;
+  origin/main also has one commit, 68f3635, that local main does not.
+
+## End (01:49:06)
+The trial is done. Spec to merge took 01:31:48 to 01:49, with a compaction between tasks/analyze
+and implement. The files alone were enough to build from after compaction: tasks.md's "Where
+things are today" carried it, and plan.md and spec.md were not reopened.
