@@ -67,7 +67,7 @@ from narrator_summarizer import Summarizer, load_summarizer
 from sound_yield import ABORTED, DEFAULT_MAX_WAIT_SECONDS, REASON_MEETING as HOLD_REASON_MEETING, SoundYieldGate
 from priority_arbiter import Priority, PriorityArbiter, QueueItem, QueueProxyFacade
 from speaker import Announcer, Plan
-from speech_history import SpeechHistory
+from speech_history import SpeechHistory, clean_origin_file
 from speech_player import PlayerLauncher
 from unix_ipc_server import _DaemonSocketServer, control_payload
 from speech_priority import (
@@ -530,6 +530,7 @@ class NarratorService:
             voice_id = str(payload.get("voice_id") or DEFAULT_VOICE_ID)
             speed = float(payload.get("speed", DEFAULT_SPEED))
             missed_id, hold = _replay_flags(payload)
+            origin_file = clean_origin_file(payload.get("origin_file"))
 
             cached_wav: Optional[Path] = None
             if source_hash and len(source_hash) == 64 and all(c in "0123456789abcdef" for c in source_hash):
@@ -550,6 +551,7 @@ class NarratorService:
                     speed=speed,
                     missed_id=missed_id,
                     hold=hold,
+                    origin_file=origin_file,
                 )
                 cache_hit = True
             else:
@@ -562,6 +564,7 @@ class NarratorService:
                     speed=speed,
                     missed_id=missed_id,
                     hold=hold,
+                    origin_file=origin_file,
                 )
                 cache_hit = False
 
@@ -1105,6 +1108,7 @@ class NarratorService:
             hold=item.hold,
             retries=item.retries + 1,
             line_text=text,
+            origin_file=item.origin_file,
         )
         try:
             self._tts_queue.put(again)
@@ -1678,6 +1682,7 @@ class NarratorService:
                 voice_id=str(voice_id),
                 speed=float(speed),
                 source_hash=getattr(item, "source_hash", None) if item is not None else None,
+                origin_file=getattr(item, "origin_file", None) if item is not None else None,
             )
         except Exception as exc:  # noqa: BLE001
             _log(f"history export error: {exc!r}")

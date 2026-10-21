@@ -77,7 +77,8 @@ module that owns it. Release-by-release history is in
   `~/.local/state/auto-speech/history/` with a JSON sidecar (text, spoken
   at, sender session and desk name, priority, duration, word timings in the
   UI Utility's `{w, start, end}` shape, estimated from word length and
-  pauses and marked `source: "estimate"` because `say` gives none). A line
+  pauses and marked `source: "estimate"` because `say` gives none; and the
+  desk-say file name, `origin_file`, when the caller passes it). A line
   set aside by the meeting hold or the sound yield is exported only once it
   plays. The store holds up to `max_gb` on disk (20 GB by default), the
   oldest pruned first after each export; `keep` (200) is how many of the

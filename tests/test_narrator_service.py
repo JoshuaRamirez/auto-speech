@@ -1275,6 +1275,11 @@ def test_dispatch_json_carries_the_replay_flags_into_the_queue_item() -> None:
     svc.dispatch_json({"action": "speak", "text": "Ordinary.", "priority": 3, "hold": "no"})
     item = svc._priority_arbiter.dequeue(block=False, unwrap=False)
     assert (item.missed_id, item.hold) == ("", True), "a non-boolean hold is ignored; absent id is empty"
+    assert item.origin_file == ""
+
+    svc.dispatch_json({"action": "speak", "text": "Desk here.", "priority": 2, "origin_file": "/p/2026-10-20-150900.674-desk.txt"})
+    item = svc._priority_arbiter.dequeue(block=False, unwrap=False)
+    assert item.origin_file == "2026-10-20-150900.674-desk.txt", "the desk-say file, its name only (ADR-020)"
 
 
 def test_status_reply_counts_the_missed_list() -> None:
@@ -1559,6 +1564,18 @@ def test_a_heard_line_is_exported_with_its_sidecar_and_handed_to_the_player() ->
     assert [w["w"] for w in sc["word_timings"]["words"]] == ["The", "build", "is", "green."]
     assert line.wav.is_file(), "the history keeps its own copy; the staging wav is deleted"
     assert [x.id for x in svc._player.lines] == [line.id]
+    assert sc["origin_file"] is None, "a line no desk-say file names"
+
+
+def test_a_desk_say_line_keeps_its_file_name_in_the_sidecar() -> None:
+    from sound_yield import CLEAR, HoldOutcome
+
+    sink = _HoldSink(HoldOutcome(CLEAR))
+    svc = _history_service(sink)
+    svc._speak("Desk here.", item=_item("Desk here.", priority=2, session_id="sess-d", origin_file="2026-10-20-150900.674-desk.txt"))
+    [line] = svc._history.load()
+    assert line.sidecar["origin_file"] == "2026-10-20-150900.674-desk.txt"
+    assert line.sidecar["sender"]["session_id"] == "sess-d"
 
 
 def test_a_line_set_aside_after_the_longest_wait_is_not_exported() -> None:
@@ -1681,6 +1698,7 @@ def main() -> int:
     test_narration_without_an_item_carries_its_session,
     test_status_reply_reports_the_speaker,
     test_a_heard_line_is_exported_with_its_sidecar_and_handed_to_the_player,
+    test_a_desk_say_line_keeps_its_file_name_in_the_sidecar,
     test_a_line_set_aside_after_the_longest_wait_is_not_exported,
     test_a_line_set_aside_for_a_meeting_is_not_exported,
     test_a_held_line_is_exported_once_it_plays,

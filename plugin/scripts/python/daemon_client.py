@@ -118,11 +118,14 @@ class DaemonClient:
         speed: float = DEFAULT_SPEED,
         missed_id: Optional[str] = None,
         hold: bool = True,
+        origin_file: Optional[str] = None,
     ) -> DaemonResponse:
         """Submits speech request to daemon priority queue (defaults mirror config_constants.py).
 
         `missed_id` names the missed-list line this replays (the daemon
-        clears it once played); `hold=False` plays over other apps' sound."""
+        clears it once played); `hold=False` plays over other apps' sound;
+        `origin_file` names the file the line came from (desk-say's pending
+        file), kept in the history sidecar (ADR-020)."""
         payload: dict[str, Any] = {
             "action": "speak",
             "text": text,
@@ -136,6 +139,8 @@ class DaemonClient:
             payload["missed_id"] = missed_id
         if not hold:
             payload["hold"] = False
+        if origin_file:
+            payload["origin_file"] = origin_file
         return self._send_request(payload)
 
     def play_cache(

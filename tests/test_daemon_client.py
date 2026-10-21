@@ -131,6 +131,15 @@ class TestDaemonClientUnitMethods(unittest.TestCase):
         self.assertNotIn("hold", mock_send.call_args[0][0])
 
     @mock.patch.object(DaemonClient, "_send_request")
+    def test_speak_carries_the_origin_file_only_when_set(self, mock_send: mock.MagicMock) -> None:
+        client = DaemonClient()
+        client.speak("Desk here.", origin_file="2026-10-20-150900.674-desk.txt")
+        self.assertEqual(mock_send.call_args[0][0]["origin_file"], "2026-10-20-150900.674-desk.txt")
+        mock_send.reset_mock()
+        client.speak("A direct call.")
+        self.assertNotIn("origin_file", mock_send.call_args[0][0])
+
+    @mock.patch.object(DaemonClient, "_send_request")
     def test_speak_payload_custom_args(self, mock_send: mock.MagicMock) -> None:
         client = DaemonClient()
         client.speak(
