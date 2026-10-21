@@ -97,3 +97,15 @@ it in order. Every SKILL.md's extension-hook checks were skipped as written ("if
    `auto-speech history list`, and the player shows the newest line.
    **Source:** contract `hello` → `"pieces":["player"]`, `open` takes one `clip`.
    **EMPTY**: the answer was already on disk (it added one out-of-scope edge case line).
+
+## 4. plan — 01:34:48 → 01:36:07
+- Ran `.specify/scripts/bash/setup-plan.sh --json`, which copied the plan template to `plan.md`.
+- Wrote `plan.md` (summary, technical context, a Constitution Check against principles I to V,
+  passing before and after design, structure), `research.md` (R1 to R8: transport, launch, off
+  the speech path, connection life, the `open` request, the hold twice, status across processes,
+  tests), `data-model.md` (heard line, outcomes, panel, connection),
+  `contracts/player-handover.md` (the subset of contract v1 used), and `quickstart.md`.
+- One finding from planning that the spec didn't hold: the CLI's `history status` runs in another
+  process from the daemon, so the last outcome needs a state file (R7).
+- The skill's "dispatch research agents" was done inline: every question was answered from the
+  contract and the code, with no agents.
