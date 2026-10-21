@@ -120,3 +120,54 @@ it in order. Every SKILL.md's extension-hook checks were skipped as written ("if
   today" section names the signatures, lines and call sites the tasks touch.
 - Found while writing T027: local main is 76 commits ahead of `origin/main`, so a PR would carry
   all of them. It goes to the Desk as a question; nothing is pushed until then.
+
+## 6. analyze — 01:37:41 → 01:38:10
+- Ran `check-prerequisites.sh --json --require-spec --require-tasks --include-tasks` (all
+  present). Read-only pass over spec, plan, tasks and the constitution. The skill writes no files;
+  the report is kept here so it survives the compaction. No remediation applied (the skill asks
+  for approval first). The items marked "apply in implement" are folded into the tasks they touch
+  during implementation.
+
+### Specification Analysis Report
+
+| ID | Category | Severity | Location | Summary | Recommendation |
+|----|----------|----------|----------|---------|----------------|
+| D1 | Constitution | HIGH | tasks.md T027; constitution "Standing limits" | Opening the PR pushes the branch, and with it 76 local main commits not on origin/main | Ask the Desk before any push (already in T027); not a spec defect |
+| U1 | Underspecification | MEDIUM | tasks.md T020 | The task text is garbled ("a player whose after_line sleeps 2 s is not what the daemon calls…") | Apply in implement: "`_heard` with the real launcher (player on, installed, never-answering client) returns in < 50 ms" |
+| G1 | Coverage | MEDIUM | spec SC-001; tasks T012/T013 | The 2 s (running) and 10 s (launched) bounds have no assertion | Apply in implement: T012 asserts `opened` within 2 s; the 10 s bound is LAUNCH_WAIT_SECONDS (T006), checked by T013's "no socket" path |
+| G2 | Coverage | LOW | spec Edge Cases (pruned WAV, empty words) | Covered by T009's logic, no test | Apply in implement: two cases in T013 (missing WAV → `skipped`; empty words → `open` with `[]`) |
+| G3 | Coverage | LOW | spec FR-008 | No task: the setting is unchanged by design | None; T021/T022 cover its status surface |
+| A1 | Ambiguity | LOW | spec US3 scenario 1 "a short bound" | Not quantified in the spec | Already quantified in the plan/research (5 s reply, 10 s launch); no change |
+
+**Coverage summary**
+
+| Requirement | Has task? | Task IDs |
+|---|---|---|
+| FR-001 | yes | T008, T009, T012, T014 |
+| FR-002 | yes | T003, T004, T009, T012 |
+| FR-003 | yes | T003, T009, T013 |
+| FR-004 | yes | T009, T012, T019 |
+| FR-005 | yes | T008, T016, T018, T020 |
+| FR-006 | yes | T010, T016, T017, T021 |
+| FR-007 | yes | T001, T002, T004 |
+| FR-008 | by design | (T021, T022) |
+| SC-001 | partly | T012, T013 (+G1) |
+| SC-002 | yes | T014, T015 |
+| SC-003 | yes | T016, T020 |
+| SC-004 | yes | T001, T025 |
+
+**Constitution alignment**: I to V pass. The only open item is D1, the push, which is a question for
+the Desk and not a defect in the artifacts.
+**Unmapped tasks**: none (T023 to T027 are polish, review and delivery).
+**Metrics**: 8 FRs + 4 SCs = 12 requirements; 27 tasks; coverage 11/12 with a task (FR-008 needs
+none); 1 ambiguity; 0 duplications; 0 critical.
+
+**Next actions**: no CRITICAL; proceed to implement after compaction, folding in U1, G1 and G2;
+D1 to the Desk.
+
+## STOP: ready for compaction (01:38:10)
+- Everything needed to go on is on disk: spec.md, plan.md, research.md, data-model.md,
+  contracts/player-handover.md, quickstart.md, tasks.md (with "Where things are today"), and this
+  log with the analyze report and its items to fold in.
+- Branch `feat/player-launch` in `.worktrees/player-launch`; `.venv` is an untracked symlink to
+  the main checkout's venv (never staged).
