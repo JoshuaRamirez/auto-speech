@@ -103,6 +103,14 @@ The Chrome extension under `chrome-extension/` is versioned independently
   HOME to a temporary directory at import.
 
 ### Fixed
+- **A desk-say line's sidecar names its file and its session.** None of the
+  113 live sidecars carried `origin_file` or `sender.session_id`, which
+  Spoken Transcript threads on (its ADR-003, ADR-006): desk-speaker
+  (the desk repo) called `speak(text, priority)` alone. desk-speaker now records
+  the writing session when desk-say runs, and sends both fields (the desk repo
+  c89779488). auto-speech already carried them from the socket to the
+  sidecar; `test_a_desk_say_request_reaches_the_sidecar_with_its_file_and_session`
+  now holds that whole path. With a session, `sender.name` is filled too.
 - **The history's text is the line as heard, without `say` markup.** The
   desk's lines carry `say` commands (`[[rate 180]] … [[slnc 600]] …`), which
   went into the sidecar's `text` and were counted as words in the timing
