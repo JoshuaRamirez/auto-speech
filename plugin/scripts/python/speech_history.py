@@ -209,15 +209,58 @@ SENTENCE_PAUSE_CHARS = 6.0  # a sentence end weighs like six more letters of spe
 CLAUSE_PAUSE_CHARS = 3.0
 
 
+# `say`'s embedded commands, e.g. [[rate 180]] or [[slnc 600]]: heard as
+# speed or silence, never as words.
+_SAY_COMMAND = re.compile(r"\[\[\s*([A-Za-z]+)\s*([^\]]*?)\s*\]\]")
+
+
+def strip_say_markup(text: str) -> str:
+    """`text` as heard: `say`'s [[…]] commands removed and the spaces
+    they leave closed up. Text without a command is returned as it is."""
+    text = text or ""
+    if not _SAY_COMMAND.search(text):
+        return text
+    out = _SAY_COMMAND.sub(" ", text)
+    out = re.sub(r"[ \t]*\n[ \t]*", "\n", out)
+    out = re.sub(r"[ \t]{2,}", " ", out)
+    return out.strip()
+
+
+def _words_and_silences(text: str) -> tuple[list[str], dict[int, float]]:
+    """The words of `text` without `say` commands, and the seconds of
+    [[slnc N]] silence after word i (-1: before the first word)."""
+    words: list[str] = []
+    silences: dict[int, float] = {}
+    pos = 0
+    for m in _SAY_COMMAND.finditer(text or ""):
+        words += _WORD.findall(text[pos:m.start()])
+        pos = m.end()
+        if m.group(1).lower() == "slnc":
+            try:
+                ms = float(m.group(2))
+            except ValueError:
+                continue
+            if ms > 0:
+                key = len(words) - 1
+                silences[key] = silences.get(key, 0.0) + ms / 1000.0
+    words += _WORD.findall((text or "")[pos:])
+    return words, silences
+
+
 def estimate_word_timings(text: str, duration: float) -> list[dict[str, Any]]:
     """Each word of `text` with an estimated start and end in seconds, in
     the UI Utility's shape (`{"w", "start", "end"}`). A word's share of the
     clip is its letters plus the pause after it; the pause is silence, so a
-    word ends before the next one starts. Empty when there is no text or no
-    duration."""
-    words = _WORD.findall(text or "")
+    word ends before the next one starts. `say` commands are not words: a
+    [[slnc N]] is N ms of silence at its place, the rest are dropped. Empty
+    when there is no text or no duration."""
+    words, silences = _words_and_silences(text)
     if not words or not duration or duration <= 0:
         return []
+    silences = {i: sec for i, sec in silences.items() if i < len(words) - 1}  # trailing silence ends the clip anyway
+    fixed = sum(silences.values())
+    if fixed >= duration * 0.9:  # silences that leave no room to speak: do not trust them
+        silences, fixed = {}, 0.0
     spans: list[tuple[str, float, float]] = []
     for w in words:
         speech = float(max(1, len(re.sub(r"\W", "", w)) or len(w)))
@@ -230,14 +273,14 @@ def estimate_word_timings(text: str, duration: float) -> list[dict[str, Any]]:
         spans.append((w, speech, pause))
     spans[-1] = (spans[-1][0], spans[-1][1], 0.0)  # nothing to pause before after the last word
     total = sum(s + p for _, s, p in spans)
-    scale = float(duration) / total
+    scale = (float(duration) - fixed) / total
     out: list[dict[str, Any]] = []
-    t = 0.0
-    for w, speech, pause in spans:
+    t = silences.get(-1, 0.0)
+    for i, (w, speech, pause) in enumerate(spans):
         start = t
         end = start + speech * scale
         out.append({"w": w, "start": round(start, 3), "end": round(end, 3)})
-        t = end + pause * scale
+        t = end + pause * scale + silences.get(i, 0.0)
     out[-1]["end"] = round(float(duration), 3)
     return out
 
@@ -374,7 +417,7 @@ class SpeechHistory:
         sidecar = {
             "version": SIDECAR_VERSION,
             "id": line_id,
-            "text": text or "",
+            "text": strip_say_markup(text),
             "spoken_at": local.isoformat(timespec="milliseconds"),
             "spoken_at_epoch": round(when, 3),
             "sender": {"session_id": session_id or None, "name": sender or None},
