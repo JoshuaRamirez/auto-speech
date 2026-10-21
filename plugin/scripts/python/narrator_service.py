@@ -392,6 +392,7 @@ class NarratorService:
             self._tail_events()
         finally:
             self._stop_socket_server()
+            self._close_player()
             # If neither shutdown path recorded a reason (e.g. tail_events
             # raised), treat it as a signal-style shutdown so the machine
             # reaches a legal pre-rest state before NOT_RUNNING.
@@ -1645,6 +1646,17 @@ class NarratorService:
         return True
 
     # -- the speech history (ADR-020) ---------------------------------------------
+
+    def _close_player(self) -> None:
+        """Stop the player launcher's worker and close its connection; the
+        panel stays open for him (ADR-021). Never raises."""
+        close = getattr(getattr(self, "_player", None), "close", None)
+        if close is None:
+            return
+        try:
+            close()
+        except Exception as exc:  # noqa: BLE001
+            _log(f"player close error: {exc!r}")
 
     def _hold_stands(self) -> bool:
         """True while a meeting or another app's sound holds speech; the

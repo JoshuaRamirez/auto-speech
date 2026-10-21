@@ -88,11 +88,14 @@ module that owns it. Release-by-release history is in
   player-off]`, the MCP tool `history` (same actions, `count`, `gb`,
   `as_json`) and `[history]` in
   `~/.config/auto-speech/history.toml` (`speech_history.py`).
-- **Player launcher, default off** (ADR-020): with `[history] player = true`
-  the daemon hands each exported line to the launcher, which never opens
-  during a hold and does nothing while the UI Utility is not installed;
-  the contract wiring comes with the utility's published contract
-  (`speech_player.py`).
+- **Player launcher, default off** (ADR-020, ADR-021): with `[history] player = true`
+  the daemon hands each exported line to the UI Utility's player by its
+  contract v1 (`hello`, `open` on one panel with the WAV and its words,
+  ready to play, never playing on its own), launching the utility in the
+  background when needed. Never during a hold, nothing while the utility is
+  not installed, never on the speech path (a worker thread, newest line
+  wins); `history status` shows the last outcome (`speech_player.py`,
+  `ui_utility_client.py`).
 
 ## Who is talking
 - **The desk is named only when the speaker changes** (v0.5.0, ADR-016):

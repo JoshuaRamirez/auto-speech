@@ -691,7 +691,7 @@ def handle_history(args: argparse.Namespace, store: Any | None = None, history: 
         as_json=bool(getattr(args, "json", False)),
         store=store,
         history=history,
-        player_note=lambda settings: PlayerLauncher(store).note(settings),
+        player_note=lambda settings: PlayerLauncher(store, start_worker=False).note(settings),
     )
     if not result.ok:
         print(result.text, file=sys.stderr)
