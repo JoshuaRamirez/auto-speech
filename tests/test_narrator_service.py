@@ -1275,6 +1275,11 @@ def test_dispatch_json_carries_the_replay_flags_into_the_queue_item() -> None:
     svc.dispatch_json({"action": "speak", "text": "Ordinary.", "priority": 3, "hold": "no"})
     item = svc._priority_arbiter.dequeue(block=False, unwrap=False)
     assert (item.missed_id, item.hold) == ("", True), "a non-boolean hold is ignored; absent id is empty"
+    assert item.origin_file == ""
+
+    svc.dispatch_json({"action": "speak", "text": "Desk here.", "priority": 2, "origin_file": "/p/2026-10-20-150900.674-desk.txt"})
+    item = svc._priority_arbiter.dequeue(block=False, unwrap=False)
+    assert item.origin_file == "2026-10-20-150900.674-desk.txt", "the desk-say file, its name only (ADR-020)"
 
 
 def test_status_reply_counts_the_missed_list() -> None:
@@ -1499,6 +1504,137 @@ def test_stop_event_flushes_classifier_with_session_id() -> None:
     svc._classifier.flush.assert_called_with("session-123")
 
 
+# --- the speech history: a heard line is exported, a set-aside one is not (ADR-020) ---
+
+
+class _WavSynth(_MockSynthesizer):
+    """Writes a real one-second WAV, so the export can read its duration."""
+
+    def synthesize_one(self, text: str, profile, out_path: Path) -> bool:
+        import wave
+
+        self.synthesized.append((text, out_path))
+        with wave.open(str(out_path), "wb") as w:
+            w.setnchannels(1)
+            w.setsampwidth(2)
+            w.setframerate(24000)
+            w.writeframes(b"\x00\x00" * 24000)
+        return True
+
+
+class _RecordingPlayer:
+    def __init__(self) -> None:
+        self.lines: list = []
+
+    def after_line(self, line) -> str:
+        self.lines.append(line)
+        return "off"
+
+
+def _history_service(sink, *, names=()):
+    from speech_history import HistoryStore, SpeechHistory
+
+    svc = _meeting_service(sink, names=names)
+    svc._synth = _WavSynth()
+    tmp = Path(tempfile.mkdtemp(prefix="auto-speech-history-"))
+    svc._history = SpeechHistory(tmp / "history", store=HistoryStore(tmp / "history.toml"))
+    svc._player = _RecordingPlayer()
+    speaker = MagicMock()
+    speaker.plan.return_value = None
+    speaker.name_for.return_value = "Master Desk"
+    svc._speaker = speaker
+    return svc
+
+
+def test_a_heard_line_is_exported_with_its_sidecar_and_handed_to_the_player() -> None:
+    from sound_yield import CLEAR, HoldOutcome
+
+    sink = _HoldSink(HoldOutcome(CLEAR))
+    svc = _history_service(sink)
+    svc._speak("The build is green.", item=_item("The build is green.", priority=3, session_id="sess-m"))
+
+    assert len(sink.played) == 1
+    [line] = svc._history.load()
+    sc = line.sidecar
+    assert sc["text"] == "The build is green."
+    assert sc["sender"] == {"session_id": "sess-m", "name": "Master Desk"}
+    assert (sc["priority"], sc["priority_name"]) == (3, "autoplay")
+    assert sc["duration_seconds"] == 1.0
+    assert sc["word_timings"]["source"] == "estimate"
+    assert [w["w"] for w in sc["word_timings"]["words"]] == ["The", "build", "is", "green."]
+    assert line.wav.is_file(), "the history keeps its own copy; the staging wav is deleted"
+    assert [x.id for x in svc._player.lines] == [line.id]
+    assert sc["origin_file"] is None, "a line no desk-say file names"
+
+
+def test_a_desk_say_line_keeps_its_file_name_in_the_sidecar() -> None:
+    from sound_yield import CLEAR, HoldOutcome
+
+    sink = _HoldSink(HoldOutcome(CLEAR))
+    svc = _history_service(sink)
+    svc._speak("Desk here.", item=_item("Desk here.", priority=2, session_id="sess-d", origin_file="2026-10-20-150900.674-desk.txt"))
+    [line] = svc._history.load()
+    assert line.sidecar["origin_file"] == "2026-10-20-150900.674-desk.txt"
+    assert line.sidecar["sender"]["session_id"] == "sess-d"
+
+
+def test_a_line_set_aside_after_the_longest_wait_is_not_exported() -> None:
+    from sound_yield import EXPIRED, HoldOutcome
+
+    sink = _HoldSink(HoldOutcome(EXPIRED, 180.0, ("Music (pid 7)",)), yielded=True)
+    svc = _history_service(sink)
+    svc._speak("Held too long.", item=_item("Held too long."))
+    assert sink.played == []
+    assert svc._history.load() == []
+    assert svc._player.lines == []
+    assert svc._missed.counts()["missed"] == 1
+
+
+def test_a_line_set_aside_for_a_meeting_is_not_exported() -> None:
+    from sound_yield import CLEAR, HoldOutcome
+
+    sink = _HoldSink(HoldOutcome(CLEAR))
+    svc = _history_service(sink, names=("MSTeams (pid 601)",))
+    svc._speak("During the call.", item=_item("During the call."))
+    assert svc._history.load() == []
+    assert svc._player.lines == []
+
+
+def test_a_held_line_is_exported_once_it_plays() -> None:
+    from sound_yield import RESUMED, HoldOutcome
+
+    sink = _HoldSink(HoldOutcome(RESUMED, 7.0, ("Music (pid 7)",)))
+    svc = _history_service(sink)
+    svc._speak("After the song.", item=_item("After the song."))
+    assert [x.text for x in svc._history.load()] == ["After the song."]
+
+
+def test_an_export_failure_never_stops_speech() -> None:
+    from sound_yield import CLEAR, HoldOutcome
+
+    sink = _HoldSink(HoldOutcome(CLEAR))
+    svc = _history_service(sink)
+
+    def broken(*a, **kw):
+        raise OSError("disk full")
+
+    svc._history.export = broken
+    svc._speak("Still heard.", item=_item("Still heard."))
+    assert len(sink.played) == 1
+    assert svc._player.lines == []
+
+
+def test_the_player_is_told_a_hold_stands_from_the_gate() -> None:
+    sink = _HoldSink()
+    svc = _history_service(sink)
+    svc._yield_gate.assess.return_value = MagicMock(hold=True)
+    assert svc._hold_stands() is True
+    svc._yield_gate.assess.return_value = MagicMock(hold=False)
+    assert svc._hold_stands() is False
+    svc._yield_gate = None
+    assert svc._hold_stands() is False
+
+
 def main() -> int:
     tests = [
         test_existing_pid_returns_none_when_pid_file_absent,
@@ -1561,6 +1697,13 @@ def main() -> int:
     test_a_line_set_aside_while_held_does_not_move_the_speaker,
     test_narration_without_an_item_carries_its_session,
     test_status_reply_reports_the_speaker,
+    test_a_heard_line_is_exported_with_its_sidecar_and_handed_to_the_player,
+    test_a_desk_say_line_keeps_its_file_name_in_the_sidecar,
+    test_a_line_set_aside_after_the_longest_wait_is_not_exported,
+    test_a_line_set_aside_for_a_meeting_is_not_exported,
+    test_a_held_line_is_exported_once_it_plays,
+    test_an_export_failure_never_stops_speech,
+    test_the_player_is_told_a_hold_stands_from_the_gate,
         test_tail_events_idle_shutdown_deferred_when_busy,
         test_stop_event_flushes_classifier_with_session_id,
     ]

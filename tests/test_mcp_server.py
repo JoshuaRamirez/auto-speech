@@ -124,7 +124,7 @@ def test_ping() -> None:
     assert s.handle_line(_req("ping"))["result"] == {}
 
 
-def test_tools_list_advertises_all_nine_tools() -> None:
+def test_tools_list_advertises_all_ten_tools() -> None:
     s, _ = _server()
     tools = s.handle_line(_req("tools/list"))["result"]["tools"]
     tool_names = [t["name"] for t in tools]
@@ -137,6 +137,7 @@ def test_tools_list_advertises_all_nine_tools() -> None:
         "sound_yield",
         "missed",
         "speaker",
+        "history",
         "doctor",
     ]
     assert tool_names == expected_names
@@ -1522,13 +1523,84 @@ def test_sound_yield_tool_schema() -> None:
     assert schema["additionalProperties"] is False
 
 
+def _history_server():
+    from speech_history import HistoryStore, SpeechHistory
+
+    tmp = Path(tempfile.mkdtemp(prefix="auto-speech-mcp-history-"))
+    store = HistoryStore(tmp / "history.toml")
+    history = SpeechHistory(tmp / "history", store=store)
+    srv, _ = _server(history_store=store, speech_history=history)
+    return srv, store, history, tmp
+
+
+def _history_wav(tmp: Path) -> Path:
+    import wave
+
+    path = tmp / "src.wav"
+    with wave.open(str(path), "wb") as w:
+        w.setnchannels(1)
+        w.setsampwidth(2)
+        w.setframerate(24000)
+        w.writeframes(b"\x00\x00" * 12000)
+    return path
+
+
+def test_history_requires_a_known_action() -> None:
+    srv, *_ = _history_server()
+    res = _call_tool(srv, "history", {"action": "shout"})
+    assert res["result"]["isError"] is True
+    assert "list, status, on, off, max-gb, keep, player-on, player-off" in res["result"]["content"][0]["text"]
+    assert _call_tool(srv, "history", {"action": "max-gb", "gb": "huge"})["result"]["isError"] is True
+    assert _call_tool(srv, "history", {"action": "keep", "count": "ten"})["result"]["isError"] is True
+    assert _call_tool(srv, "history", {"as_json": "yes"})["result"]["isError"] is True
+
+
+def test_history_list_is_the_default_and_matches_the_cli_text() -> None:
+    srv, store, history, tmp = _history_server()
+    assert _call_tool(srv, "history", {})["result"]["content"][0]["text"] == "speech history: nothing played yet"
+    line = history.export(_history_wav(tmp), text="Hello from the desk.", sender="Master Desk")
+    text = _call_tool(srv, "history", {})["result"]["content"][0]["text"]
+    assert text.startswith("speech history: the last 1 of 1 line, newest first")
+    assert "Hello from the desk." in text
+    data = json.loads(_call_tool(srv, "history", {"action": "list", "as_json": True})["result"]["content"][0]["text"])
+    assert data["lines"][0]["wav_path"] == str(line.wav)
+
+
+def test_history_keep_and_player_write_the_shared_config() -> None:
+    srv, store, history, tmp = _history_server()
+    res = _call_tool(srv, "history", {"action": "keep", "count": 30})
+    assert res["result"]["isError"] is False
+    assert "keep: the player's view shows the newest 30 lines" in res["result"]["content"][0]["text"]
+    assert store.load().keep == 30
+    res = _call_tool(srv, "history", {"action": "max-gb", "gb": 5})
+    assert res["result"]["isError"] is False
+    assert "max_gb: 5 GB on disk" in res["result"]["content"][0]["text"]
+    assert store.load().max_gb == 5.0
+    assert _call_tool(srv, "history", {"action": "max-gb"})["result"]["isError"] is True
+    assert _call_tool(srv, "history", {"action": "keep"})["result"]["isError"] is True
+    _call_tool(srv, "history", {"action": "player-on"})
+    assert store.load().player is True
+    _call_tool(srv, "history", {"action": "off"})
+    assert store.load().enabled is False
+
+
+def test_history_tool_schema() -> None:
+    srv, *_ = _history_server()
+    tools = {t["name"]: t for t in srv.handle_line(_req("tools/list"))["result"]["tools"]}
+    schema = tools["history"]["inputSchema"]
+    assert schema["properties"]["action"]["enum"] == ["list", "status", "on", "off", "max-gb", "keep", "player-on", "player-off"]
+    assert schema["properties"]["gb"]["type"] == "number"
+    assert schema["properties"]["count"]["type"] == "integer"
+    assert schema["additionalProperties"] is False
+
+
 TESTS = [
     # Group 1: Protocol & Advertisement
     test_initialize_echoes_supported_protocol,
     test_initialize_unknown_protocol_falls_back_to_latest,
     test_notification_gets_no_response,
     test_ping,
-    test_tools_list_advertises_all_nine_tools,
+    test_tools_list_advertises_all_ten_tools,
     # Group 2: Backward Compatibility of speak
     test_speak_queues_text_verbatim,
     test_speak_rejects_bad_text,
@@ -1607,6 +1679,10 @@ TESTS = [
     test_speaker_status_is_the_default_and_matches_the_cli_text,
     test_speaker_off_gap_name_forget_and_who,
     test_speaker_tool_schema,
+    test_history_requires_a_known_action,
+    test_history_list_is_the_default_and_matches_the_cli_text,
+    test_history_keep_and_player_write_the_shared_config,
+    test_history_tool_schema,
 ]
 
 
