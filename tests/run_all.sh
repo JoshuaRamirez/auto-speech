@@ -51,6 +51,16 @@ echo "[isolation] AUTO_SPEECH_MEETING_FILE=$AUTO_SPEECH_MEETING_FILE"
 echo "[isolation] AUTO_SPEECH_HISTORY_DIR=$AUTO_SPEECH_HISTORY_DIR"
 echo "[isolation] AUTO_SPEECH_HISTORY_CONFIG=$AUTO_SPEECH_HISTORY_CONFIG"
 echo "[isolation] AUTO_SPEECH_START_VIA_LAUNCHD=never"
+# No test starts the real UI Utility: a silent copy a test started would stay
+# as his copy (its contract: "A copy already running keeps its mode"). The
+# player launcher talks to a stand-in on this private socket, and never runs
+# a launch command (ADR-021).
+export UI_UTILITY_SOCK="$STATE_DIR/ui-utility.sock"
+export UI_UTILITY_SILENT=1
+export AUTO_SPEECH_PLAYER_LAUNCH=never
+echo "[isolation] UI_UTILITY_SOCK=$UI_UTILITY_SOCK"
+echo "[isolation] UI_UTILITY_SILENT=1"
+echo "[isolation] AUTO_SPEECH_PLAYER_LAUNCH=never"
 # No test plays sound (his 2026-10-20 10:40 "turn off the speech tests"): mpv goes to
 # its null output unless AUTO_SPEECH_TEST_REAL_AUDIO=1 is set on purpose. Each test
 # that can reach mpv also sets this itself (tests/quiet_audio.py), so a bare run is silent too.
@@ -138,6 +148,7 @@ CHEAP=(
     test_missed_speech.py
     test_speaker.py
     test_speech_history.py
+    test_ui_utility_client.py
     test_speak_client.py
     test_cli_dispatcher.py
     test_ipc_command_key.py
