@@ -333,11 +333,11 @@ class NarratorService:
         self._sink_takes_hold_kwargs: Optional[bool] = None
         # The meeting watch (ADR-018): the main loop asks the gate every
         # MEETING_POLL_S whether he is in a meeting, and when one ends with
-        # lines set aside, queues one summary line. 0.0 = count every meeting
-        # line on the list, so lines from before a restart are summarised too.
+        # lines set aside, queues one summary line. Which lines a summary has
+        # counted is marked on the missed list itself, so a restart never
+        # says the same summary again (#m1021-1615-4497).
         self._meeting_active: Optional[bool] = None
         self._meeting_checked_at: float = 0.0
-        self._meeting_summary_after: float = 0.0
         if tts_executor is not None:
             self._tts_executor = tts_executor
         elif synth is not None or engine is not None:
@@ -367,6 +367,9 @@ class NarratorService:
                 settled = missed.settle_held(REASON_RESTART)
                 if settled:
                     _log(f"missed: {settled} line(s) were still held when the last daemon stopped; now on the missed list")
+                expired = missed.expire()
+                if expired:
+                    _log(f"missed: {expired} line(s) older than a day left the missed list")
             except Exception as exc:  # noqa: BLE001
                 _log(f"missed list settle error: {exc!r}")
         signal.signal(signal.SIGTERM, self._on_signal)
@@ -1462,10 +1465,11 @@ class NarratorService:
 
     def _watch_meeting(self, now: Optional[float] = None) -> Optional[str]:
         """Called from the main loop. Notes when a meeting begins and ends;
-        when one ends (or at the first look after a restart) with lines set
-        aside for a meeting, queues one summary line at the narration
-        priority, through the normal gate. Returns the summary text when one
-        was queued, so a test can see it."""
+        when one ends (or at the first look after a restart) with meeting
+        lines no summary has counted yet, queues one summary line with their
+        count, at the narration priority, through the normal gate. Each line
+        is counted once, ever: the mark is on the missed list. Returns the
+        summary text when one was queued, so a test can see it."""
         now = time.time() if now is None else now
         if now - float(getattr(self, "_meeting_checked_at", 0.0) or 0.0) < MEETING_POLL_S:
             return None
@@ -1480,15 +1484,14 @@ class NarratorService:
         if before is True:
             _log("meeting: ended")
         missed = getattr(self, "_missed", None)
-        if missed is None:
+        if missed is None or not self._meeting_summary_wanted():
             return None
         try:
-            pending = missed.missed_in_meeting(since=float(getattr(self, "_meeting_summary_after", 0.0) or 0.0))
+            pending = missed.take_meeting_summary()
         except Exception as exc:  # noqa: BLE001
             _log(f"missed list read error: {exc!r}")
             return None
-        self._meeting_summary_after = now
-        if not pending or not self._meeting_summary_wanted():
+        if not pending:
             return None
         n = len(pending)
         text = (

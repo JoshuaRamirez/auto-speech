@@ -41,6 +41,11 @@ REASON_MEETING = "meeting"  # set aside at once while he was in a meeting
 
 ACTIONS = ("list", "play", "clear")
 
+# A missed line older than this leaves the list by itself, so the list holds
+# what is still news instead of piling up (#m1021-1615-4497). Held lines are
+# in the queue and never expire.
+MAX_AGE_S = 24 * 3600.0
+
 
 def default_missed_path() -> Path:
     override = os.environ.get(MISSED_FILE_ENV)
@@ -70,6 +75,7 @@ class MissedLine:
     session_id: Optional[str] = None
     voice_id: str = ""
     speed: float = 1.0
+    announced: bool = False  # a meeting line already counted in a spoken summary
 
     def to_dict(self) -> dict[str, Any]:
         d = asdict(self)
@@ -92,6 +98,7 @@ class MissedLine:
             session_id=str(d["session_id"]) if d.get("session_id") else None,
             voice_id=str(d.get("voice_id") or ""),
             speed=float(d.get("speed") or 1.0),
+            announced=bool(d.get("announced")),
         )
 
     @property
@@ -108,9 +115,18 @@ class MissedList:
     read-modify-write, so the daemon and a CLI `--clear` cannot lose each
     other's change; every write is atomic (tmp + rename)."""
 
-    def __init__(self, path: Path | str | None = None, *, clock: Callable[[], float] = time.time) -> None:
+    def __init__(
+        self,
+        path: Path | str | None = None,
+        *,
+        clock: Callable[[], float] = time.time,
+        max_age_s: float = MAX_AGE_S,
+    ) -> None:
+        if max_age_s <= 0:
+            raise ValueError("max_age_s must be positive")
         self._path = Path(path) if path is not None else default_missed_path()
         self._clock = clock
+        self._max_age_s = float(max_age_s)
 
     @property
     def path(self) -> Path:
@@ -118,7 +134,7 @@ class MissedList:
 
     # -- storage -------------------------------------------------------------
 
-    def _read(self) -> list[MissedLine]:
+    def _read(self, *, include_expired: bool = False) -> list[MissedLine]:
         try:
             raw = self._path.read_text(encoding="utf-8")
         except FileNotFoundError:
@@ -132,7 +148,15 @@ class MissedList:
         items = data.get("lines", []) if isinstance(data, dict) else []
         lines = [MissedLine.from_dict(x) for x in items if isinstance(x, dict)]
         lines.sort(key=lambda m: m.queued_at)
-        return lines
+        return lines if include_expired else [m for m in lines if not self._expired(m)]
+
+    def _expired(self, m: MissedLine) -> bool:
+        """A missed line whose latest moment (asked for, or set aside) is
+        older than the longest age. Every read leaves it out, and the next
+        write drops it from the file."""
+        if m.status != MISSED:
+            return False
+        return max(m.queued_at, m.missed_at or 0.0) < self._clock() - self._max_age_s
 
     def _write(self, lines: Iterable[MissedLine]) -> None:
         self._path.parent.mkdir(parents=True, exist_ok=True)
@@ -144,13 +168,13 @@ class MissedList:
         tmp.write_text(body + "\n", encoding="utf-8")
         os.replace(tmp, self._path)
 
-    def _mutate(self, fn: Callable[[list[MissedLine]], Any]) -> Any:
+    def _mutate(self, fn: Callable[[list[MissedLine]], Any], *, include_expired: bool = False) -> Any:
         self._path.parent.mkdir(parents=True, exist_ok=True)
         lock_path = self._path.with_name(self._path.name + ".lock")
         with open(lock_path, "a+", encoding="utf-8") as lock:
             fcntl.flock(lock.fileno(), fcntl.LOCK_EX)
             try:
-                lines = self._read()
+                lines = self._read(include_expired=include_expired)
                 result = fn(lines)
                 self._write(lines)
                 return result
@@ -179,6 +203,39 @@ class MissedList:
         ]
 
     # -- writes ------------------------------------------------------------------
+
+    def expire(self) -> int:
+        """Drop the expired lines from the file now. Returns how many went."""
+        if not self._path.exists():
+            return 0
+
+        def go(lines: list[MissedLine]) -> int:
+            before = len(lines)
+            lines[:] = [m for m in lines if not self._expired(m)]
+            return before - len(lines)
+
+        return self._mutate(go, include_expired=True)
+
+    def take_meeting_summary(self) -> list[MissedLine]:
+        """The meeting lines no summary has counted yet, oldest first, marked
+        as counted in the same locked write. The mark is in the file, so a
+        restarted daemon never says the same summary again."""
+
+        def due(m: MissedLine) -> bool:
+            return m.status == MISSED and m.reason == REASON_MEETING and not m.announced
+
+        if not any(due(m) for m in self._read()):
+            return []  # the daemon asks every poll: no write unless one is due
+
+        def go(lines: list[MissedLine]) -> list[MissedLine]:
+            taken = []
+            for i, m in enumerate(lines):
+                if due(m):
+                    lines[i] = replace(m, announced=True)
+                    taken.append(lines[i])
+            return taken
+
+        return self._mutate(go)
 
     def upsert(self, line: MissedLine) -> MissedLine:
         """Add the line, or replace the one with the same id."""
@@ -297,6 +354,7 @@ def format_lines(lines: list[MissedLine], *, now: float | None = None) -> str:
         out.append(f"      {m.label}")
     if missed:
         out.append("replay the missed lines, oldest first: auto-speech missed --play")
+        out.append("missed lines older than a day leave the list by themselves")
     if held:
         out.append(f"{len(held)} held line{'s' if len(held) != 1 else ''} will play by themselves when the sound stops")
     out.append("forget all of them: auto-speech missed --clear")
