@@ -1153,7 +1153,6 @@ def _meeting_service(sink, *, names=(), summary: bool = True):
     svc._yield_gate.settings.return_value = MagicMock(max_wait_seconds=180.0, meeting_summary=summary)
     svc._meeting_active = None
     svc._meeting_checked_at = 0.0
-    svc._meeting_summary_after = 0.0
     svc.enqueue_text = lambda text: svc.__dict__.setdefault("queued", []).append(text)
     return svc
 
@@ -1236,6 +1235,12 @@ def test_the_meeting_watch_summarises_lines_left_from_before_a_restart() -> None
     later._missed = earlier._missed
     text = later._watch_meeting(now=time.time())
     assert text == "You missed 1 line during the meeting. Say auto-speech missed to hear them."
+
+    # #m1021-1615-4497: each later start said it again. Now it is said once.
+    again = _meeting_service(sink, names=())
+    again._missed = earlier._missed
+    assert again._watch_meeting(now=time.time()) is None, "a second restart says nothing again"
+    assert "queued" not in again.__dict__
 
     # No summary when the file says so, and none when nothing was set aside.
     quiet = _meeting_service(sink, names=(), summary=False)

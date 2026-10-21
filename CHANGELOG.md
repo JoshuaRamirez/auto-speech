@@ -109,6 +109,15 @@ The Chrome extension under `chrome-extension/` is versioned independently
   HOME to a temporary directory at import.
 
 ### Fixed
+- **The missed summary is spoken once per meeting, with its own count.**
+  "You missed 4 lines during the meeting" was said again at every daemon
+  start (ten times on 2026-10-21 after an 11:00 meeting): the cutoff for
+  what a summary had counted lived in memory. Each meeting line now carries
+  `announced` in `missed.json`, set in the same locked write that takes it
+  for a summary, so a line is counted once, ever, and the next meeting is
+  counted alone. Missed lines older than a day leave the list by
+  themselves (held lines never do); the daemon logs how many at start
+  (#m1021-1615-4497).
 - **A desk-say line's sidecar names its file and its session.** None of the
   113 live sidecars carried `origin_file` or `sender.session_id`, which
   Spoken Transcript threads on (its ADR-003, ADR-006): desk-speaker

@@ -197,6 +197,52 @@ class TestFormat(unittest.TestCase):
         self.assertEqual(lst.missed_in_meeting(since=T0 + 101), [])
         self.assertEqual([m.id for m in lst.missed_in_meeting(since=T0 + 100)], ["m1"])
 
+    def test_a_meeting_line_is_counted_by_one_summary_ever(self):
+        # #m1021-1615-4497: every daemon start said the same "You missed 4
+        # lines" again. The mark that a summary counted a line is in the file.
+        from missed_speech import REASON_MEETING
+
+        path = Path(tempfile.mkdtemp(prefix="auto-speech-missed-")) / "missed.json"
+        lst = MissedList(path, clock=lambda: T0 + 100)
+        lst.miss(MissedLine(id="m1", text="During the call.", queued_at=T0), reason=REASON_MEETING)
+        lst.miss(MissedLine(id="m2", text="Music line.", queued_at=T0 + 1), reason=REASON_LONGEST_WAIT, waited_seconds=180)
+        self.assertEqual([m.id for m in lst.take_meeting_summary()], ["m1"])
+        self.assertEqual(lst.take_meeting_summary(), [])
+        restarted = MissedList(path, clock=lambda: T0 + 200)
+        self.assertEqual(restarted.take_meeting_summary(), [], "a new daemon on the same file says nothing again")
+        restarted.miss(MissedLine(id="m3", text="Next call.", queued_at=T0 + 150), reason=REASON_MEETING)
+        self.assertEqual([m.id for m in restarted.take_meeting_summary()], ["m3"], "the next meeting is counted alone")
+        self.assertEqual([m.id for m in restarted.load()], ["m1", "m2", "m3"], "the lines stay for missed --play")
+
+    def test_a_file_from_before_the_mark_loads_unannounced(self):
+        m = MissedLine.from_dict({"id": "x", "text": "t", "queued_at": T0, "status": "missed", "reason": "meeting"})
+        self.assertFalse(m.announced)
+        self.assertTrue(MissedLine.from_dict({**m.to_dict(), "announced": True}).announced)
+
+    def test_missed_lines_older_than_a_day_leave_the_list(self):
+        from missed_speech import MAX_AGE_S
+
+        path = Path(tempfile.mkdtemp(prefix="auto-speech-missed-")) / "missed.json"
+        now = [T0]
+        lst = MissedList(path, clock=lambda: now[0])
+        lst.miss(MissedLine(id="old", text="Old.", queued_at=T0), reason=REASON_LONGEST_WAIT)
+        lst.hold(MissedLine(id="held", text="Held.", queued_at=T0))
+        now[0] = T0 + MAX_AGE_S - 10
+        lst.miss(MissedLine(id="late", text="Asked long ago, missed now.", queued_at=T0 - 5), reason=REASON_STALE)
+        now[0] = T0 + MAX_AGE_S + 1
+        self.assertEqual([m.id for m in lst.load()], ["late", "held"], "old is gone; held lines never expire")
+        self.assertEqual(lst.counts(), {"held": 1, "missed": 1, "meeting": 0})
+        stored = json.loads(path.read_text())["lines"]
+        self.assertEqual(len(stored), 3, "a read leaves the file alone")
+        self.assertEqual(lst.expire(), 1)
+        self.assertEqual(sorted(x["id"] for x in json.loads(path.read_text())["lines"]), ["held", "late"])
+        self.assertEqual(lst.expire(), 0)
+        self.assertIn("older than a day leave the list", format_lines(lst.load(), now=now[0]))
+        self.assertEqual(MissedList(path.with_name("none.json")).expire(), 0)
+        self.assertFalse(path.with_name("none.json").exists(), "expire writes no file that was not there")
+        with self.assertRaises(ValueError):
+            MissedList(path, max_age_s=0)
+
     def test_only_held_lines_offer_no_replay(self):
         text = format_lines([_lines()[-1]], now=T0 + 300)
         self.assertNotIn("--play", text)
@@ -206,7 +252,7 @@ class TestFormat(unittest.TestCase):
 class TestRunAction(unittest.TestCase):
     def setUp(self):
         self.tmpdir = tempfile.TemporaryDirectory()
-        self.missed = MissedList(Path(self.tmpdir.name) / "missed.json")
+        self.missed = MissedList(Path(self.tmpdir.name) / "missed.json", clock=lambda: T0 + 300)  # the fixtures are dated T0
 
     def tearDown(self):
         self.tmpdir.cleanup()
