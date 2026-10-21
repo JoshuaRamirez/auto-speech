@@ -1578,6 +1578,37 @@ def test_a_desk_say_line_keeps_its_file_name_in_the_sidecar() -> None:
     assert line.sidecar["sender"]["session_id"] == "sess-d"
 
 
+def test_a_desk_say_request_reaches_the_sidecar_with_its_file_and_session() -> None:
+    # #m1021-0837-ffbd: the whole path desk-speaker takes, socket request to sidecar. 113 live
+    # sidecars had neither field because the request carried neither (desk-speaker now sends both).
+    from priority_arbiter import PriorityArbiter, QueueProxyFacade
+    from sound_yield import CLEAR, HoldOutcome
+
+    sink = _HoldSink(HoldOutcome(CLEAR))
+    svc = _history_service(sink)
+    svc._max_queue = 8
+    svc._priority_arbiter = PriorityArbiter(maxsize=8)
+    svc.__dict__["_queue_proxy"] = QueueProxyFacade(svc._priority_arbiter, maxsize=8)
+    svc._dropped_phases = 0
+    svc._cache = MagicMock()
+    svc._cache.lookup.return_value = None
+    svc._state_lock = threading.Lock()
+    svc._last_event_ts = time.time()
+
+    resp = svc.dispatch_json({
+        "action": "speak", "text": "Desk here, the build is green.", "priority": 2,
+        "origin_file": "2026-10-21-084500.123-desk.txt", "session_id": "sess-desk",
+    })
+    assert resp["status"] == "queued", resp
+    item = svc._priority_arbiter.dequeue(block=False, unwrap=False)
+    svc._speak(item.payload, item=item)
+
+    assert len(sink.played) == 1
+    [line] = svc._history.load()
+    assert line.sidecar["origin_file"] == "2026-10-21-084500.123-desk.txt"
+    assert line.sidecar["sender"] == {"session_id": "sess-desk", "name": "Master Desk"}
+
+
 def test_a_line_set_aside_after_the_longest_wait_is_not_exported() -> None:
     from sound_yield import EXPIRED, HoldOutcome
 
@@ -1754,6 +1785,7 @@ def main() -> int:
     test_status_reply_reports_the_speaker,
     test_a_heard_line_is_exported_with_its_sidecar_and_handed_to_the_player,
     test_a_desk_say_line_keeps_its_file_name_in_the_sidecar,
+    test_a_desk_say_request_reaches_the_sidecar_with_its_file_and_session,
     test_a_line_set_aside_after_the_longest_wait_is_not_exported,
     test_a_line_set_aside_for_a_meeting_is_not_exported,
     test_a_held_line_is_exported_once_it_plays,
