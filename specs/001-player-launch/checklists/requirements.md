@@ -15,7 +15,7 @@
 
 ## Requirement Completeness
 
-- [ ] No [NEEDS CLARIFICATION] markers remain — 2 left for /speckit-clarify (replay on open;
+- [x] No [NEEDS CLARIFICATION] markers remain — 2 left for /speckit-clarify (replay on open;
   reopen after he closes it)
 - [x] Requirements are testable and unambiguous
 - [x] Success criteria are measurable
