@@ -26,6 +26,7 @@ from speech_history import (  # noqa: E402
     HistorySettings,
     HistoryStore,
     SpeechHistory,
+    clean_origin_file,
     estimate_word_timings,
     run_action,
 )
@@ -166,6 +167,22 @@ class TestExport(_Tmp):
         self.assertEqual(len(sc["word_timings"]["words"]), 7)
         self.assertEqual(sc["word_timings"]["words"][-1]["end"], 2.0)
         self.assertEqual(sc["source_hash"], "a" * 64)
+
+    def test_the_desk_say_file_name_is_kept_and_the_threading_keys_stay(self):
+        # Spoken Transcript (its ADR-006) threads on spoken_at_epoch and
+        # sender.session_id, and matches a desk-say line by its file name.
+        sc = self.export("Desk here.", session_id="sess-1", origin_file="2026-10-20-150900.674-desk.txt").sidecar
+        self.assertEqual(sc["origin_file"], "2026-10-20-150900.674-desk.txt")
+        self.assertEqual(sc["spoken_at_epoch"], T0)
+        self.assertEqual(sc["sender"]["session_id"], "sess-1")
+        sc = self.export("From a path.", origin_file="/x/Spoken/pending/2026-10-20-150901.000-desk.txt").sidecar
+        self.assertEqual(sc["origin_file"], "2026-10-20-150901.000-desk.txt", "a path is cut to its name")
+        self.assertIsNone(self.export("A direct speak call.").sidecar["origin_file"])
+
+    def test_an_unusable_origin_file_is_dropped(self):
+        for bad in (None, 7, "", "   ", "..", "/", "a\nb.txt", "x" * 256):
+            self.assertEqual(clean_origin_file(bad), "", repr(bad))
+        self.assertEqual(clean_origin_file(" a-desk.txt "), "a-desk.txt")
 
     def test_synthesizer_timings_are_kept_as_given(self):
         given = [{"w": "Hi", "start": 0.1, "end": 0.4}]

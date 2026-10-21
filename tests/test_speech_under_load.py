@@ -277,12 +277,12 @@ def test_a_cut_off_play_queues_the_whole_wav_again_and_plays_it_whole() -> None:
     retry_dir = Path(tempfile.mkdtemp(prefix="auto-speech-retry-"))
     with mock.patch.object(narrator_service, "RETRY_DIR", retry_dir):
         wav = _silent_wav(Path(tempfile.mkdtemp()) / "line.wav", 0.3)
-        heard = svc._play_item(wav, _item("A long line, cut off.", session_id="s9"), text="A long line, cut off.")
+        heard = svc._play_item(wav, _item("A long line, cut off.", session_id="s9", origin_file="a-desk.txt"), text="A long line, cut off.")
         assert heard is False
         again = svc._tts_queue.get_nowait()
         kept = Path(again.payload)
         assert kept.parent == retry_dir and kept.suffix == ".wav" and kept.stat().st_size == wav.stat().st_size
-        assert (again.retries, again.line_text, again.session_id) == (1, "A long line, cut off.", "s9")
+        assert (again.retries, again.line_text, again.session_id, again.origin_file) == (1, "A long line, cut off.", "s9", "a-desk.txt")
         assert svc._missed.load() == []
         # The retry plays the kept WAV whole, from the start, and the WAV then goes.
         assert svc._play_cached(kept, again, text=again.line_text) is True

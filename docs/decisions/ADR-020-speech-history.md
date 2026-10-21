@@ -49,7 +49,15 @@ clip played after a separate name clip), `spoken_at` (local ISO time, ms)
 and `spoken_at_epoch`, `sender` (`session_id`, and the desk `name` from
 the agents' notes whether or not it was said aloud), `priority` and
 `priority_name`, `duration_seconds`, `word_timings`, `wav`, `voice_id`,
-`speed`, `source_hash`.
+`speed`, `source_hash`, `origin_file`. `origin_file` is the name (never
+a path) of the file the caller says the line came from, or null:
+desk-say's pending file (`2026-10-20-150900.674-desk.txt`) when the line
+came through desk-speaker and desk-speaker passes it (`speak(...,
+origin_file=...)`, the socket's `origin_file`); a retried line keeps it.
+Added 2026-10-20 20:52 at Spoken Transcript's asking (its ADR-006,
+through the Desk #m1020-1451-d9e7), so its match is by name and not by
+time and words. It is a new field and changes nothing else, so the
+sidecar stays version 1.
 
 ### Word timings: estimated, and marked so
 The synthesizer is macOS `say -o file`, which writes a WAV and reports no
@@ -117,6 +125,9 @@ sort in time order even across a clock change (the sidecar's
 complete; dot-files are in-progress writes and the lock; sidecar
 `version` 1 as above. A reader may find a line gone between listing and
 reading it (pruned) and should skip it. Readers never write or delete.
+The transcript threads its lines on `spoken_at_epoch` and
+`sender.session_id`, so these two keep their names, types and meaning
+(I-20.5).
 
 ### The player launcher, default off
 `speech_player.PlayerLauncher.after_line()` runs after each export. With
@@ -150,3 +161,6 @@ and nothing opens. `history status` says which of these applies.
   within the clip, the last ending at its duration.
 - I-20.4 The player never opens while the setting is off, while a hold
   stands, or while the utility is not installed.
+- I-20.5 Every sidecar carries `spoken_at_epoch` (seconds, 3 places) and
+  `sender.session_id` (a string or null) as written in version 1; a
+  reader's threading never breaks on a later field.

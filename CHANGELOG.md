@@ -29,7 +29,8 @@ The Chrome extension under `chrome-extension/` is versioned independently
   a line the daemon copies its WAV into `~/.local/state/auto-speech/history/`
   (`AUTO_SPEECH_HISTORY_DIR`) with a JSON sidecar: the text, when it was
   spoken, the sender (session and desk name), priority, duration and word
-  timings. `say` gives no word timings, so they are estimated from word
+  timings, and, for a line from desk-say, its file name (`origin_file`, at
+  Spoken Transcript's asking: `speak(..., origin_file=...)`). `say` gives no word timings, so they are estimated from word
   length and punctuation pauses and marked `source: "estimate"`. A line set
   aside by the meeting hold or the sound yield exports nothing until it
   plays. His 14:50: "save WAV files up to … the size of a small,

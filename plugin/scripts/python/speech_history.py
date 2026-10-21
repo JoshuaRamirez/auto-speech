@@ -242,6 +242,19 @@ def estimate_word_timings(text: str, duration: float) -> list[dict[str, Any]]:
     return out
 
 
+def clean_origin_file(raw: Any) -> str:
+    """The caller's origin file as a bare name (desk-say's
+    `2026-10-20-150900.674-desk.txt`), or "" when there is none or it is not
+    a usable name: a path is cut to its last part; empty, "." or "..",
+    longer than 255 characters, or holding a control character is dropped."""
+    if not isinstance(raw, str):
+        return ""
+    name = Path(raw.strip()).name
+    if name in ("", ".", "..") or len(name) > 255 or any(ord(c) < 32 for c in name):
+        return ""
+    return name
+
+
 def wav_duration_seconds(path: Path) -> float:
     try:
         with wave.open(str(path), "rb") as w:
@@ -330,11 +343,13 @@ class SpeechHistory:
         source_hash: Optional[str] = None,
         word_timings: Optional[list[dict[str, Any]]] = None,
         spoken_at: Optional[float] = None,
+        origin_file: Optional[str] = None,
     ) -> Optional[HistoryLine]:
         """Copy the played WAV into the history with its sidecar, then prune
         to `max_gb`. None when the history is off. `word_timings` from a
         synthesizer that gives them are kept as given; otherwise they are
-        estimated and marked so."""
+        estimated and marked so. `origin_file` is the file the caller says
+        the line came from (desk-say's pending file), its name only."""
         settings = self._store.load()
         if not settings.enabled:
             return None
@@ -371,6 +386,7 @@ class SpeechHistory:
             "voice_id": voice_id or "",
             "speed": float(speed),
             "source_hash": source_hash or None,
+            "origin_file": clean_origin_file(origin_file) or None,
         }
 
         def go() -> HistoryLine:
