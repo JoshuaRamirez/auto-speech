@@ -158,6 +158,15 @@ class TestClient(_Sock):
             c.hello()
         self.assertEqual(cm.exception.kind, "closed")
 
+    def test_a_late_reader_never_drops_a_newer_connection(self):
+        self.serve()
+        c = self.connect()
+        c.close()
+        c.connect()
+        time.sleep(0.2)  # the first connection's reader has ended by now
+        self.assertTrue(c.connected)
+        c.hello()
+
     def test_no_socket(self):
         with self.assertRaises(ContractError) as cm:
             self.connect()

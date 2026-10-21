@@ -114,7 +114,7 @@ class UiUtilityClient:
         except OSError:
             return
         finally:
-            self._drop("the utility closed the connection")
+            self._drop("the utility closed the connection", only=sock)
 
     def _route(self, raw: bytes) -> None:
         try:
@@ -137,8 +137,10 @@ class UiUtilityClient:
             slot.reply = msg
             slot.done.set()
 
-    def _drop(self, why: str) -> None:
+    def _drop(self, why: str, *, only: Optional[socket.socket] = None) -> None:
         with self._lock:
+            if only is not None and self._sock is not only:
+                return  # a reader of an earlier connection ending late: not this one's business
             self._closed = True
             sock, self._sock = self._sock, None
             pending, self._pending = self._pending, {}

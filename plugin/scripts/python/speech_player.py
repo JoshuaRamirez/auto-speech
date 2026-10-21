@@ -260,7 +260,11 @@ class PlayerLauncher:
         except ContractError:
             client.close()
             raise
-        self._client = client
+        with self._cond:
+            if self._closed:  # close() ran while this connected: leave nothing open
+                client.close()
+                raise ContractError("closed", "the launcher was closed")
+            self._client = client
         return client
 
     def _hand_over(self, line: HistoryLine) -> str:
