@@ -6,7 +6,7 @@ import threading
 from pathlib import Path
 
 from native_audio_sink import NativeAudioSink
-from playback_queue import PlaybackQueue, SENTINEL
+from playback_queue import SENTINEL, PlaybackQueue
 
 
 class AfplayLauncher:
@@ -18,7 +18,7 @@ class AfplayLauncher:
         try:
             sink.play(wav_path)
             return 0
-        except Exception as exc:
+        except Exception as exc:  # noqa: BLE001 — playback errors map to exit codes
             if stop_event.is_set():
                 return 0
             if "-66681" in str(exc) or "AudioQueueStart" in str(exc):

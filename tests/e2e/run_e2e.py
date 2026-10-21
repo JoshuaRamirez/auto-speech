@@ -18,32 +18,32 @@ PROJECT_ROOT = Path(__file__).resolve().parents[2]
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
-from tests.e2e.test_tier1_features import (  # noqa: E402
+from tests.e2e.test_tier1_features import (
     TestTier1R1InProcessAudioSink,
     TestTier1R2ThinClientIPC,
     TestTier1R3DeadSprawlRemoval,
 )
-from tests.e2e.test_tier2_boundaries import (  # noqa: E402
+from tests.e2e.test_tier2_boundaries import (
     TestTier2R1Boundaries,
     TestTier2R2Boundaries,
     TestTier2R3Boundaries,
 )
-from tests.e2e.test_tier3_combinations import (  # noqa: E402
+from tests.e2e.test_tier3_combinations import (
     TestTier3CrossFeatureCombinations,
 )
-from tests.e2e.test_tier4_scenarios import (  # noqa: E402
+from tests.e2e.test_tier4_scenarios import (
     TestTier4RealWorldScenarios,
 )
-from tests.e2e.test_tier5_adversarial_sink_ipc import (  # noqa: E402
-    TestTier5AdversarialAudioSink,
-    TestTier5AdversarialSocketIPC,
-    TestTier5AdversarialIntegratedWorkflow,
-)
-from tests.e2e.test_tier5_adversarial_lifecycle import (  # noqa: E402
-    TestTier5AdversarialSocketLifecycle,
+from tests.e2e.test_tier5_adversarial_lifecycle import (
     TestTier5AdversarialQueueBackpressureFlood,
     TestTier5AdversarialSignalAndInterruption,
+    TestTier5AdversarialSocketLifecycle,
     TestTier5AdversarialWorkerAndHandlerRobustness,
+)
+from tests.e2e.test_tier5_adversarial_sink_ipc import (
+    TestTier5AdversarialAudioSink,
+    TestTier5AdversarialIntegratedWorkflow,
+    TestTier5AdversarialSocketIPC,
 )
 
 TIER_MAP = {

@@ -20,10 +20,10 @@ SRC = Path(__file__).resolve().parents[1] / "plugin" / "scripts" / "python"
 if str(SRC) not in sys.path:
     sys.path.insert(0, str(SRC))
 
-from autoplay_gate import AutoplayGate  # noqa: E402
-from daemon_client import DaemonClient, Priority  # noqa: E402
-import mcp_server  # noqa: E402
-import speak  # noqa: E402
+import mcp_server
+import speak
+from autoplay_gate import AutoplayGate
+from daemon_client import DaemonClient, Priority
 
 
 class TestSayWorkerModernized(unittest.TestCase):

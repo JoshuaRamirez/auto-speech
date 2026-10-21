@@ -131,11 +131,11 @@ try:
     )
 
     __all__ = [
-        "TTSEngine",
+        "KOKORO_SAMPLE_RATE",
         "AppleSayEngine",
+        "TTSEngine",
         "get_available_say_voices",
         "get_default_say_voice",
-        "KOKORO_SAMPLE_RATE",
     ]
 except ImportError:
-    __all__ = ["TTSEngine", "KOKORO_SAMPLE_RATE"]
+    __all__ = ["KOKORO_SAMPLE_RATE", "TTSEngine"]

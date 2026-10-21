@@ -158,7 +158,7 @@ def _first_sentence(text: str, max_words: int = 5) -> str:
     for prefix in ('"', "'", "* ", "- "):
         if line.startswith(prefix):
             line = line[len(prefix) :].lstrip()
-    if line.endswith('"') or line.endswith("'"):
+    if line.endswith(('"', "'")):
         line = line[:-1].rstrip()
     line = line.rstrip(".")
 

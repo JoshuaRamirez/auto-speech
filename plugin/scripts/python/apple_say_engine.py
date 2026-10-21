@@ -7,6 +7,7 @@ with zero cold-boot time, 0 MB Unified Memory footprint, and native
 
 from __future__ import annotations
 
+import logging
 import os
 import re
 import shutil
@@ -14,10 +15,12 @@ import subprocess
 import sys
 import tempfile
 from pathlib import Path
-from typing import TYPE_CHECKING, Optional
+from typing import TYPE_CHECKING
 
 from speech_priority import boosted_argv
 from tts_engine import TTSGenerationError
+
+logger = logging.getLogger(__name__)
 
 if TYPE_CHECKING:
     from voice_profile import VoiceProfile
@@ -26,12 +29,12 @@ DEFAULT_SAY_RATE = 212
 APPLE_SAMPLE_RATE = 24000
 PREFERRED_VOICES = ("Ava (Premium)", "Ava (Enhanced)", "Ava", "Samantha (Premium)", "Samantha (Enhanced)", "Samantha")
 
-_CACHED_AVAILABLE_VOICES: Optional[dict[str, str]] = None
-_CACHED_DEFAULT_VOICE: Optional[str] = None
-_CACHED_SYSTEM_SPOKEN_VOICE: Optional[str] = None
+_CACHED_AVAILABLE_VOICES: dict[str, str] | None = None
+_CACHED_DEFAULT_VOICE: str | None = None
+_CACHED_SYSTEM_SPOKEN_VOICE: str | None = None
 
 
-def get_system_spoken_voice(force_refresh: bool = False) -> Optional[str]:
+def get_system_spoken_voice(force_refresh: bool = False) -> str | None:
     """Detect the configured macOS Spoken Content voice (e.g. Aaron / Siri Natural)."""
     global _CACHED_SYSTEM_SPOKEN_VOICE
     if _CACHED_SYSTEM_SPOKEN_VOICE is not None and not force_refresh:
@@ -55,8 +58,8 @@ def get_system_spoken_voice(force_refresh: bool = False) -> Optional[str]:
                 name = parts[-1]
                 _CACHED_SYSTEM_SPOKEN_VOICE = name
                 return name
-    except Exception:
-        pass
+    except Exception:  # voice probe must not break synthesis
+        logger.debug("spoken-content voice probe failed", exc_info=True)
     return None
 
 
@@ -88,7 +91,8 @@ def get_available_say_voices(force_refresh: bool = False) -> dict[str, str]:
                 voices[vname] = lang
         _CACHED_AVAILABLE_VOICES = voices
         return voices
-    except Exception:
+    except Exception:  # voice listing must not break synthesis
+        logger.debug("say voice listing failed", exc_info=True)
         _CACHED_AVAILABLE_VOICES = {}
         return _CACHED_AVAILABLE_VOICES
 
@@ -124,8 +128,8 @@ class AppleSayEngine:
 
     def __init__(
         self,
-        voice: Optional[str] = None,
-        default_rate: Optional[int] = None,
+        voice: str | None = None,
+        default_rate: int | None = None,
     ) -> None:
         self._voice = voice
         self._default_rate = default_rate
@@ -145,7 +149,7 @@ class AppleSayEngine:
         """No-op for Apple Say: system daemon is always ready without memory load."""
         return
 
-    def resolve_voice(self, profile_voice_id: Optional[str] = None) -> Optional[str]:
+    def resolve_voice(self, profile_voice_id: str | None = None) -> str | None:
         """Resolve voice name.
 
         Returns explicit voice name string if an override is provided, or None
@@ -170,13 +174,13 @@ class AppleSayEngine:
     def resolve_rate(self, speed: float = 1.0) -> int:
         """Calculate words per minute based on profile speed multiplier."""
         base_rate = self._default_rate if self._default_rate is not None else DEFAULT_SAY_RATE
-        return max(50, min(500, int(round(base_rate * speed))))
+        return max(50, min(500, round(base_rate * speed)))
 
     def synthesize(
         self,
         text: str,
-        voice_profile: Optional[VoiceProfile] = None,
-        out_path: Optional[Path] = None,
+        voice_profile: VoiceProfile | None = None,
+        out_path: Path | None = None,
     ) -> None:
         """Synthesize text to 24kHz LEI16 WAV atomically."""
         if not text or not text.strip():
@@ -213,7 +217,7 @@ class AppleSayEngine:
             str(tmp_wav),
         ])
 
-        text_file: Optional[Path] = None
+        text_file: Path | None = None
         try:
             if len(text) > 8192:
                 fd, tf_path = tempfile.mkstemp(prefix="say_input_", suffix=".txt")

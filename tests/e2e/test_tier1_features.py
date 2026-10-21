@@ -100,7 +100,7 @@ class TestTier1R1InProcessAudioSink(unittest.TestCase):
                     try:
                         with unittest.mock.patch.dict(os.environ, long_sandbox.env):
                             sink.play(self.dummy_wav)
-                    except Exception as e:
+                    except Exception as e:  # noqa: BLE001 — test thread records any playback failure
                         play_error.append(e)
                     finally:
                         play_done.set()
@@ -161,8 +161,7 @@ class TestTier1R1InProcessAudioSink(unittest.TestCase):
                     w = create_dummy_wav(self.sandbox.root / f"test_{i}.wav")
                     sink.play(w)
                     active = len(self.sandbox.spy_mpv.get_active_pids())
-                    if active > max_concurrent:
-                        max_concurrent = active
+                    max_concurrent = max(max_concurrent, active)
 
             self.assertLessEqual(
                 max_concurrent,
@@ -447,9 +446,12 @@ class TestTier1R3DeadSprawlRemoval(unittest.TestCase):
 
         for folder in ["plugin", "setup"]:
             for p in (PROJECT_ROOT / folder).rglob("*"):
-                if p.is_file() and p.suffix in [".py", ".sh", ".md"]:
-                    if pattern.search(p.read_text(encoding="utf-8")):
-                        offenders.append(str(p.relative_to(PROJECT_ROOT)))
+                if (
+                    p.is_file()
+                    and p.suffix in [".py", ".sh", ".md"]
+                    and pattern.search(p.read_text(encoding="utf-8"))
+                ):
+                    offenders.append(str(p.relative_to(PROJECT_ROOT)))
 
         self.assertEqual(
             offenders,

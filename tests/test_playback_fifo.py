@@ -22,7 +22,7 @@ SRC = Path(__file__).resolve().parents[1] / "plugin" / "scripts" / "python"
 if str(SRC) not in sys.path:
     sys.path.insert(0, str(SRC))
 
-from priority_arbiter import Priority, PriorityArbiter, QueueItem, QueueProxyFacade  # noqa: E402
+from priority_arbiter import Priority, PriorityArbiter, QueueItem, QueueProxyFacade
 
 
 class TestPriorityArbiterModernized(unittest.TestCase):

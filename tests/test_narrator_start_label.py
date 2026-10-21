@@ -16,7 +16,6 @@ import signal
 import subprocess
 import sys
 import tempfile
-import time
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -107,7 +106,7 @@ def test_never_means_never_even_with_a_label() -> None:
 def test_a_named_label_is_used_and_the_job_gets_path_and_the_settings() -> None:
     tmp, state, stub_bin, log = _tree()
     try:
-        r = _start(tmp, state, stub_bin, AUTO_SPEECH_LAUNCHD_LABEL="dev.auto-speech.narrator.test", AUTO_SPEECH_MPV_AO="null")
+        _start(tmp, state, stub_bin, AUTO_SPEECH_LAUNCHD_LABEL="dev.auto-speech.narrator.test", AUTO_SPEECH_MPV_AO="null")
         calls = log.read_text().splitlines()
         assert calls and all("dev.auto-speech.narrator.test" in c for c in calls), calls
         assert not any(c.split()[-1:] == ["dev.auto-speech.narrator"] for c in calls), calls

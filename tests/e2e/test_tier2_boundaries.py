@@ -55,7 +55,7 @@ class TestTier2R1Boundaries(unittest.TestCase):
             try:
                 with unittest.mock.patch.dict(os.environ, self.sandbox.env):
                     sink.play(empty_wav)
-            except Exception as e:
+            except Exception as e:  # noqa: BLE001 — empty wav may fail; the test asserts the type
                 # May fail cleanly or complete, but should not hang or crash process
                 self.assertIsInstance(e, (FileNotFoundError, OSError, subprocess.SubprocessError))
         finally:
@@ -89,9 +89,11 @@ class TestTier2R1Boundaries(unittest.TestCase):
 
             sink = native_audio_sink.NativeAudioSink()
             missing_path = self.sandbox.root / "nonexistent_file.wav"
-            with self.assertRaises((FileNotFoundError, OSError, subprocess.CalledProcessError)):
-                with unittest.mock.patch.dict(os.environ, self.sandbox.env):
-                    sink.play(missing_path)
+            with (
+                self.assertRaises((FileNotFoundError, OSError, subprocess.CalledProcessError)),
+                unittest.mock.patch.dict(os.environ, self.sandbox.env),
+            ):
+                sink.play(missing_path)
         finally:
             if str(PLUGIN_PYTHON) in sys.path:
                 sys.path.remove(str(PLUGIN_PYTHON))
@@ -320,7 +322,7 @@ class TestTier2R3Boundaries(unittest.TestCase):
                         self.fail(f"R3 Regression: Surviving module {mod_name} failed import: {e}")
                 except (ImportError, NameError, AttributeError) as e:
                     self.fail(f"R3 Regression: Surviving module {mod_name} failed import: {e}")
-                except Exception:
+                except Exception:  # noqa: BLE001, S110 — missing hardware or env is tolerated
                     # Other runtime errors (e.g. missing hardware or env) are tolerated in test
                     pass
         finally:

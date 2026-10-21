@@ -47,23 +47,24 @@ if str(PROJECT_ROOT) not in sys.path:
 if str(PLUGIN_PYTHON) not in sys.path:
     sys.path.insert(0, str(PLUGIN_PYTHON))
 
-from tests.e2e.harness import (  # noqa: E402
+from autoplay_worker import AutoplayWorker, _num_env
+from narrator_service import (
+    NarratorService,
+    _DaemonSocketServer,
+)
+from native_audio_sink import (
+    MpvNotInstalledError,
+    NativeAudioSink,
+    PlaybackError,
+)
+from speak import send_speech_request
+
+from tests.e2e.harness import (
     IsolatedEnvironment,
     SpyMpv,
     create_dummy_wav,
     run_speak_cli,
 )
-from autoplay_worker import AutoplayWorker, _num_env  # noqa: E402
-from narrator_service import (  # noqa: E402
-    NarratorService,
-    _DaemonSocketServer,
-)
-from native_audio_sink import (  # noqa: E402
-    MpvNotInstalledError,
-    NativeAudioSink,
-    PlaybackError,
-)
-from speak import send_speech_request  # noqa: E402
 
 
 class TestTier5AdversarialAudioSink(unittest.TestCase):
@@ -108,7 +109,7 @@ class TestTier5AdversarialAudioSink(unittest.TestCase):
             try:
                 wav = create_dummy_wav(self.sandbox.root / f"worker_{idx}.wav", duration_s=0.02)
                 sink.play(wav)
-            except Exception as e:
+            except Exception as e:  # noqa: BLE001 — worker records any playback failure
                 errors.append(e)
 
         threads = [threading.Thread(target=worker_task, args=(i,)) for i in range(thread_count)]
@@ -310,7 +311,7 @@ class TestTier5AdversarialSocketIPC(unittest.TestCase):
         try:
             self.server.shutdown()
             self.server.server_close()
-        except Exception:
+        except Exception:  # noqa: BLE001, S110 — teardown must not mask the test result
             pass
         shutil.rmtree(self.temp_dir, ignore_errors=True)
 

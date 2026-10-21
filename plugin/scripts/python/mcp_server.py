@@ -122,10 +122,6 @@ AUTOPLAY_TURN_TOOL = {
         "properties": {
             "session_id": {
                 "type": "string",
-                "description": "Optional session ID. If omitted, resolved from environment or newest session.",
-            },
-            "session_id": {
-                "type": "string",
                 "description": (
                     "The Claude Code session speaking (defaults to CLAUDE_CODE_SESSION_ID). "
                     "The daemon names the desk only when the speaker changes."

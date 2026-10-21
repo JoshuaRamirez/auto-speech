@@ -21,8 +21,8 @@ SRC = Path(__file__).resolve().parents[1] / "plugin" / "scripts" / "python"
 if str(SRC) not in sys.path:
     sys.path.insert(0, str(SRC))
 
-from config_constants import DEFAULT_SPEED, DEFAULT_VOICE_ID  # noqa: E402
-from daemon_client import (  # noqa: E402
+from config_constants import DEFAULT_SPEED, DEFAULT_VOICE_ID
+from daemon_client import (
     DEFAULT_SOCKET_PATH,
     DaemonClient,
     DaemonResponse,
