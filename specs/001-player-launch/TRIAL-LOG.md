@@ -171,3 +171,37 @@ D1 to the Desk.
   log with the analyze report and its items to fold in.
 - Branch `feat/player-launch` in `.worktrees/player-launch`; `.venv` is an untracked symlink to
   the main checkout's venv (never staged).
+
+## Step 7: implement, after compaction (started 01:39:36)
+
+### What I remember unaided (written 01:39, before re-reading tasks.md, spec.md, plan.md or this log)
+Honest scope: what I had after compaction was the compaction summary, plus four files the
+harness put back into context with it: quickstart.md, contracts/player-handover.md,
+data-model.md and research.md. I did not open those myself; they were there already. Nothing
+else was read before this note.
+
+- Feature: after each heard line, if the player setting is on, auto-speech hands the line's
+  history WAV and its word timings to the UI Utility's player by contract v1 (JSON lines over
+  a Unix socket; hello, then open panel "player", id "auto-speech", play:false).
+- Off by default; the meeting hold is checked in after_line and again just before open.
+- after_line must stay fast (< 50 ms): cheap gates, then a one-slot mailbox (newest wins)
+  and a worker thread that does the connect, launch and I/O.
+- New module plugin/scripts/python/ui_utility_client.py: UiUtilityClient with a reader
+  thread routing replies by req; ContractError kinds; launch_command/launch that runs nothing
+  when AUTO_SPEECH_PLAYER_LAUNCH=never.
+- Outcomes: off, held, not installed, queued, opened, skipped, no socket, refused, timeout,
+  wrong contract; written by the worker to auto-speech-player.json (tmp + rename) for
+  `history status` in other processes.
+- speech_player.PlayerLauncher: CONTRACT_PENDING goes; gains the mailbox, worker, outcome file
+  and close(); narrator_service calls close() at shutdown; cli.py and mcp_server.py build it
+  with start_worker=False.
+- Tests: a stand-in contract server (tests/ui_utility_standin.py) and
+  tests/test_ui_utility_client.py; run_all.sh exports UI_UTILITY_SOCK to its dir,
+  UI_UTILITY_SILENT=1, AUTO_SPEECH_PLAYER_LAUNCH=never.
+- Docs: ADR-021, plus ADR-020, CHANGELOG, FEATURES, OPERATIONS, config/history.toml.example.
+- Analyze items to fold in: U1 (T020: _heard with the real launcher and a never-answering
+  client returns in < 50 ms), G1 (T012 asserts opened within 2 s), G2 (T013: missing WAV gives
+  skipped; empty words open with []). D1 (push) is answered: no push.
+- Not remembered in detail: the exact T-number of each task beyond those, the current shape of
+  speech_player.py, the exact setting name and CLI verbs (quickstart says history
+  player-on/player-off), and where the tests for the launcher live today.
