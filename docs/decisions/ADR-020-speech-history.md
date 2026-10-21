@@ -137,10 +137,9 @@ or a player app's sound; a gate that cannot say counts as holding), so
 nothing pops up during a meeting; nothing while the UI Utility is not
 installed (`ui-utility` on PATH, or `UI Utility.app` in /Applications or
 ~/Applications), said once in the log. Driving the utility by its
-contract (launch, `hello`, `open` with the clip and words, `play`) is the
-second step, wired in when the Desk hands over the published contract;
-until then an installed utility is reported as "contract not wired yet"
-and nothing opens. `history status` says which of these applies.
+contract (launch, `hello`, `open` with the clip and words) was the second
+step: done in ADR-021, which hands each line to the player off the speech
+path. `history status` says which of these applies.
 
 ## Consequences
 - A second copy of each played WAV is written (about 1 MB, a few ms after

@@ -22,7 +22,8 @@ max_gb = 20
 # `auto-speech history list` show. It deletes nothing.
 keep = 200
 
-# Open the UI Utility's player on each line after it plays. Never during a
-# meeting or while another app's sound holds speech; nothing happens while
-# the utility is not installed.
+# Open the UI Utility's player on each line after it plays: one window,
+# ready to play, that never plays on its own (the line was just heard) and
+# never takes focus. Never during a meeting or while another app's sound
+# holds speech; nothing happens while the utility is not installed (ADR-021).
 player = false

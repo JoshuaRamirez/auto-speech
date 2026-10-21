@@ -10,6 +10,22 @@ The Chrome extension under `chrome-extension/` is versioned independently
 ## [Unreleased]
 
 ### Added
+- **The UI Utility's player shows each line after it is heard (ADR-021).**
+  His 2026-10-20 13:38: "Each time the Desk speaks, a small player pops up
+  and plays the line's WAV". With `[history] player = true`
+  (`auto-speech history player-on`) the daemon hands each exported line to
+  the UI Utility by its contract v1 rev 1.1: `hello`, then `open` on one
+  panel (`auto-speech`) with the history WAV, its word timings and
+  `<sender> · HH:MM:SS`, ready to play and never playing on its own. The
+  utility is launched in the background when its socket is missing. Never
+  during a hold (checked again just before showing), nothing while the
+  utility is not installed, and never on the speech path: a worker thread
+  does the I/O and the newest line wins. `history status` shows the last
+  outcome (`auto-speech-player.json` in the state dir). Built through one
+  Spec Kit trial (`specs/001-player-launch/`). `ui_utility_client.py`;
+  tests against a stand-in server; `tests/run_all.sh` sets
+  `UI_UTILITY_SOCK`, `UI_UTILITY_SILENT=1` and
+  `AUTO_SPEECH_PLAYER_LAUNCH=never`, so no test starts the real app.
 - **Speech holds up under load (ADR-019).** His 2026-10-20 14:02, after a
   load of 272 on 16 cores timed five lines out and cut one off: the daemon
   clears any background clamp, puts its speech threads at user-interactive

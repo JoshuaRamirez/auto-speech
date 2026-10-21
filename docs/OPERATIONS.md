@@ -132,7 +132,13 @@ history max-gb 20` / `keep N` and the MCP tool `history(action="max-gb",
 gb=20)` / `history(action="keep", count=N)` write the same file; the daemon reads it on every line, so no
 restart is needed. `history` lists the newest lines with their WAV paths,
 `history list --json` the sidecars; `history status` says how much is
-held on disk and why the player would or would not open. It is the one
+held on disk and why the player would or would not open, with the last
+hand-over's outcome (`opened`, `held`, `skipped`, `no socket`, `refused`,
+`timeout`, `wrong contract`), kept in `auto-speech-player.json` in the
+state dir. With `history player-on` the daemon opens each line in the UI
+Utility's player over `~/.local/run/ui-utility.sock` (`$UI_UTILITY_SOCK`),
+launching the utility in the background if it is not running
+(`AUTO_SPEECH_PLAYER_LAUNCH=never` stops launching; ADR-021). It is the one
 WAV store: Spoken Transcript reads it for its transcript page and never
 writes it; the file layout readers rely on is in ADR-020. Word timings are
 estimated (`word_timings.source = "estimate"`): `say` reports none.

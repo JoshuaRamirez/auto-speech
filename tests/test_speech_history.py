@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import json
 import os
+import shutil
 import sys
 import tempfile
 import time
@@ -15,8 +16,9 @@ import wave
 from pathlib import Path
 
 SRC = Path(__file__).resolve().parents[1] / "plugin" / "scripts" / "python"
-if str(SRC) not in sys.path:
-    sys.path.insert(0, str(SRC))
+for _p in (str(SRC), str(Path(__file__).resolve().parent)):
+    if _p not in sys.path:
+        sys.path.insert(0, _p)
 
 import speech_history as sh  # noqa: E402
 from speech_history import (  # noqa: E402
@@ -32,6 +34,8 @@ from speech_history import (  # noqa: E402
 )
 import speech_player as sp  # noqa: E402
 from speech_player import PlayerLauncher  # noqa: E402
+from ui_utility_client import UiUtilityClient  # noqa: E402
+from ui_utility_standin import StandIn, default_script  # noqa: E402
 
 T0 = 1_760_000_000.0
 
@@ -322,39 +326,261 @@ class TestRunAction(_Tmp):
 
 
 class TestPlayerLauncher(_Tmp):
-    def launcher(self, *, holding=lambda: False, installed=lambda: False, log=None):
-        return PlayerLauncher(self.store, holding=holding, installed=installed, log=log)
+    """The launcher against a stand-in UI Utility on a private socket:
+    never the real app, never a launch (specs/001-player-launch)."""
+
+    def setUp(self) -> None:
+        super().setUp()
+        # /tmp, not $TMPDIR: a Unix socket path on macOS must fit in 104 bytes.
+        self.sockdir = Path(tempfile.mkdtemp(prefix="as-pl-", dir="/tmp"))
+        self.sock = self.sockdir / "ui.sock"
+        self.standin: StandIn | None = None
+        self.launches: list[int] = []
+        self.launchers: list[PlayerLauncher] = []
+
+    def tearDown(self) -> None:
+        for launcher in self.launchers:
+            launcher.close()
+        if self.standin is not None:
+            self.standin.stop()
+        shutil.rmtree(self.sockdir, ignore_errors=True)
+        super().tearDown()
+
+    def serve(self, script=None) -> StandIn:
+        self.standin = StandIn(self.sock, script=script).start()
+        return self.standin
+
+    def no_launch(self):
+        self.launches.append(1)
+        return None
+
+    def launcher(self, *, holding=lambda: False, installed=lambda: True, log=None, launch=None,
+                 start_worker=True, reply_timeout=1.0):
+        launcher = PlayerLauncher(
+            self.store,
+            holding=holding,
+            installed=installed,
+            log=log,
+            client_factory=lambda on_event: UiUtilityClient(self.sock, reply_timeout=reply_timeout, on_event=on_event),
+            launch=launch or self.no_launch,
+            outcome_file=self.root / "player.json",
+            start_worker=start_worker,
+        )
+        self.launchers.append(launcher)
+        return launcher
+
+    def wait_outcome(self, launcher, want, timeout=2.0):
+        deadline = time.monotonic() + timeout
+        while time.monotonic() < deadline:
+            last = launcher.last_outcome()
+            if last is not None and last["outcome"] == want:
+                return last
+            time.sleep(0.01)
+        self.fail(f"outcome {want!r} not reached in {timeout} s; last: {launcher.last_outcome()!r}")
+
+    def requests(self):
+        return [] if self.standin is None else list(self.standin.requests)
+
+    # US2: off by default, silent during a hold, quiet when absent
 
     def test_off_by_default(self):
+        self.serve()
         line = self.export()
-        self.assertEqual(self.launcher(installed=lambda: True).after_line(line), sp.OFF)
-        self.assertEqual(self.launcher().note(), "")
+        launcher = self.launcher()
+        self.assertEqual(launcher.after_line(line), sp.OFF)
+        self.assertEqual(launcher.after_line(None), sp.OFF)
+        self.assertEqual(self.launcher(installed=lambda: False).note(), "")
+        time.sleep(0.1)
+        self.assertEqual((self.requests(), self.launches), ([], []))
 
     def test_never_during_a_hold(self):
+        self.serve()
         self.store.set_player(True)
         line = self.export()
-        self.assertEqual(self.launcher(holding=lambda: True, installed=lambda: True).after_line(line), sp.HELD)
+        self.assertEqual(self.launcher(holding=lambda: True).after_line(line), sp.HELD)
 
         def broken():
             raise RuntimeError("probe gone")
 
-        self.assertEqual(self.launcher(holding=broken, installed=lambda: True).after_line(line), sp.HELD)
+        self.assertEqual(self.launcher(holding=broken).after_line(line), sp.HELD)
+        time.sleep(0.1)
+        self.assertEqual((self.requests(), self.launches), ([], []))
 
     def test_nothing_while_the_utility_is_not_installed(self):
+        self.serve()
         self.store.set_player(True)
         logs: list[str] = []
-        launcher = self.launcher(log=logs.append)
+        launcher = self.launcher(installed=lambda: False, log=logs.append)
         line = self.export()
         self.assertEqual(launcher.after_line(line), sp.NOT_INSTALLED)
         self.assertEqual(launcher.after_line(line), sp.NOT_INSTALLED)
         self.assertEqual(len(logs), 1, "said once, not per line")
         self.assertEqual(launcher.note(), "the UI Utility is not installed; nothing opens")
+        time.sleep(0.1)
+        self.assertEqual((self.requests(), self.launches), ([], []))
 
-    def test_installed_but_not_wired_says_so(self):
+    def test_a_hold_that_starts_while_the_line_waits_stops_it(self):
+        self.serve()
         self.store.set_player(True)
-        launcher = self.launcher(installed=lambda: True)
-        self.assertEqual(launcher.after_line(self.export()), sp.CONTRACT_PENDING)
-        self.assertIn("not wired in yet", launcher.note())
+        hold = [False]
+        launcher = self.launcher(holding=lambda: hold[0], start_worker=False)
+        line = self.export()
+        self.assertEqual(launcher.after_line(line), sp.QUEUED)
+        hold[0] = True
+        self.assertEqual(launcher._hand_over(launcher._take(timeout=0)), sp.HELD)
+        self.assertEqual(self.requests(), [])
+        self.assertEqual(launcher.last_outcome()["outcome"], "held")
+
+    # US1: the line just spoken appears in the player
+
+    def test_the_line_just_heard_opens_in_the_one_panel_ready_to_play(self):
+        self.serve()
+        self.store.set_player(True)
+        launcher = self.launcher()
+        line = self.export("Hello there, the build is green.", sender="Master Desk")
+        self.assertEqual(launcher.after_line(line), sp.QUEUED)
+        last = self.wait_outcome(launcher, sp.OPENED)
+        self.assertEqual(last["line_id"], line.id)
+        self.assertEqual(self.standin.cmds(), ["hello", "open"])
+        opened = self.standin.wait_for("open")[0]
+        self.assertEqual(opened["panel"], "player")
+        self.assertEqual(opened["id"], "auto-speech")
+        self.assertEqual(opened["clip"], {"path": str(line.wav)})
+        self.assertEqual(opened["text"], {"words": line.sidecar["word_timings"]["words"]})
+        self.assertIs(opened["play"], False)
+        self.assertTrue(opened["title"].startswith("Master Desk · "), opened["title"])
+
+        second = self.export("And the next one.")
+        self.assertEqual(launcher.after_line(second), sp.QUEUED)
+        opens = self.standin.wait_for("open", n=2)
+        self.assertEqual([o["clip"]["path"] for o in opens], [str(line.wav), str(second.wav)])
+        self.assertEqual({o["id"] for o in opens}, {"auto-speech"})
+        self.assertEqual(self.standin.cmds().count("hello"), 1, "one held connection, one hello")
+        self.assertEqual(self.standin.connections, 1)
+        self.assertEqual(self.launches, [])
+
+    def test_a_utility_not_running_is_launched_then_opened(self):
+        self.store.set_player(True)
+
+        def launch():
+            self.launches.append(1)
+            self.serve()
+            return ["open", "-g", "-a", "UI Utility"]
+
+        launcher = self.launcher(launch=launch)
+        self.assertEqual(launcher.after_line(self.export()), sp.QUEUED)
+        self.wait_outcome(launcher, sp.OPENED)
+        self.assertEqual(self.launches, [1])
+
+    def test_launching_off_and_no_socket_says_so(self):
+        self.store.set_player(True)
+        logs: list[str] = []
+        launcher = self.launcher(log=logs.append)
+        self.assertEqual(launcher.after_line(self.export()), sp.QUEUED)
+        last = self.wait_outcome(launcher, sp.NO_SOCKET)
+        self.assertEqual(last["detail"], "launching is off")
+        self.assertEqual(self.launches, [1])
+        self.assertIn("last: no socket", launcher.note())
+
+    def test_a_pruned_wav_is_skipped_and_empty_words_still_open(self):
+        self.serve()
+        self.store.set_player(True)
+        launcher = self.launcher(start_worker=False)
+        gone = self.export()
+        gone.wav.unlink()
+        self.assertEqual(launcher._hand_over(gone), sp.SKIPPED)
+        self.assertEqual(self.requests(), [])
+        bare = self.export()
+        bare.sidecar["word_timings"]["words"] = []
+        self.assertEqual(launcher._hand_over(bare), sp.OPENED)
+        self.assertEqual(self.standin.wait_for("open")[0]["text"], {"words": []})
+
+    # US3: the player never slows or stops speech
+
+    def test_a_hung_utility_costs_the_speech_path_nothing(self):
+        from ui_utility_standin import never
+
+        self.serve(never)
+        self.store.set_player(True)
+        logs: list[str] = []
+        launcher = self.launcher(log=logs.append, reply_timeout=0.3)
+        settings = self.store.load()
+        for i in range(5):
+            line = self.export(f"line {i}")
+            t0 = time.monotonic()
+            self.assertEqual(launcher.after_line(line, settings), sp.QUEUED)
+            self.assertLess(time.monotonic() - t0, 0.05)
+        self.wait_outcome(launcher, sp.TIMEOUT)
+        time.sleep(0.4)
+        self.assertEqual(sum("timeout" in x for x in logs), 1, logs)
+
+    def test_a_refusal_is_recorded_and_logged_once(self):
+        def script(r):
+            if r["cmd"] == "open":
+                return {"ok": False, "error": "bad-value", "detail": "clip.path is not readable"}
+            return default_script(r)
+
+        self.serve(script)
+        self.store.set_player(True)
+        logs: list[str] = []
+        launcher = self.launcher(log=logs.append, start_worker=False)
+        for _ in range(3):
+            self.assertEqual(launcher._hand_over(self.export()), sp.REFUSED)
+        last = launcher.last_outcome()
+        self.assertTrue(last["detail"].startswith("bad-value:"), last)
+        self.assertEqual(len(logs), 1, logs)
+        self.assertEqual(self.standin.cmds().count("hello"), 1, "a refusal keeps the connection")
+
+    def test_the_newest_line_wins(self):
+        self.serve()
+        self.store.set_player(True)
+        launcher = self.launcher(start_worker=False)
+        lines = [self.export(f"line {i}") for i in range(3)]
+        for line in lines:
+            self.assertEqual(launcher.after_line(line), sp.QUEUED)
+        taken = launcher._take(timeout=0)
+        self.assertEqual(taken.id, lines[-1].id)
+        self.assertIsNone(launcher._take(timeout=0))
+        self.assertEqual(launcher._hand_over(taken), sp.OPENED)
+        self.assertEqual([o["clip"]["path"] for o in self.standin.wait_for("open")], [str(lines[-1].wav)])
+
+    def test_a_dropped_connection_reconnects_on_the_next_line(self):
+        self.serve()
+        self.store.set_player(True)
+        launcher = self.launcher(start_worker=False)
+        self.assertEqual(launcher._hand_over(self.export()), sp.OPENED)
+        client = launcher._client
+        self.standin.drop_connections()
+        deadline = time.monotonic() + 2.0
+        while client.connected and time.monotonic() < deadline:
+            time.sleep(0.01)
+        self.assertFalse(client.connected)
+        self.assertEqual(launcher._hand_over(self.export()), sp.OPENED)
+        self.assertEqual(self.standin.cmds(), ["hello", "open", "hello", "open"])
+
+    def test_close_stops_the_worker(self):
+        self.serve()
+        self.store.set_player(True)
+        launcher = self.launcher()
+        launcher.after_line(self.export())
+        self.wait_outcome(launcher, sp.OPENED)
+        worker = launcher._worker
+        launcher.close()
+        launcher.close()
+        worker.join(1.0)
+        self.assertFalse(worker.is_alive())
+        self.assertEqual(launcher.after_line(self.export()), sp.OFF)
+
+    # US4: status
+
+    def test_status_shows_the_last_outcome(self):
+        self.store.set_player(True)
+        launcher = self.launcher(start_worker=False)
+        self.assertEqual(launcher.note(), "opens after each line")
+        (self.root / "player.json").write_text(json.dumps(
+            {"outcome": "refused", "detail": "bad-value: clip", "at": "2026-10-21T01:02:03", "line_id": "x"}))
+        r = run_action("status", store=self.store, history=self.history, player_note=lambda s: launcher.note(s))
+        self.assertIn("player after each line: on (opens after each line; last: refused 01:02:03: bad-value: clip)", r.text)
 
 
 class TestCli(_Tmp):
