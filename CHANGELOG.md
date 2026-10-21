@@ -88,6 +88,13 @@ The Chrome extension under `chrome-extension/` is versioned independently
 
 ### Fixed
 
+- **Each line no longer lists the whole system temp dir.** The narrator
+  synthesized into the system temp dir and, after every line, globbed it
+  for fragments: 56,785 entries on 2026-10-20, seconds per line under load
+  (and the cause of `test_playback_cannot_hang`'s timing failures under
+  load). Lines are now synthesized in `auto-speech-synth/` under the state
+  dir, which holds only the line in hand.
+
 - **A test daemon took the live narrator's launchd label, and the narrator
   could not find mpv** (the Master Desk #m1020-2230-a808, his 22:28: "i
   haven't heard anything yet"). From 2026-10-21 03:02Z every line ended in

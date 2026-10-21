@@ -184,6 +184,18 @@ def test_stuck_synthesis_is_set_aside_and_the_worker_moves_on() -> None:
     synth.release.set()
 
 
+def test_a_line_is_synthesized_in_the_daemons_own_dir_and_cleaned_up() -> None:
+    # The clean-up glob reads this small dir, not the system temp dir
+    # (56,785 entries on 2026-10-20: seconds per line under load).
+    assert narrator_service.SYNTH_DIR == Path(_TMP) / "auto-speech-synth"
+    sink = _RecordingSink()
+    svc = _service(sink, _QuickSynth(0.2))
+    svc._speak("a line in its own dir")
+    assert len(sink.played) == 1
+    assert sink.played[0][0].parent == narrator_service.SYNTH_DIR
+    assert list(narrator_service.SYNTH_DIR.iterdir()) == [], "the WAV and its fragments are gone"
+
+
 # 4. a play past its budget --------------------------------------------------
 
 def test_play_budget_reaches_the_sink_and_a_timeout_is_set_aside() -> None:
@@ -239,6 +251,7 @@ def main() -> int:
         test_synthesis_budget_is_sized_to_the_line_with_a_floor,
         test_play_budget_is_twice_the_clip_length_plus_the_margin,
         test_stuck_synthesis_is_set_aside_and_the_worker_moves_on,
+        test_a_line_is_synthesized_in_the_daemons_own_dir_and_cleaned_up,
         test_play_budget_reaches_the_sink_and_a_timeout_is_set_aside,
         test_a_sink_without_the_budget_keyword_still_plays,
         test_progress_is_stamped_through_a_speak,
