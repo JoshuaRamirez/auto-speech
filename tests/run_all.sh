@@ -180,6 +180,10 @@ HEAVY=(
     test_resilient_synthesizer.py
     test_segment_producer.py
     test_playback_consumer.py
+    # ADR-019: the stall watch, the budgets and the retry, plus one short load test
+    # (nice 19 burners, the real say and mpv at --ao=null: silent). Never in the full
+    # list until 2026-10-21; it ran only under --hermetic.
+    test_speech_under_load.py
 )
 
 ran=0
