@@ -87,6 +87,21 @@ The Chrome extension under `chrome-extension/` is versioned independently
   HOME to a temporary directory at import.
 
 ### Fixed
+
+- **A test daemon took the live narrator's launchd label, and the narrator
+  could not find mpv** (the Master Desk #m1020-2230-a808, his 22:28: "i
+  haven't heard anything yet"). From 2026-10-21 03:02Z every line ended in
+  `MpvNotInstalledError`: a niced suite run (desk-heavy) started its daemon
+  through the ADR-019 launchd path under `dev.auto-speech.narrator`, which
+  removed his narrator, and launchd gave the test daemon a bare PATH and none
+  of the test's `AUTO_SPEECH_*` settings, so it took the live socket. Now:
+  mpv is found on PATH, then at `/opt/homebrew/bin/mpv` or
+  `/usr/local/bin/mpv`; a daemon on a private state dir never goes through
+  launchd unless it names a label of its own, and `tests/run_all.sh` sets
+  `AUTO_SPEECH_START_VIA_LAUNCHD=never`; a launchd job gets PATH with
+  Homebrew's bin and every `AUTO_SPEECH_*` setting through `/usr/bin/env`.
+  Tests: `test_narrator_start_label.py`, the mpv fallback in
+  `test_native_audio_sink.py`.
 - **Playback cannot hang on one line.** On 2026-10-19 the narrator sat in
   one synthesis from 09:37 to 14:49 (the log's last line was that line's
   `speak:`), the queue stood at 47/32 dropping the oldest, and the doctor
