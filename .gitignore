@@ -32,3 +32,5 @@ tests/outputs/**/*.wav
 reports/
 plugins/**/.remember/
 .remember/
+# Agents' teamwork logs: local only (they hold private paths)
+.agents/teamwork/

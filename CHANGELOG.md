@@ -87,6 +87,11 @@ The Chrome extension under `chrome-extension/` is versioned independently
   silent.
 
 ### Changed
+- **No private paths in the published tree.** The agents' teamwork logs
+  (`.agents/teamwork/`) are no longer tracked (the files already published
+  stay as they are) and are ignored. The speaker names' default Agents
+  folder is now `~/Desk/Agents`; point `agents_dir` in `speaker.toml`,
+  `AUTO_SPEECH_AGENTS_DIR` or `DESK_DIR` at the desk's folder.
 - **The test suite never plays sound.** His 2026-10-20 10:40: "turn off the
   speech tests". `NativeAudioSink` takes an mpv audio output (`--ao`) from
   `AUTO_SPEECH_MPV_AO` or its new `audio_output` argument; `tests/run_all.sh`
