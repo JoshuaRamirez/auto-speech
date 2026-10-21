@@ -109,3 +109,14 @@ it in order. Every SKILL.md's extension-hook checks were skipped as written ("if
   process from the daemon, so the last outcome needs a state file (R7).
 - The skill's "dispatch research agents" was done inline: every question was answered from the
   contract and the code, with no agents.
+
+## 5. tasks — 01:36:09 → 01:37:33
+- Ran `.specify/scripts/bash/check-prerequisites.sh --json` and `setup-tasks.sh --json` (template
+  resolved), then wrote `tasks.md`: 27 tasks in 7 phases (setup 1, foundational 4, US1 8, US2 2,
+  US3 5, US4 2, polish 5), all in the `- [ ] Tnnn [P?] [USn?]` form.
+- Tests are included: the spec asks for them (FR-007, SC-002 to SC-004) and the order says tests run
+  silent through run_all.sh.
+- Written so it can be implemented from the files alone after compaction: a "Where things are
+  today" section names the signatures, lines and call sites the tasks touch.
+- Found while writing T027: local main is 76 commits ahead of `origin/main`, so a PR would carry
+  all of them. It goes to the Desk as a question; nothing is pushed until then.
