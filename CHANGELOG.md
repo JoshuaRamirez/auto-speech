@@ -103,6 +103,16 @@ The Chrome extension under `chrome-extension/` is versioned independently
   HOME to a temporary directory at import.
 
 ### Fixed
+- **A slow mpv no longer ends a line.** 2026-10-21 06:14:50Z, under load:
+  `speak error: TimeoutError('timed out')`. The stall watch's progress read
+  (ADR-019) got no reply from mpv in 5 s, and `MpvIpc.send` let the bare
+  socket timeout out, past the probe's `MpvIpcError` catch, so the line
+  failed. Now every failure in `MpvIpc.send` (a timeout, a socket error,
+  bytes that are not UTF-8) is an `MpvIpcError`; a missed read counts as no
+  progress for the stall window and never ends the line on its own; each
+  progress read waits at most 1 s (`timeout=` on `send`), so a slow reply
+  no longer holds the wait loop for up to 10 s. A failed connect closes its
+  socket. `tests/test_mpv_ipc.py`.
 
 - **Each line no longer lists the whole system temp dir.** The narrator
   synthesized into the system temp dir and, after every line, globbed it
