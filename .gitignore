@@ -32,5 +32,8 @@ tests/outputs/**/*.wav
 reports/
 plugins/**/.remember/
 .remember/
-# Agents' teamwork logs: local only (they hold private paths)
+# Agents' teamwork logs: local only, none published (they hold private paths; #m1021-1314-d03d)
 .agents/teamwork/
+# Agents' working files: local only, not needed publicly (#m1021-1314-d03d)
+/PROJECT.md
+/TEST_READY.md
