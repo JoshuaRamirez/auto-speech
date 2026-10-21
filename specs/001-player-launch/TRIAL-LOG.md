@@ -205,3 +205,47 @@ else was read before this note.
 - Not remembered in detail: the exact T-number of each task beyond those, the current shape of
   speech_player.py, the exact setting name and CLI verbs (quickstart says history
   player-on/player-off), and where the tests for the launcher live today.
+
+### What I re-read after the note (01:40 to 01:43)
+- tasks.md, whole: the task list and its "Where things are today" section. This was the one
+  file the build needed; plan.md and spec.md were not opened again.
+- Code it pointed to, to edit it: speech_player.py; run_all.sh; test_speech_history.py
+  (TestPlayerLauncher and the helpers); narrator_service.py (_heard, the shutdown block);
+  the cli.py and mcp_server.py call sites; the _history_service helper in
+  test_narrator_service.py. "Where things are today" had every location right (line numbers
+  within a few lines).
+- CONTRACT.md, lines 26-114: the event shape ("event", "id", "at") and the open fields.
+  contracts/player-handover.md names the subset but not the event key, so I checked the
+  source.
+- Docs to update: ADR-020's launcher paragraph, config/history.toml.example, CHANGELOG,
+  FEATURES and OPERATIONS.
+
+### Lost or rebuilt
+- Nothing about the design was lost: the unaided note matched tasks.md on every point it
+  covered.
+- Not in the files, so decided anew:
+  - the default outcome file is resolved when the launcher is built (outcome_path()), not
+    at import, so it follows AUTO_SPEECH_TMP_ROOT;
+  - the ContractError kind "closed" maps to the outcome "no socket" (data-model.md has no
+    "closed" outcome);
+  - a launch that raises gives "no socket" with the error as its detail;
+  - test sockets live in /tmp, because macOS caps a Unix socket path at 104 bytes and
+    $TMPDIR is long.
+- tasks.md said test_ui_utility_client.py would be a plain-Python TESTS list. I wrote it as
+  unittest, like test_speech_history.py next to it; run_all.sh runs both the same way.
+
+### Build
+- T001-T024 done, in commits 3d8cb09 (client, stand-in, isolation), 04ca169 (launcher,
+  daemon, tests) and 66effe9 (ADR-021 and docs). U1, G1 and G2 are folded in:
+  - U1: test_a_hung_ui_utility_never_delays_a_heard_line, with the real launcher, < 50 ms;
+  - G1: wait_outcome(OPENED) with a 2 s limit;
+  - G2: test_a_pruned_wav_is_skipped_and_empty_words_still_open.
+- T025, run 1 (01:43 to 01:46): run_all.sh 60 ran, 0 failed, green on the first run.
+- T026 self-review found two races, both fixed:
+  - the reader of an earlier connection, ending late, could drop a newer connection on the
+    same client; _drop now only drops its own socket;
+  - close() during a connect could leave a connection open; the launcher now checks for that
+    under its lock.
+- D1 (push): the Desk's answer at 01:39 is no push. JoshuaRamirez/auto-speech is public, and
+  the 76 unpushed commits go beyond this order, so that question goes to him through the
+  Master Desk. T027 is therefore a local --no-ff merge only, with no PR.
