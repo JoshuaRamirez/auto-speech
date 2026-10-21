@@ -410,7 +410,7 @@ def _burners(n: int, seconds: float) -> list[subprocess.Popen]:
 def test_a_long_clip_plays_to_its_end_under_load() -> None:
     """Twice the cores in niced burners for the test's length; a real `say`
     synthesis of a long line, then a real mpv play (--ao=null) with a 5 s
-    stall window and a wall clock half the clip's length: the clip plays
+    stall window and a wall clock three quarters of the clip: the clip plays
     to its end, the play's elapsed time is at least the clip's length."""
     if sys.platform != "darwin" or not shutil.which("say") or not shutil.which("mpv"):
         return
@@ -435,7 +435,15 @@ def test_a_long_clip_plays_to_its_end_under_load() -> None:
             sink = NativeAudioSink(sound_yield=False)
         sink.stall_seconds = 5.0
         t1 = time.monotonic()
-        sink.play(wav, timeout=duration * 0.5)   # the wall clock alone would have cut it off halfway
+        # The wall clock alone would cut the clip off at three quarters. It applies only
+        # until mpv's first position is read; under load (2026-10-21, in the full suite)
+        # mpv once took over 6 s to give one, so half the clip was too tight to be fair.
+        try:
+            sink.play(wav, timeout=duration * 0.75)
+        except PlaybackError as exc:
+            raise AssertionError(
+                f"{exc}; first position read: {sink.last_position!r}; "
+                f"load {os.getloadavg()[0]:.0f} on {cores} cores; synthesis {synth_s:.1f}s") from exc
         played_s = time.monotonic() - t1
         assert played_s >= duration * 0.9, f"the clip ({duration:.1f}s) ended after {played_s:.1f}s"
         assert sink.last_position is not None and sink.last_position >= duration * 0.5, (
