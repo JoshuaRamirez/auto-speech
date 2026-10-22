@@ -311,7 +311,7 @@ class SoundYieldSettings:
         """True when `proc` is on the players list (see `_matches`)."""
         return _matches(self.players, proc)
 
-    def always_holds(self, proc: "AudioProcess") -> bool:
+    def always_holds(self, proc: AudioProcess) -> bool:
         """True when `proc` is an app whose sound always holds speech
         (ALWAYS_HOLD_APPS): the exception and players lists do not apply."""
         return _matches(ALWAYS_HOLD_APPS, proc)

@@ -587,7 +587,7 @@ class TestPlayersList(unittest.TestCase):
 
     def test_chrome_holds_like_spotify_then_is_set_aside_as_missed(self):
         logs: list[str] = []
-        gate, clock = _gate(self.tmp, FakeProbe([[CHROME_HELPER]]), config=self.HIS_CONFIG, log=logs.append)
+        gate, _ = _gate(self.tmp, FakeProbe([[CHROME_HELPER]]), config=self.HIS_CONFIG, log=logs.append)
         out = gate.wait_until_clear()
         self.assertEqual(out.status, EXPIRED)
         self.assertFalse(out.may_play)
