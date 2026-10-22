@@ -102,11 +102,11 @@ NEEDS_DEPS=(
     test_synthesize_endpoint.py
     test_resilient_synthesizer.py
     test_native_audio_sink_stress.py
+    test_state_paths.py  # imports http_routing, which needs flask: run with the web tests
 )
 
 # Cheap unit tests first — failures here usually indicate a wider problem.
 CHEAP=(
-    test_state_paths.py
     test_narrator_start_label.py
     test_state_machine.py
     test_auto_speech_log.py
@@ -175,6 +175,7 @@ SHELL_TESTS=(
 # in the dedicated --web CI lane (a light venv with just flask + numpy).
 WEB=(
     test_synthesize_endpoint.py
+    test_state_paths.py
 )
 
 # Heavier tests that touch the TTS pipeline or audio files.

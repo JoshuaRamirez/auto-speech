@@ -17,6 +17,7 @@ import os
 import sys
 import tempfile
 from pathlib import Path
+from unittest import mock
 
 SRC = Path(__file__).resolve().parents[1] / "plugin" / "scripts" / "python"
 sys.path.insert(0, str(SRC))
@@ -471,13 +472,18 @@ def test_zero_byte_cache_wav_routes_to_cache_miss() -> None:
             return 0, None
         raise AssertionError(f"unexpected call: argv={argv} stdin={stdin!r}")
 
-    orig_root = awmod._PROJECT_ROOT
+    orig_root, orig_venv = awmod._PROJECT_ROOT, awmod.VENV
     awmod._PROJECT_ROOT = tmp
+    # The rewrite path needs claude on PATH and the project's venv; a bare
+    # CI runner has neither, so the test supplies both rather than assume them.
+    awmod.VENV = tmp / ".venv"
+    awmod.VENV.mkdir(parents=True, exist_ok=True)
     try:
-        w = _worker(runner=_Recorder(script))
-        assert w.run() == 0
+        with mock.patch("shutil.which", lambda name: "/stub/bin/claude" if name == "claude" else None):
+            w = _worker(runner=_Recorder(script))
+            assert w.run() == 0
     finally:
-        awmod._PROJECT_ROOT = orig_root
+        awmod._PROJECT_ROOT, awmod.VENV = orig_root, orig_venv
 
     assert w.machine.state == DONE
     assert "rewrite" in calls

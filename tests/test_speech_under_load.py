@@ -205,9 +205,11 @@ def test_boosted_argv_wraps_in_taskpolicy_tier_zero_and_can_be_turned_off() -> N
 
 
 def test_raise_own_priority_reports_and_never_raises() -> None:
+    before = os.getpriority(os.PRIO_PROCESS, 0)
     report = raise_own_priority()
     assert isinstance(report, PriorityReport)
-    assert report.nice >= 0
+    # The nice it found, not an assumed 0: a GitHub runner starts below 0.
+    assert report.nice == before, (report.nice, before)
     text = report.describe()
     assert "nice" in text and "clamp" in text and "QoS" in text
     if sys.platform == "darwin":

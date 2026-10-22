@@ -70,7 +70,10 @@ def _start(tmp: Path, state: Path, stub_bin: Path, **extra: str) -> subprocess.C
     env.update(AUTO_SPEECH_TMP_ROOT=str(state), PATH=f"{stub_bin}:{env.get('PATH', '/usr/bin:/bin')}", **extra)
     script = tmp / "plugin" / "scripts" / "shell" / "narrator_service_start.sh"
     # Niced, as desk-heavy runs the suite: the case that took the launchd path.
-    return subprocess.run(["nice", "-n", "5", "bash", str(script)], env=env, capture_output=True, text=True, timeout=30)
+    # To nice 5 from wherever this process starts: a GitHub runner starts
+    # below 0, where `nice -n 5` alone stays at or under 0.
+    step = 5 - min(os.getpriority(os.PRIO_PROCESS, 0), 0)
+    return subprocess.run(["nice", "-n", str(step), "bash", str(script)], env=env, capture_output=True, text=True, timeout=30)
 
 
 def _stop(state: Path) -> None:
