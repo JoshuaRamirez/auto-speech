@@ -394,29 +394,12 @@ def run_action(
         from daemon_client import DaemonClient
 
         client = DaemonClient()
-    from daemon_client import Priority
-
-    sent = 0
+    sent = [0]
     try:
-        for m in to_play:
-            if m.text:
-                client.speak(
-                    m.text,
-                    priority=Priority.EXPLICIT_MCP,
-                    source_hash=m.source_hash,
-                    voice_id=m.voice_id or None,
-                    speed=m.speed,
-                    missed_id=m.id,
-                    hold=False,
-                )
-            elif m.source_hash:
-                client.play_cache(m.source_hash, priority=Priority.EXPLICIT_MCP, missed_id=m.id, hold=False)
-            else:
-                missed.remove(m.id)
-                continue
-            sent += 1
+        _send(to_play, missed=missed, client=client, sent=sent)
     except ConnectionError as exc:
-        return ActionResult(False, f"missed speech: could not reach the auto-speech daemon ({exc}); {sent} line(s) queued before that")
+        return ActionResult(False, f"missed speech: could not reach the auto-speech daemon ({exc}); {sent[0]} line(s) queued before that")
+    sent = sent[0]
     text = (
         f"missed speech: replaying {sent} line{'s' if sent != 1 else ''}, oldest first, over any other sound; "
         "each leaves the list once it has played"
@@ -424,3 +407,40 @@ def run_action(
     if held:
         text += f"\n{held} held line{'s' if held != 1 else ''} will play by themselves when the sound stops"
     return ActionResult(True, text)
+
+
+def _send(lines: list[MissedLine], *, missed: MissedList, client: Any, sent: list[int]) -> None:
+    """Queue each line to play over any other sound, oldest first; the daemon
+    takes it off the list once heard. A line with neither text nor audio is
+    dropped. `sent[0]` counts the lines queued (it stays right when the
+    client raises ConnectionError part way)."""
+    from daemon_client import Priority
+
+    for m in lines:
+        if m.text:
+            client.speak(
+                m.text,
+                priority=Priority.EXPLICIT_MCP,
+                source_hash=m.source_hash,
+                voice_id=m.voice_id or None,
+                speed=m.speed,
+                missed_id=m.id,
+                hold=False,
+            )
+        elif m.source_hash:
+            client.play_cache(m.source_hash, priority=Priority.EXPLICIT_MCP, missed_id=m.id, hold=False)
+        else:
+            missed.remove(m.id)
+            continue
+        sent[0] += 1
+
+
+def play_ids(ids: Iterable[str], *, missed: MissedList, client: Any) -> int:
+    """`missed --play` for the named lines only, in the order named (the
+    speech control's play-item and play-all). Held lines are skipped: they
+    play by themselves. Returns how many were queued; raises ConnectionError."""
+    by_id = {m.id: m for m in missed.load() if m.status == MISSED}
+    lines = [by_id[i] for i in ids if i in by_id]
+    sent = [0]
+    _send(lines, missed=missed, client=client, sent=sent)
+    return sent[0]

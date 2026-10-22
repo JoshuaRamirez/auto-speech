@@ -88,8 +88,16 @@ module that owns it. Release-by-release history is in
   player-off]`, the MCP tool `history` (same actions, `count`, `gb`,
   `as_json`) and `[history]` in
   `~/.config/auto-speech/history.toml` (`speech_history.py`).
-- **Player launcher, default off** (ADR-020, ADR-021): with `[history] player = true`
-  the daemon hands each exported line to the UI Utility's player by its
+- **Speech control, default off** (ADR-022): with `[history] player = true`
+  the daemon opens the UI Utility's control piece (contract 1.2), a
+  Mac-native floating control cloned from macOS's own speech controller,
+  with the transcript below it: the speaker as its title, the line playing
+  on top and highlighted, the history newest first, and the missed lines as
+  unplayed items. Its play, hold, stop, skip back and forward, rate,
+  play-item and play-all act on the daemon. Never opened during a hold
+  (`speech_control.py`).
+- **Player launcher, retired from the daemon** (ADR-020, ADR-021): the
+  per-line player panel opens only when one is passed in. It hands each exported line to the UI Utility's player by its
   contract v1 (`hello`, `open` on one panel with the WAV and its words,
   ready to play, never playing on its own), launching the utility in the
   background when needed. Never during a hold, nothing while the utility is

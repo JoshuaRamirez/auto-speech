@@ -678,7 +678,7 @@ def handle_history(args: argparse.Namespace, store: Any | None = None, history: 
     """`auto-speech history [list|status|on|off|max-gb GB|keep N|player-on|player-off]`:
     every line played, kept as a WAV and a sidecar, up to max_gb on disk
     (same verbs as the MCP tool `history`, same names as the [history] config)."""
-    from speech_player import PlayerLauncher
+    import speech_control
 
     action = getattr(args, "history_action", None) or "list"
     count = getattr(args, "count", None)
@@ -691,7 +691,7 @@ def handle_history(args: argparse.Namespace, store: Any | None = None, history: 
         as_json=bool(getattr(args, "json", False)),
         store=store,
         history=history,
-        player_note=lambda settings: PlayerLauncher(store, start_worker=False).note(settings),
+        player_note=speech_control.note,
     )
     if not result.ok:
         print(result.text, file=sys.stderr)
@@ -1153,8 +1153,8 @@ def build_parser() -> argparse.ArgumentParser:
     p_hi_gb.add_argument("gb", type=float, help="Gigabytes, > 0 (default 20).")
     p_hi_keep = sub_hi.add_parser("keep", help="How many of the newest lines the player's view shows (deletes nothing).")
     p_hi_keep.add_argument("count", type=int, help="N, a whole number >= 1 (default 200).")
-    sub_hi.add_parser("player-on", help="Open the player on each line after it plays (never during a hold).")
-    sub_hi.add_parser("player-off", help="Never open the player (default).")
+    sub_hi.add_parser("player-on", help="Show the speech control: what plays, with the history and missed lines below it (never opened during a hold).")
+    sub_hi.add_parser("player-off", help="No speech control (default).")
 
     # 9. hook
     p_hk = subparsers.add_parser("hook", help="Lifecycle hook execution.")

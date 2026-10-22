@@ -1551,6 +1551,88 @@ def _history_service(sink, *, names=()):
     return svc
 
 
+# --- the speech control (ADR-022): told of every play, hold and end -------------
+
+
+class _RecordingControl:
+    def __init__(self) -> None:
+        self.calls: list[tuple] = []
+
+    def playing(self, text, source) -> None:
+        self.calls.append(("playing", text, source))
+
+    def held(self) -> None:
+        self.calls.append(("held",))
+
+    def ended(self, line) -> None:
+        self.calls.append(("ended", line.id if line is not None else None))
+
+    def list_changed(self) -> None:
+        self.calls.append(("list_changed",))
+
+
+def test_the_control_hears_a_line_play_and_end_with_its_history_line() -> None:
+    from sound_yield import CLEAR, HoldOutcome
+
+    sink = _HoldSink(HoldOutcome(CLEAR))
+    svc = _history_service(sink)
+    svc._control = _RecordingControl()
+    svc._speak("The build is green.", item=_item("The build is green.", session_id="sess-m"))
+    [line] = svc._history.load()
+    assert svc._control.calls == [("playing", "The build is green.", "Master Desk"), ("ended", line.id)]
+
+
+def test_the_control_hears_a_hold_and_a_line_set_aside() -> None:
+    from sound_yield import EXPIRED, HoldOutcome
+
+    sink = _HoldSink(HoldOutcome(EXPIRED, 180.0, ("Google Chrome",)), yielded=True)
+    svc = _history_service(sink)
+    svc._control = _RecordingControl()
+    svc._speak("Held line.", item=_item("Held line."))
+    calls = svc._control.calls
+    assert ("held",) in calls and ("list_changed",) in calls
+    assert calls[-1] == ("ended", None), calls
+    assert svc._history.load() == []
+
+
+def test_a_history_line_replayed_from_the_control_is_not_exported_again() -> None:
+    from priority_arbiter import QueueItem
+    from sound_yield import CLEAR, HoldOutcome
+
+    sink = _HoldSink(HoldOutcome(CLEAR))
+    svc = _history_service(sink)
+    svc._speak("Say it once.", item=_item("Say it once."))
+    [line] = svc._history.load()
+    svc._control = _RecordingControl()
+    replay = QueueItem(priority=2, payload=str(line.wav), line_text=line.text, history_id=line.id, hold=False)
+    assert svc._play_item(line.wav, replay, text=line.text) is True
+    assert [x.id for x in svc._history.load()] == [line.id], "still one line in the history"
+    assert sink.calls[-1]["hold"] is False, "he asked: it plays over other sound"
+    assert svc._control.calls[-1] == ("ended", line.id)
+
+
+def test_the_control_actions_queue_a_replay_and_play_missed_lines_through_the_missed_list() -> None:
+    from missed_speech import REASON_LONGEST_WAIT, MissedLine
+    from sound_yield import CLEAR, HoldOutcome
+
+    svc = _history_service(_HoldSink(HoldOutcome(CLEAR)))
+    queued: list = []
+    svc._handle_p2_preemption = queued.append
+    svc._update_depth = lambda n: None
+    svc._tts_queue = MagicMock(qsize=lambda: 0)
+    line = MagicMock(wav=Path("/tmp/x.wav"), text="Again.", id="abc123")
+    svc._control_actions().replay(line)
+    [q] = queued
+    assert (q.payload, q.line_text, q.history_id, q.hold) == ("/tmp/x.wav", "Again.", "abc123", False)
+
+    payloads: list[dict] = []
+    svc.dispatch_json = lambda p: payloads.append(p) or {"status": "queued"}
+    svc._missed.miss(MissedLine(id="m5", text="Missed one.", queued_at=time.time()), reason=REASON_LONGEST_WAIT)
+    assert svc._control_actions().play_missed(["m5", "gone"]) == 1
+    [p] = payloads
+    assert (p["action"], p["text"], p["missed_id"], p["hold"]) == ("speak", "Missed one.", "m5", False)
+
+
 def test_a_heard_line_is_exported_with_its_sidecar_and_handed_to_the_player() -> None:
     from sound_yield import CLEAR, HoldOutcome
 
@@ -1789,6 +1871,10 @@ def main() -> int:
     test_narration_without_an_item_carries_its_session,
     test_status_reply_reports_the_speaker,
     test_a_heard_line_is_exported_with_its_sidecar_and_handed_to_the_player,
+    test_the_control_hears_a_line_play_and_end_with_its_history_line,
+    test_the_control_hears_a_hold_and_a_line_set_aside,
+    test_a_history_line_replayed_from_the_control_is_not_exported_again,
+    test_the_control_actions_queue_a_replay_and_play_missed_lines_through_the_missed_list,
     test_a_desk_say_line_keeps_its_file_name_in_the_sidecar,
     test_a_desk_say_request_reaches_the_sidecar_with_its_file_and_session,
     test_a_line_set_aside_after_the_longest_wait_is_not_exported,

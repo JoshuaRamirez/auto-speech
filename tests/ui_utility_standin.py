@@ -19,7 +19,7 @@ Script = Callable[[dict[str, Any]], Optional[dict[str, Any]]]
 def default_script(request: dict[str, Any]) -> Optional[dict[str, Any]]:
     cmd = request.get("cmd")
     if cmd == "hello":
-        return {"ok": True, "contract": 1, "pieces": ["player"]}
+        return {"ok": True, "contract": 1, "pieces": ["player", "control"]}
     if cmd == "open":
         return {"ok": True, "id": request.get("id") or "player-1"}
     return {"ok": True}
