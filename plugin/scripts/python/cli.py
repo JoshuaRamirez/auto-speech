@@ -6,6 +6,7 @@ import argparse
 import json
 import math
 import os
+import re
 import subprocess
 import sys
 import time
@@ -298,8 +299,28 @@ def handle_pause(_args: argparse.Namespace) -> int:
     return EXIT_OK
 
 
+def _daemon_resume() -> int:
+    """Ends his stop in the daemon (ADR-024). How many lines that arrived
+    while stopped were queued again; -1 when speech was not stopped or the
+    daemon is not running."""
+    sock = _get_daemon_socket_path()
+    if not sock.is_socket():
+        return -1
+    try:
+        raw = DaemonClient(socket_path=sock, max_retries=0).resume().raw or {}
+    except Exception:  # noqa: BLE001
+        return -1
+    if not isinstance(raw, dict) or raw.get("was_stopped") is not True:
+        return -1
+    return int(raw.get("queued") or 0)
+
+
 def handle_resume(_args: argparse.Namespace) -> int:
+    queued = _daemon_resume()
     rc, msg = _send_mpv_command(["set_property", "pause", False])
+    if queued >= 0:
+        print(f"resumed: speech was stopped; {queued} line{'s' if queued != 1 else ''} that arrived meanwhile queued again")
+        return EXIT_OK
     if rc != EXIT_OK:
         print(msg, file=sys.stderr)
         return rc
@@ -522,7 +543,7 @@ def handle_autoplay(args: argparse.Namespace) -> int:
 def handle_narrate(args: argparse.Namespace) -> int:
     action = getattr(args, "narrate_action", None)
     if not action:
-        print("narrate: action required (on | off | status | stop | config)", file=sys.stderr)
+        print("narrate: action required (on | off | status | stop | restart | config)", file=sys.stderr)
         return EXIT_INVALID_INPUT
 
     if action == "on":
@@ -570,11 +591,44 @@ def handle_narrate(args: argparse.Namespace) -> int:
         is_enrolled = (marker_dir / session_id).is_file() if session_id and marker_dir.is_dir() else False
         enrolled_count = len(list(marker_dir.glob("*"))) if marker_dir.is_dir() else 0
         c = DaemonClient()
-        daemon_alive = c.is_alive()
+        raw: dict = {}
+        if c._socket_path.is_socket():
+            try:
+                raw = c.status().raw or {}
+            except Exception:  # noqa: BLE001
+                raw = {}
+        daemon_alive = raw.get("status") == "ok"
         print(f"session: {session_id or '<none>'}")
         print(f"enrolled: {is_enrolled} (total enrolled: {enrolled_count})")
         print(f"daemon alive: {daemon_alive}")
+        if daemon_alive:
+            since = raw.get("stopped_since")
+            if raw.get("stopped"):
+                when = time.strftime("%H:%M", time.localtime(float(since))) if since else "?"
+                print(f"stopped: yes, since {when}; nothing plays until `auto-speech resume` or the control's play")
+            else:
+                print("stopped: no")
+            print(f"state: {raw.get('daemon_state')}; queued: {raw.get('queued', 0)}")
         return EXIT_OK
+
+    elif action == "restart":
+        from narrator_restart import DEFAULT_TIMEOUT_S, restart
+
+        client = DaemonClient(max_retries=0)
+
+        def status() -> dict | None:
+            if not client._socket_path.is_socket():
+                return None
+            return client.status().raw
+
+        timeout = getattr(args, "timeout", None)
+        result = restart(
+            status=status,
+            when_quiet=bool(getattr(args, "when_quiet", False)),
+            timeout_s=float(timeout) if timeout is not None else DEFAULT_TIMEOUT_S,
+        )
+        print(result.text, file=sys.stdout if result.ok else sys.stderr)
+        return EXIT_OK if result.ok else EXIT_FAILURE
 
     elif action == "stop":
         stop_script = _project_root() / "plugin" / "scripts" / "shell" / "narrator_service_stop.sh"
@@ -700,9 +754,55 @@ def handle_history(args: argparse.Namespace, store: Any | None = None, history: 
     return EXIT_OK
 
 
+def _parse_at(hhmm: str, now: float | None = None) -> float:
+    """--at HH:MM: today at that time, or yesterday when that is still ahead."""
+    m = re.fullmatch(r"(\d{1,2}):(\d{2})", hhmm.strip())
+    if not m or int(m.group(1)) > 23 or int(m.group(2)) > 59:
+        raise ValueError(f"--at takes HH:MM, got {hhmm!r}")
+    now = time.time() if now is None else now
+    t = time.localtime(now)
+    at = time.mktime((t.tm_year, t.tm_mon, t.tm_mday, int(m.group(1)), int(m.group(2)), 0, 0, 0, -1))
+    return at - 86400 if at > now + 60 else at
+
+
+def handle_missed_add(args: argparse.Namespace, client: Any | None = None) -> int:
+    """`auto-speech missed add --text … --source NAME [--at HH:MM] [--id ID]`:
+    a line held or cut elsewhere, put on the missed list through the daemon
+    (the one writer); the speech control lists it unplayed."""
+    text = (getattr(args, "text", None) or "").strip()
+    if not text:
+        print("missed add: --text is required", file=sys.stderr)
+        return EXIT_INVALID_INPUT
+    at = None
+    if getattr(args, "at", None):
+        try:
+            at = _parse_at(args.at)
+        except ValueError as exc:
+            print(f"missed add: {exc}", file=sys.stderr)
+            return EXIT_INVALID_INPUT
+    client = client or DaemonClient()
+    try:
+        resp = client.missed_add(text, source=getattr(args, "source", None), at=at, line_id=getattr(args, "id", None))
+    except Exception as exc:  # noqa: BLE001
+        print(f"missed add: the daemon did not answer: {exc}", file=sys.stderr)
+        return EXIT_FAILURE
+    if resp.status != "ok":
+        print(resp.message or f"missed add: {resp.error_code}", file=sys.stderr)
+        return EXIT_FAILURE
+    print(f"missed add: on the missed list as {(resp.raw or {}).get('id')}")
+    return EXIT_OK
+
+
 def handle_missed(args: argparse.Namespace, client: Any | None = None, missed: Any | None = None) -> int:
-    """`auto-speech missed [--play | --clear]`: the lines held or set aside
-    while another app played sound (same verbs as the MCP tool `missed`)."""
+    """`auto-speech missed [list | play | clear | add] [--play | --clear]`: the
+    lines held or set aside (same verbs as the MCP tool `missed`)."""
+    verb = getattr(args, "verb", None)
+    if verb == "add":
+        return handle_missed_add(args, client=client)
+    if verb in ("play", "clear"):
+        result = run_missed_action(verb, missed=missed, client=client)
+        print(result.text, file=sys.stdout if result.ok else sys.stderr)
+        return EXIT_OK if result.ok else EXIT_FAILURE
     if getattr(args, "play", False):
         action = "play"
     elif getattr(args, "clear", False):
@@ -1072,6 +1172,13 @@ def build_parser() -> argparse.ArgumentParser:
 
     sub_nr.add_parser("stop", help="Stop the narrator daemon process.")
 
+    p_nr_rs = sub_nr.add_parser(
+        "restart",
+        help="Restart the daemon through launchd once nothing plays, nothing is queued and desk-speaker has nothing pending.",
+    )
+    p_nr_rs.add_argument("--when-quiet", action="store_true", help="Also wait until no other app's sound or meeting holds a line.")
+    p_nr_rs.add_argument("--timeout", type=float, default=None, help="Seconds to wait for the drain (default 300); then refuse.")
+
     p_nr_cfg = sub_nr.add_parser("config", help="Show, edit, or print narrator config path.")
     p_nr_cfg.add_argument(
         "action",
@@ -1116,6 +1223,12 @@ def build_parser() -> argparse.ArgumentParser:
         "missed",
         help="Speech held or set aside while another app played sound: list it, replay it, or clear it.",
     )
+    p_md.add_argument("verb", nargs="?", choices=["list", "play", "clear", "add"], default=None,
+                      help="list (default) | play | clear | add (with --text and --source)")
+    p_md.add_argument("--text", default=None, help="missed add: the line's words.")
+    p_md.add_argument("--source", default=None, help="missed add: who said it (the control shows it).")
+    p_md.add_argument("--at", default=None, help="missed add: when it was said, HH:MM (default now).")
+    p_md.add_argument("--id", default=None, help="missed add: an id of the caller's (default a new one).")
     md_mode = p_md.add_mutually_exclusive_group()
     md_mode.add_argument("--play", action="store_true", help="Replay the missed lines, oldest first, over any other sound.")
     md_mode.add_argument("--clear", action="store_true", help="Forget every line on the missed list.")

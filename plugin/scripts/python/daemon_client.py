@@ -173,6 +173,28 @@ class DaemonClient:
         }
         return self._send_request(payload)
 
+    def resume(self) -> DaemonResponse:
+        """Ends his stop (ADR-024); the lines that arrived while stopped play."""
+        return self._send_request({"action": "resume"})
+
+    def missed_add(
+        self,
+        text: str,
+        *,
+        source: Optional[str] = None,
+        at: Optional[float] = None,
+        line_id: Optional[str] = None,
+    ) -> DaemonResponse:
+        """Puts a line held or cut elsewhere on the missed list, through the daemon."""
+        payload: dict[str, Any] = {"action": "missed_add", "text": text}
+        if source:
+            payload["source"] = source
+        if at is not None:
+            payload["at"] = at
+        if line_id:
+            payload["id"] = line_id
+        return self._send_request(payload)
+
     def status(self) -> DaemonResponse:
         """Retrieves daemon health, queue depths, and current playback state."""
         return self._send_request({"action": "status"})

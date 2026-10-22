@@ -1012,7 +1012,10 @@ class McpServer:
                     except OSError:
                         pass
 
-            return _ok(req_id, _tool_result("Playback stopped and queue cleared."))
+            return _ok(req_id, _tool_result(
+                "Playback stopped and queue cleared. Speech stays stopped: lines that arrive go on the missed list "
+                "until playback_control resume (or the control's play)."
+            ))
 
         # 2. PAUSE / RESUME / RESTART
         if action in ("pause", "resume", "restart"):
@@ -1024,6 +1027,18 @@ class McpServer:
                         is_error=True,
                     ),
                 )
+
+            if action == "resume":
+                # His stop (ADR-024) ends here too; the lines it set aside play.
+                try:
+                    raw = (self._client or DaemonClient(max_retries=0)).resume().raw or {}
+                except Exception:  # noqa: BLE001
+                    raw = {}
+                if isinstance(raw, dict) and raw.get("was_stopped") is True:
+                    n = int(raw.get("queued") or 0)
+                    return _ok(req_id, _tool_result(
+                        f"Speech resumed after a stop; {n} line{'s' if n != 1 else ''} that arrived meanwhile queued again."
+                    ))
 
             if not self._is_mpv_socket_alive():
                 return _ok(req_id, _tool_result("No active playback session.", is_error=True))

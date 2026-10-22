@@ -30,6 +30,8 @@ from __future__ import annotations
 import os
 from pathlib import Path
 
+from session_liveness import SessionLiveness
+
 DIR_NAME = "auto-speech-autoplay-enabled"
 
 # The pre-inversion opt-out directory. Retained as a NAME only, so the
@@ -40,8 +42,9 @@ LEGACY_OPTOUT_DIR_NAME = "auto-speech-autoplay-sessions"
 class SessionEnrollment:
     """Reads/writes per-session autoplay enrollment markers."""
 
-    def __init__(self, home: Path | None = None) -> None:
+    def __init__(self, home: Path | None = None, liveness: SessionLiveness | None = None) -> None:
         self._home = Path(home) if home is not None else Path(os.path.expanduser("~"))
+        self._liveness = liveness or SessionLiveness(self._home)
 
     def dir_path(self) -> Path:
         return self._home / ".claude" / DIR_NAME
@@ -53,12 +56,14 @@ class SessionEnrollment:
         """True iff `session_id` has opted in to autoplay.
 
         An empty/unknown session id is never enrolled — under an opt-in
-        default there is no marker that could have named it.
+        default there is no marker that could have named it. A marker whose
+        session is not alive (session_liveness, ADR-024) does not count.
         """
         if not session_id:
             return False
         try:
-            return self.marker_path(session_id).exists()
+            marker = self.marker_path(session_id)
+            return marker.exists() and self._liveness.alive(marker, session_id)
         except OSError:
             return False
 

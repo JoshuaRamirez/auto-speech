@@ -38,6 +38,8 @@ REASON_INTERRUPTED = "interrupted"
 REASON_RESTART = "daemon restarted"
 REASON_TIMEOUT = "timed out"
 REASON_MEETING = "meeting"  # set aside at once while he was in a meeting
+REASON_STOPPED = "stopped"  # arrived while he had stopped speech; plays on his play or resume
+REASON_ADDED = "added"  # put on the list by a caller (`missed add`): a line held or cut elsewhere
 
 ACTIONS = ("list", "play", "clear")
 
@@ -76,6 +78,7 @@ class MissedLine:
     voice_id: str = ""
     speed: float = 1.0
     announced: bool = False  # a meeting line already counted in a spoken summary
+    source: Optional[str] = None  # who said it, when a caller named it (`missed add --source`)
 
     def to_dict(self) -> dict[str, Any]:
         d = asdict(self)
@@ -99,6 +102,7 @@ class MissedLine:
             voice_id=str(d.get("voice_id") or ""),
             speed=float(d.get("speed") or 1.0),
             announced=bool(d.get("announced")),
+            source=str(d["source"]) if d.get("source") else None,
         )
 
     @property

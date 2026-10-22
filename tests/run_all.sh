@@ -151,6 +151,7 @@ CHEAP=(
     test_speech_history.py
     test_speech_control.py
     test_speech_settings.py
+    test_stop_and_drain.py
     test_ui_utility_client.py
     test_speak_client.py
     test_cli_dispatcher.py
