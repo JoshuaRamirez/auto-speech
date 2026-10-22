@@ -63,6 +63,9 @@ DEFAULT_KEEP = 200  # the player's view: the newest 200 lines, about the last 4 
 BYTES_PER_GB = 1_000_000_000
 DEFAULT_PLAYER = False  # the player opens after a line only when he turns it on
 MIN_KEEP = 1
+DEFAULT_RATE = 1.0  # the narrator's playback rate; kept here so a restart keeps it (ADR-023)
+MIN_RATE, MAX_RATE = 0.25, 4.0  # what mpv's --speed is clamped to
+DEFAULT_SHOW_LIST = False  # whether the control opens with its list shown
 
 SIDECAR_VERSION = 1
 TIMING_ESTIMATE = "estimate"
@@ -101,6 +104,8 @@ class HistorySettings:
     max_gb: float = DEFAULT_MAX_GB
     keep: int = DEFAULT_KEEP
     player: bool = DEFAULT_PLAYER
+    rate: float = DEFAULT_RATE
+    show_list: bool = DEFAULT_SHOW_LIST
     config_path: Optional[str] = None
     problems: tuple[str, ...] = ()
 
@@ -132,11 +137,23 @@ class HistorySettings:
             problems.append(f"[{SECTION}] player should be true or false, got {player!r}")
             player = DEFAULT_PLAYER
 
+        rate = section.get("rate", DEFAULT_RATE)
+        if isinstance(rate, bool) or not isinstance(rate, (int, float)) or not MIN_RATE <= rate <= MAX_RATE:
+            problems.append(f"[{SECTION}] rate should be a number from {MIN_RATE:g} to {MAX_RATE:g}, got {rate!r}")
+            rate = DEFAULT_RATE
+
+        show_list = section.get("show_list", DEFAULT_SHOW_LIST)
+        if not isinstance(show_list, bool):
+            problems.append(f"[{SECTION}] show_list should be true or false, got {show_list!r}")
+            show_list = DEFAULT_SHOW_LIST
+
         return cls(
             enabled=enabled,
             max_gb=float(max_gb),
             keep=int(keep),
             player=player,
+            rate=float(rate),
+            show_list=show_list,
             config_path=config_path,
             problems=tuple(problems),
         )
@@ -149,6 +166,8 @@ class HistorySettings:
             f"max_gb = {self.max_gb:g}",
             f"keep = {self.keep}",
             f"player = {'true' if self.player else 'false'}",
+            f"rate = {self.rate:g}",
+            f"show_list = {'true' if self.show_list else 'false'}",
         ]
         return "\n".join(lines) + "\n"
 
@@ -196,6 +215,15 @@ class HistoryStore:
 
     def set_player(self, player: bool) -> HistorySettings:
         return self.save(replace(self.load(), player=bool(player)))
+
+    def set_rate(self, rate: float) -> HistorySettings:
+        rate = float(rate)
+        if not MIN_RATE <= rate <= MAX_RATE:
+            raise ValueError(f"rate must be from {MIN_RATE:g} to {MAX_RATE:g}, got {rate:g}")
+        return self.save(replace(self.load(), rate=rate))
+
+    def set_show_list(self, show_list: bool) -> HistorySettings:
+        return self.save(replace(self.load(), show_list=bool(show_list)))
 
 
 # --------------------------------------------------------------------------

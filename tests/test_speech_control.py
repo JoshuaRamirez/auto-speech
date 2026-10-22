@@ -27,9 +27,12 @@ from missed_speech import (
     play_ids,
 )
 from speech_control import CONTROL_ID, ControlActions, ControlDriver
+from sound_yield import SoundYieldStore
+from speaker import SpeakerStore
 from speech_history import HistoryStore, SpeechHistory
+from speech_settings import SettingsPlaces, SpeechSettings
 from ui_utility_client import UiUtilityClient
-from ui_utility_standin import StandIn
+from ui_utility_standin import StandIn, rev_1_2_script
 
 T0 = 1_760_000_000.0
 
@@ -90,7 +93,8 @@ class _Base(unittest.TestCase):
         # /tmp, not $TMPDIR: a Unix socket path on macOS must fit in 104 bytes.
         self.sockdir = Path(tempfile.mkdtemp(prefix="as-sc-", dir="/tmp"))
         self.sock = self.sockdir / "ui.sock"
-        self.standin = StandIn(self.sock).start()
+        # A rev 1.2 copy: the control alone (the settings piece: test_speech_settings).
+        self.standin = StandIn(self.sock, script=rev_1_2_script).start()
         self.rec = Recorder()
         self.drivers: list[ControlDriver] = []
         self.launches = 0
@@ -118,6 +122,15 @@ class _Base(unittest.TestCase):
             launch=self.no_launch,
             icon=None,
             start_worker=start_worker,
+            settings=SpeechSettings(SettingsPlaces(
+                mute_marker=self.root / "auto-speech.disabled",
+                autoplay_path=self.root / "autoplay.toml",
+                autoplay_default=self.root / "autoplay.toml.example",
+                sound_yield=SoundYieldStore(self.root / "sound-yield.toml"),
+                speaker=SpeakerStore(self.root / "speaker.toml"),
+                history=self.store,
+                missed=self.missed,
+            )),
         )
         self.drivers.append(d)
         return d
@@ -214,6 +227,7 @@ class TestOpen(_Base):
                              reason=REASON_LONGEST_WAIT)
         self.missed.hold(MissedLine(id="h1", text="Held now.", queued_at=old + 10))
         self.clock.t = time.time()
+        self.store.set_keep(sc.MAX_ITEMS)
         for n in range(sc.MAX_ITEMS + 5):
             self.export(f"Line {n}.")
         d = self.driver(names=lambda sid: None)

@@ -96,6 +96,14 @@ module that owns it. Release-by-release history is in
   unplayed items. Its play, hold, stop, skip back and forward, rate,
   play-item and play-all act on the daemon. Never opened during a hold
   (`speech_control.py`).
+- **Speech settings in the UI Utility's settings window** (ADR-023): beside
+  the control, a settings piece (contract 1.3, id `auto-speech-settings`,
+  source "Speech") with two groups. Speech: mute, autoplay reads, summary
+  size, hold speech while another app plays sound, rate, name the speaker.
+  Transcript: show the transcript when the control opens, lines kept, the
+  speech control on, clear the missed list. Each change is applied where the
+  setting lives and confirmed; a failure sends the old value back. The rate
+  is kept across restarts (`speech_settings.py`).
 - **Player launcher, retired from the daemon** (ADR-020, ADR-021): the
   per-line player panel opens only when one is passed in. It hands each exported line to the UI Utility's player by its
   contract v1 (`hello`, `open` on one panel with the WAV and its words,

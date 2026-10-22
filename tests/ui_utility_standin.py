@@ -19,10 +19,79 @@ Script = Callable[[dict[str, Any]], Optional[dict[str, Any]]]
 def default_script(request: dict[str, Any]) -> Optional[dict[str, Any]]:
     cmd = request.get("cmd")
     if cmd == "hello":
-        return {"ok": True, "contract": 1, "pieces": ["player", "control"]}
+        return {"ok": True, "contract": 1, "pieces": ["player", "control", "settings"]}
     if cmd == "open":
         return {"ok": True, "id": request.get("id") or "player-1"}
     return {"ok": True}
+
+
+def rev_1_2_script(request: dict[str, Any]) -> Optional[dict[str, Any]]:
+    """A copy from before the settings piece (contract rev 1.2, release 0.3.0)."""
+    if request.get("cmd") == "hello":
+        return {"ok": True, "contract": 1, "pieces": ["player", "control"]}
+    if request.get("cmd") == "open" and request.get("panel") == "settings":
+        return {"ok": False, "error": "bad-value", "detail": "panel must be one of player, control"}
+    return default_script(request)
+
+
+def _fits(item: dict[str, Any], value: Any) -> bool:
+    """Whether a value fits a settings item (contract rev 1.3, "values")."""
+    kind = item.get("kind")
+    if kind == "switch":
+        return isinstance(value, bool)
+    if kind == "choice":
+        return value in [c.get("id") for c in item.get("choices") or []]
+    if kind == "number":
+        if isinstance(value, bool) or not isinstance(value, (int, float)):
+            return False
+        lo, hi = item.get("min"), item.get("max")
+        return (lo is None or value >= lo) and (hi is None or value <= hi)
+    if kind == "text":
+        return isinstance(value, str)
+    return kind == "action" and value is None
+
+
+class SettingsPieces:
+    """The settings pieces a stand-in holds (contract rev 1.3): the groups
+    opened, the values shown, a `values` that does not fit refused with
+    bad-value, `status` carrying the values. Ids are one space across pieces."""
+
+    def __init__(self) -> None:
+        self.pieces: dict[str, dict[str, Any]] = {}
+
+    def items(self, piece_id: str) -> dict[str, dict[str, Any]]:
+        groups = self.pieces[piece_id]["groups"]
+        return {i["id"]: i for g in groups for i in g.get("items", [])}
+
+    def values(self, piece_id: str) -> dict[str, Any]:
+        return {k: i.get("value") for k, i in self.items(piece_id).items()}
+
+    def __call__(self, request: dict[str, Any], fallback: Script = default_script) -> Optional[dict[str, Any]]:
+        cmd, piece_id = request.get("cmd"), request.get("id")
+        if cmd == "open" and request.get("panel") == "settings":
+            for g in request.get("groups") or []:
+                for i in g.get("items") or []:
+                    if i.get("kind") != "action" and not _fits(i, i.get("value")):
+                        return {"ok": False, "error": "bad-value", "detail": f"{i.get('id')}: {i.get('value')!r}"}
+            self.pieces[piece_id] = {"groups": request.get("groups") or [], "source": request.get("source")}
+            return {"ok": True, "id": piece_id}
+        if piece_id in self.pieces:
+            if cmd == "values":
+                items = self.items(piece_id)
+                for k, v in (request.get("values") or {}).items():
+                    if k not in items or not _fits(items[k], v):
+                        return {"ok": False, "error": "bad-value", "detail": f"{k}: {v!r}"}
+                for k, v in request["values"].items():
+                    items[k]["value"] = v
+                return {"ok": True}
+            if cmd == "close":
+                del self.pieces[piece_id]
+                return {"ok": True}
+            if cmd == "status":
+                return {"ok": True, "id": piece_id, "piece": "settings", "values": self.values(piece_id)}
+        elif cmd == "open" and piece_id is not None:
+            self.pieces.pop(piece_id, None)  # an open of another piece takes the id
+        return fallback(request)
 
 
 def never(request: dict[str, Any]) -> None:
