@@ -96,6 +96,15 @@ module that owns it. Release-by-release history is in
   unplayed items. Its play, hold, stop, skip back and forward, rate,
   play-item and play-all act on the daemon. Never opened during a hold
   (`speech_control.py`).
+- **Stop, drained restart, live sessions** (ADR-024): a stop holds every
+  later line on the missed list until `auto-speech resume` or the control's
+  play (`stopped` in status and `narrate status`, kept across a restart);
+  `auto-speech narrate restart [--when-quiet] [--timeout S]` waits for the
+  queue and desk-speaker to drain, then kickstarts the launchd job; SIGTERM
+  finishes the line in flight and sets the queue aside; markers of sessions
+  no longer alive are ignored and listed by `doctor`; `auto-speech missed
+  add` puts a held or cut line on the list through the daemon
+  (`session_liveness.py`, `narrator_restart.py`).
 - **Speech settings in the UI Utility's settings window** (ADR-023): beside
   the control, a settings piece (contract 1.3, id `auto-speech-settings`,
   source "Speech") with two groups. Speech: mute, autoplay reads, summary

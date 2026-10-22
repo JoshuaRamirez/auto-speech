@@ -32,6 +32,7 @@ import wave
 from datetime import datetime, timezone
 from pathlib import Path
 
+from session_liveness import SessionLiveness
 from state_paths import state_path
 from collections.abc import Callable
 from typing import Any, Optional
@@ -46,8 +47,10 @@ from missed_speech import (
     REASON_INTERRUPTED,
     REASON_LONGEST_WAIT,
     REASON_MEETING,
+    REASON_ADDED,
     REASON_RESTART,
     REASON_STALE,
+    REASON_STOPPED,
     REASON_TIMEOUT,
     MissedLine,
     MissedList,
@@ -101,6 +104,11 @@ RETRY_DIR = state_path("auto-speech-retry")   # the WAV of a cut-off line, kept 
 # temp dir (56,785 entries on 2026-10-20, seconds per line under load).
 SYNTH_DIR = state_path("auto-speech-synth")
 WATERMARK_FILE = state_path("auto-speech-narrator-daemon.watermark")
+# His stop holds across a restart: the file says since when (ADR-024).
+STOPPED_FILE = state_path("auto-speech-stopped.json")
+# On SIGTERM the line in flight finishes; past this it is cut and set aside.
+# launchd's default exit timeout for a submitted job is 20 s.
+SHUTDOWN_FINISH_S = 15.0
 DEFAULT_SOCKET_PATH = state_path("auto-speech-daemon.sock")
 SOCKET_FILE = Path(os.environ.get("AUTO_SPEECH_DAEMON_SOCK", str(DEFAULT_SOCKET_PATH)))
 
@@ -377,6 +385,13 @@ class NarratorService:
         # says the same summary again (#m1021-1615-4497).
         self._meeting_active: Optional[bool] = None
         self._meeting_checked_at: float = 0.0
+        # His stop (ADR-024): nothing plays until a play or resume; it is
+        # kept in STOPPED_FILE so a restart keeps it.
+        self._stopped_since: Optional[float] = _read_stopped()
+        self._shutdown_cut = False
+        # Only sessions meant to speak are heard: a marker whose session is
+        # not alive is ignored (ADR-024).
+        self._liveness = SessionLiveness()
         if tts_executor is not None:
             self._tts_executor = tts_executor
         elif synth is not None or engine is not None:
@@ -414,6 +429,8 @@ class NarratorService:
         signal.signal(signal.SIGTERM, self._on_signal)
         signal.signal(signal.SIGINT, self._on_signal)
         _log(f"started pid={os.getpid()} provider={self._config['provider']}")
+        if getattr(self, "_stopped_since", None) is not None:
+            _log("stopped: still stopped from before the restart; nothing plays until a play or resume")
         self._control_call("start")
         try:
             _log(f"priority: {raise_own_priority().describe()}")
@@ -457,7 +474,20 @@ class NarratorService:
                     self._tts_queue.put_nowait(None)
                 except queue.Full:
                     pass
-            tts_thread.join(timeout=5.0)
+            # The line in flight finishes (SIGTERM, ADR-024); the worker sets
+            # everything still queued aside as it goes. Past the budget the
+            # line is cut, and set aside too.
+            tts_thread.join(timeout=SHUTDOWN_FINISH_S)
+            if tts_thread.is_alive():
+                _log(f"shutdown: the line in flight did not end in {SHUTDOWN_FINISH_S:g}s; cut and set aside")
+                self._shutdown_cut = True
+                if getattr(self, "_sink", None) is not None:
+                    try:
+                        self._sink.interrupt()
+                    except Exception as exc:  # noqa: BLE001
+                        _log(f"sink interrupt error: {exc!r}")
+                tts_thread.join(timeout=3.0)
+            self._set_aside_queued(REASON_RESTART)
             try:
                 PID_FILE.unlink()
             except OSError:
@@ -467,12 +497,18 @@ class NarratorService:
         return 0
 
     def _on_signal(self, signum, frame):
-        _log(f"signal {signum} → shutting down")
+        """The first signal lets the line in flight finish and sets the rest
+        of the queue aside (ADR-024); a second one cuts the line now."""
+        if self._stop.is_set():
+            _log(f"signal {signum} again → cutting the line in flight")
+            self._shutdown_cut = True
+            if hasattr(self, "_sink") and self._sink is not None:
+                self._sink.interrupt()
+            return
+        _log(f"signal {signum} → shutting down: the line in flight finishes, the queue goes on the missed list")
         if self._fsm.can(SIGNAL_SHUTDOWN):
             self._fsm.transition(SIGNAL_SHUTDOWN)  # RUNNING → SIGNAL_SHUTDOWN
         self._stop.set()
-        if hasattr(self, "_sink") and self._sink is not None:
-            self._sink.interrupt()
 
     def _start_socket_server(self) -> None:
         """Start the background UNIX socket listener thread."""
@@ -698,8 +734,17 @@ class NarratorService:
             }
 
         elif action == "interrupt":
-            self._handle_p1_interrupt()
-            return {"status": "ok", "action": "interrupt"}
+            # playback_control stop, `auto-speech stop`, the web app's end:
+            # his stop, which holds until a play or resume (ADR-024).
+            self._stop_speech()
+            return {"status": "ok", "action": "interrupt", "stopped": True}
+
+        elif action == "resume":
+            queued = self._resume_speech()
+            return {"status": "ok", "action": "resume", "was_stopped": queued >= 0, "queued": max(queued, 0)}
+
+        elif action == "missed_add":
+            return self._missed_add(payload)
 
         elif action == "status":
             depths = self._priority_arbiter.depths() if hasattr(self, "_priority_arbiter") else {}
@@ -717,6 +762,9 @@ class NarratorService:
                 "sound_yield": hold if isinstance(hold, dict) else None,
                 "missed": self._missed_counts(),
                 "speaker": self._speaker_status(),
+                "stopped": self._is_stopped(),
+                "stopped_since": getattr(self, "_stopped_since", None),
+                "queued": sum(int(v) for v in depths.values()) if isinstance(depths, dict) else 0,
             }
 
         return {
@@ -899,6 +947,8 @@ class NarratorService:
             session_marker = Path.home() / ".claude" / "auto-speech-narrate-sessions" / session_id
             if not session_marker.exists():
                 continue
+            if not self._marker_live(session_marker, session_id):
+                continue
 
             # Stop event → flush in-flight phase but SUPPRESS narration.
             # The end-of-turn autoplay owns the final read; we don't want
@@ -913,7 +963,7 @@ class NarratorService:
                 # Preserve playback and queue for sessions enrolled in autoplay mode
                 if session_id:
                     ap_marker = Path.home() / ".claude" / "auto-speech-autoplay-enabled" / session_id
-                    if ap_marker.exists():
+                    if ap_marker.exists() and self._marker_live(ap_marker, session_id):
                         _log(f"Session {session_id} has autoplay enabled; preserving queue and playback on UserPromptSubmit")
                         self._classifier.flush(session_id)
                         self._phases_this_turn = 0
@@ -962,7 +1012,7 @@ class NarratorService:
                 # If autoplay is NOT enabled for this session, Narrator provides the conversational sign-off.
                 if session_id:
                     ap_marker = Path.home() / ".claude" / "auto-speech-autoplay-enabled" / session_id
-                    if ap_marker.exists():
+                    if ap_marker.exists() and self._marker_live(ap_marker, session_id):
                         _log(f"Session {session_id} has autoplay enabled; yielding Stop summary to autoplay_worker.")
                         self._phases_this_turn = 0
                         continue
@@ -1323,6 +1373,17 @@ class NarratorService:
                 item_obj = phase
                 phase = phase.payload
 
+            stopping = getattr(self, "_stop", None)
+            if stopping is not None and stopping.is_set():
+                # Shutting down (ADR-024): what is still queued goes on the
+                # missed list rather than playing past the restart.
+                try:
+                    self._set_aside_item(phase, item_obj, REASON_RESTART)
+                except Exception as exc:  # noqa: BLE001
+                    _log(f"shutdown set-aside error: {exc!r}")
+                self._tts_queue.task_done()
+                continue
+
             if isinstance(item_obj, QueueItem) and item_obj.retries > 0:
                 if not self._await_load(item_obj):
                     continue   # put back for later: an interrupt or a preemption came first
@@ -1646,6 +1707,8 @@ class NarratorService:
 
         heard = False
         try:
+            if self._set_aside_if_stopped(text, item):
+                return False
             heard = self._play_item_body(path, item, text=text, session_id=session_id, age=age, hold=hold,
                                          held=held, on_hold=on_hold, on_start=on_start, name=name)
             return heard
@@ -1702,6 +1765,10 @@ class NarratorService:
                 _log(f"missed: set aside after {outcome.waited_seconds:.0f}s held while {who} played: {name!r}")
             return False
 
+        if getattr(self, "_shutdown_cut", False):
+            self._set_aside(text, item, reason=REASON_RESTART, waited=age, existing=held.get("line"))
+            _log(f"missed: cut by the shutdown, set aside: {name!r}")
+            return False
         outcome = getattr(self._sink, "last_hold", None)
         self._note_hold_ended(outcome)
         line = held.get("line")
@@ -1756,7 +1823,8 @@ class NarratorService:
         return ControlActions(
             pause=lambda: self._sink_verb("pause"),
             resume=lambda: self._sink_verb("resume"),
-            stop=self._handle_p1_interrupt,
+            stop=self._stop_speech,
+            unstop=self._resume_speech,
             restart=lambda: self._sink_verb("restart"),
             skip=lambda: self._sink_verb("skip"),
             set_rate=self._set_rate,
@@ -1784,7 +1852,9 @@ class NarratorService:
 
     def _replay_history_line(self, line: Any) -> None:
         """A heard line, played again from its WAV over any other sound (he
-        asked); it is not exported to the history a second time."""
+        asked); it is not exported to the history a second time. A play
+        ends his stop."""
+        self._resume_speech(play_set_aside=False)
         q_item = QueueItem(
             priority=Priority.EXPLICIT_MCP,
             payload=str(line.wav),
@@ -1798,14 +1868,140 @@ class NarratorService:
 
     def _play_missed_ids(self, ids: list[str]) -> int:
         """Missed lines played through missed_speech's play, which takes each
-        off the list once heard."""
+        off the list once heard. A play ends his stop."""
         from missed_speech import play_ids
 
+        self._resume_speech(play_set_aside=False)
         try:
             return play_ids(ids, missed=self._missed, client=_InProcessClient(self))
         except ConnectionError as exc:
             _log(f"control: missed lines not queued: {exc!r}")
             return 0
+
+    # -- his stop (ADR-024) -----------------------------------------------------
+
+    def _is_stopped(self) -> bool:
+        return getattr(self, "_stopped_since", None) is not None
+
+    def _stop_speech(self) -> None:
+        """His stop: the line playing ends, the queue is cleared, and nothing
+        plays until a play or resume. Lines that arrive meanwhile, from any
+        caller, go on the missed list as `stopped`."""
+        if not self._is_stopped():
+            self._stopped_since = time.time()
+            _write_stopped(self._stopped_since)
+            _log("stopped: nothing plays until a play or resume; lines that arrive go on the missed list")
+        self._handle_p1_interrupt()
+
+    def _resume_speech(self, *, play_set_aside: bool = True) -> int:
+        """Ends his stop. With play_set_aside, the lines that arrived while
+        stopped are queued again, in order. Returns how many were queued;
+        -1 when speech was not stopped."""
+        since = getattr(self, "_stopped_since", None)
+        if since is None:
+            return -1
+        self._stopped_since = None
+        _write_stopped(None)
+        if not play_set_aside:
+            _log("resumed: his stop ended by a play")
+            return 0
+        missed = getattr(self, "_missed", None)
+        ids: list[str] = []
+        if missed is not None:
+            try:
+                ids = [m.id for m in missed.load() if m.reason == REASON_STOPPED and (m.missed_at or 0.0) >= since]
+            except Exception as exc:  # noqa: BLE001
+                _log(f"missed list read error: {exc!r}")
+        queued = self._play_missed_ids(ids) if ids else 0
+        _log(f"resumed: his stop ended; {queued} line(s) that arrived while stopped queued again")
+        return queued
+
+    def _set_aside_if_stopped(self, text: str, item: Optional[QueueItem]) -> bool:
+        if not self._is_stopped():
+            return False
+        self._set_aside(text, item, reason=REASON_STOPPED)
+        _log(f"missed: stopped, set aside: {(text or '')[:50]!r}")
+        return True
+
+    def _set_aside_queued(self, reason: str) -> int:
+        """Every line still in the queue goes on the missed list (shutdown)."""
+        n = 0
+        while True:
+            try:
+                phase = self._tts_queue.get_nowait()
+            except queue.Empty:
+                break
+            except Exception:  # noqa: BLE001 — a queue that cannot say is empty
+                break
+            if phase is None:
+                continue
+            arbiter = getattr(self, "_priority_arbiter", None)
+            item = getattr(arbiter, "active_item", None) if arbiter else None
+            if self._set_aside_item(phase, item, reason):
+                n += 1
+            try:
+                self._tts_queue.task_done()
+            except Exception:  # noqa: BLE001
+                pass
+        if n:
+            _log(f"shutdown: {n} queued line(s) set aside on the missed list")
+        return n
+
+    def _set_aside_item(self, phase: Any, item: Any, reason: str) -> bool:
+        """A queued phase, set aside without playing. False for what is not a line."""
+        if isinstance(phase, QueueItem):
+            item, phase = phase, phase.payload
+        q_item = item if isinstance(item, QueueItem) else None
+        if isinstance(phase, Path) or (isinstance(phase, str) and phase.endswith(".wav")):
+            text = getattr(q_item, "line_text", "") or ""
+        elif isinstance(phase, str):
+            text = phase
+        else:
+            return False  # a phase still to be summarised: nothing to say yet
+        if getattr(q_item, "history_id", ""):
+            return False  # a replay of a heard line: it is in the history already
+        self._set_aside(text, q_item, reason=reason)
+        return True
+
+    def _missed_add(self, payload: dict[str, Any]) -> dict[str, Any]:
+        """`auto-speech missed add`: a caller puts a line it held or that was
+        cut on the missed list, through the daemon, the one writer."""
+        text = str(payload.get("text") or "").strip()
+        if not text:
+            return {"status": "error", "error_code": "INVALID_PAYLOAD", "message": "missed add: text is required"}
+        source = str(payload.get("source") or "").strip() or None
+        at = payload.get("at")
+        try:
+            queued_at = float(at) if at is not None else time.time()
+        except (TypeError, ValueError):
+            return {"status": "error", "error_code": "INVALID_PAYLOAD", "message": f"missed add: bad time {at!r}"}
+        line_id = str(payload.get("id") or "").strip() or new_id()
+        missed = getattr(self, "_missed", None)
+        if missed is None:
+            return {"status": "error", "error_code": "NO_MISSED_LIST", "message": "missed add: no missed list"}
+        try:
+            missed.miss(MissedLine(id=line_id, text=text, queued_at=queued_at, source=source), reason=REASON_ADDED)
+        except Exception as exc:  # noqa: BLE001
+            return {"status": "error", "error_code": "WRITE_FAILED", "message": f"missed add: {exc!r}"}
+        _log(f"missed: added by {source or 'a caller'}: {text[:50]!r}")
+        self._control_call("list_changed")
+        return {"status": "ok", "action": "missed_add", "id": line_id}
+
+    def _marker_live(self, marker: Path, session_id: str) -> bool:
+        """An enrolment marker counts only while its session is alive (ADR-024)."""
+        liveness = getattr(self, "_liveness", None)
+        if liveness is None:
+            return True
+        try:
+            alive = liveness.alive(marker, session_id)
+        except Exception:  # noqa: BLE001 — a check that cannot say keeps the marker
+            return True
+        if not alive:
+            logged = self.__dict__.setdefault("_stale_logged", set())
+            if (marker.parent.name, session_id) not in logged:
+                logged.add((marker.parent.name, session_id))
+                _log(f"session {session_id}: its marker {marker.parent.name} is stale (no live session); ignored")
+        return alive
 
     def _hold_stands(self) -> bool:
         """True while a meeting or another app's sound holds speech; the
@@ -1934,6 +2130,8 @@ class NarratorService:
     def _play_cached(self, path: Path, item: Optional[QueueItem], *, text: str = "", plan: Optional[Plan] = None) -> bool:
         """Cached audio cannot take "<name> here," in front of its words, so
         when the desk is to be named the clip plays first, then the line."""
+        if self._set_aside_if_stopped(text, item):
+            return False
         sid = getattr(item, "session_id", None) if item is not None else None
         if plan is None:
             plan = self._speaker_plan(text, sid)
@@ -1971,6 +2169,10 @@ class NarratorService:
                 self._set_aside(line, item, reason=REASON_STALE, waited=age)
                 _log(f"missed: stale backlog ({age:.0f}s old when its turn came), set aside: {line[:50]!r}")
                 return
+
+        # His stop holds every line, from any caller, before synthesis.
+        if self._set_aside_if_stopped(line, item):
+            return
 
         # In a meeting the line is set aside before synthesis: no TTS call,
         # no stall. An explicit replay (`missed --play`, hold=False) plays.
@@ -2143,6 +2345,29 @@ class NarratorService:
             temp_wav.with_suffix(temp_wav.suffix + ".partial").unlink(missing_ok=True)
             for frag in temp_wav.parent.glob(f"{temp_wav.stem}*"):
                 frag.unlink(missing_ok=True)
+
+
+def _read_stopped() -> Optional[float]:
+    """Since when he stopped speech, kept across a restart; None: not stopped."""
+    try:
+        data = json.loads(STOPPED_FILE.read_text(encoding="utf-8"))
+        since = data.get("since") if isinstance(data, dict) else None
+        return float(since) if since is not None else None
+    except (OSError, ValueError, TypeError):
+        return None
+
+
+def _write_stopped(since: Optional[float]) -> None:
+    try:
+        if since is None:
+            STOPPED_FILE.unlink(missing_ok=True)
+            return
+        STOPPED_FILE.parent.mkdir(parents=True, exist_ok=True)
+        tmp = STOPPED_FILE.with_name(STOPPED_FILE.name + ".tmp")
+        tmp.write_text(json.dumps({"since": since}) + "\n", encoding="utf-8")
+        os.replace(tmp, STOPPED_FILE)
+    except OSError as exc:
+        _log(f"stopped state not kept: {exc!r}")
 
 
 _STALE_MARKER_DAYS = 30

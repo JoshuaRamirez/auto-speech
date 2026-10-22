@@ -103,6 +103,9 @@ class ControlActions:
     set_rate: Callable[[float], float] = lambda rate: rate  # returns the rate now in effect
     replay: Callable[[HistoryLine], None] = lambda line: None  # a heard line, queued to play again
     play_missed: Callable[[list[str]], int] = lambda ids: 0  # missed-list ids, in order; how many queued
+    # Ends his stop (ADR-024) and queues the lines that arrived while stopped;
+    # how many were queued, or -1 when speech was not stopped.
+    unstop: Callable[[], int] = lambda: -1
 
 
 @dataclass
@@ -424,7 +427,7 @@ class ControlDriver:
             missed = []
         for m in missed:
             item = {"id": MISSED_PREFIX + m.id, "text": m.label, "at": _hhmm(m.queued_at), "clip": None, "unplayed": True}
-            name = self._names(m.session_id)
+            name = m.source or self._names(m.session_id)
             if name:
                 item["source"] = name
             entries.append((m.queued_at, item))
@@ -541,6 +544,8 @@ class ControlDriver:
         with self._cond:
             state, paused, now = self._model.state, self._model.paused, self._model.now
         if action == "play":
+            if self.actions.unstop() > 0:
+                return  # the lines his stop set aside play, in order
             if state == HELD and paused:
                 if self.actions.resume():
                     self._change(_STATE, state=PLAYING, paused=False)

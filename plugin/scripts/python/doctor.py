@@ -23,6 +23,7 @@ from autoplay_scope import SoloScope
 from config_validation import validate_user_configs
 from health_report import HealthReport, Status
 from self_update import needs_sync
+from session_liveness import SessionLiveness
 
 # FAIL below this much free space on the logs/cache filesystem; WARN below
 # the higher mark. Unbounded /tmp growth was the original blocker, so headroom
@@ -113,6 +114,8 @@ class Doctor:
         self._check_queue(r)
         self._check_progress(r)
         self._check_scope(r)
+        self._check_stopped(r)
+        self._check_markers(r)
         self._check_mcp(r)
         self._check_config(r)
         self._check_updates(r)
@@ -269,6 +272,25 @@ class Doctor:
             r.add("scope", Status.OK, "ALL — every enrolled session reads")
         else:
             r.add("scope", Status.OK, f"SOLO — only session {held} reads")
+
+    def _check_stopped(self, r: HealthReport) -> None:
+        """His stop (ADR-024): nothing plays until a play or resume."""
+        try:
+            data = json.loads((self._tmp / "auto-speech-stopped.json").read_text(encoding="utf-8"))
+            since = float(data["since"])
+        except (OSError, ValueError, TypeError, KeyError):
+            return
+        when = time.strftime("%H:%M", time.localtime(since))
+        r.add("stopped", Status.WARN, f"speech stopped since {when}; nothing plays until `auto-speech resume`")
+
+    def _check_markers(self, r: HealthReport) -> None:
+        """Enrolment markers whose session is not alive (ADR-024): ignored."""
+        stale = SessionLiveness(self._home, clock=self._now).stale()
+        if not stale:
+            r.add("markers", Status.OK, "every enrolment marker has a live session")
+            return
+        names = ", ".join(f"{m.kind.removeprefix('auto-speech-')}/{m.session_id[:8]} ({m.age_s / 86400:.0f}d)" for m in stale)
+        r.add("markers", Status.WARN, f"{len(stale)} stale, ignored (no live session): {names}")
 
     def _check_mcp(self, r: HealthReport) -> None:
         """Is the `speak` MCP server launchable, and is it registered?

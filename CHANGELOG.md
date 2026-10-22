@@ -10,6 +10,9 @@ The Chrome extension under `chrome-extension/` is versioned independently
 ## [Unreleased]
 
 ### Added
+- **`auto-speech missed add --text … --source NAME [--at HH:MM] [--id ID]`**
+  (ADR-024): a caller puts a held or cut line on the missed list through the
+  daemon; the speech control lists it unplayed under its source.
 - **auto-speech's settings in the UI Utility's settings window (ADR-023).**
   His 2026-10-21 22:26: "I can do settings on them both. And I want them to
   icon bar up the top." With `[history] player` on, the daemon opens a
@@ -138,6 +141,17 @@ The Chrome extension under `chrome-extension/` is versioned independently
   HOME to a temporary directory at import.
 
 ### Fixed
+- **A stop stops; a restart drains first; only live sessions are heard
+  (ADR-024).** His 2026-10-21 23:38: "you just interrupted yourself during the
+  10 m thing. bug. fix." / "i think im hearing things from other
+  conversations". A stop now holds every later line, from any caller, on the
+  missed list until a play or resume (`stopped` in the status reply and
+  `narrate status`; kept across a restart). On SIGTERM the line in flight
+  finishes and the queue goes on the missed list. `auto-speech narrate
+  restart` waits for the drain (and desk-speaker's pending) before
+  `launchctl kickstart`, and refuses on timeout. Enrolment markers whose
+  session is not alive (no transcript written in 24 h, marker older than
+  that) are ignored and listed by `doctor`.
 - **The speech control lists every missed and held line.** The newest-50 cap
   was cut after the missed lines were merged in, so when the 50 newest heard
   lines were all newer than the missed ones (live on 2026-10-21: 50 lines
