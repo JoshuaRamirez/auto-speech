@@ -43,7 +43,7 @@ from ui_utility_client import CONTROL, ContractError, UiUtilityClient
 CONTROL_ID = "auto-speech"
 MISSED_PREFIX = "missed:"  # a missed-list line's item id
 NOW_PREFIX = "now-"  # the line playing now, before the history names it
-MAX_ITEMS = 50  # the newest history lines shown
+MAX_ITEMS = 50  # the newest history lines shown; missed and held lines are never cut
 RATES = [1.0, 1.25, 1.5, 2.0, 0.75]
 
 IDLE = "idle"
@@ -342,7 +342,8 @@ class ControlDriver:
 
     def items(self) -> list[dict[str, Any]]:
         """The list, newest first: the line playing now, then the history and
-        the missed list by time."""
+        the missed list by time. Only the history is capped: every missed or
+        held line is in the list, however old, so he can play what he missed."""
         entries: list[tuple[float, dict[str, Any]]] = []
         try:
             lines = self._history.load(limit=MAX_ITEMS)
@@ -365,7 +366,7 @@ class ControlDriver:
                 item["source"] = name
             entries.append((m.queued_at, item))
         entries.sort(key=lambda e: e[0], reverse=True)
-        out = [item for _, item in entries][:MAX_ITEMS]
+        out = [item for _, item in entries]
         with self._cond:
             now = dict(self._model.now) if self._model.now else None
         return ([now] if now else []) + out

@@ -205,6 +205,27 @@ class TestOpen(_Base):
         self.assertEqual(d.sync(), "wrong contract")
         self.assertEqual(self.requests("open"), [])
 
+    def test_every_missed_and_held_line_is_listed_whatever_the_history_cap(self):
+        # Live, 21:27: 50 history lines newer than 20 missed lines cut them all.
+        self.store.set_player(True)
+        old = time.time() - 3600
+        for n in range(3):
+            self.missed.miss(MissedLine(id=f"m{n}", text=f"Missed {n}.", queued_at=old + n),
+                             reason=REASON_LONGEST_WAIT)
+        self.missed.hold(MissedLine(id="h1", text="Held now.", queued_at=old + 10))
+        self.clock.t = time.time()
+        for n in range(sc.MAX_ITEMS + 5):
+            self.export(f"Line {n}.")
+        d = self.driver(names=lambda sid: None)
+        d.start()
+        self.assertEqual(d.sync(), "opened")
+        [req] = self.requests("open")
+        items = req["items"]
+        unplayed = [i["id"] for i in items if i.get("unplayed")]
+        self.assertEqual(unplayed, ["missed:h1", "missed:m2", "missed:m1", "missed:m0"])
+        self.assertEqual(len(items), sc.MAX_ITEMS + 4, "the history capped at MAX_ITEMS, every unplayed line kept")
+        self.assertEqual(items[-4:], [i for i in items if i.get("unplayed")], "still newest first by time")
+
 
 class TestKeepCurrent(_Base):
     def setUp(self) -> None:

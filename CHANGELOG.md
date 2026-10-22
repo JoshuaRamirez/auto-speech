@@ -128,6 +128,11 @@ The Chrome extension under `chrome-extension/` is versioned independently
   HOME to a temporary directory at import.
 
 ### Fixed
+- **The speech control lists every missed and held line.** The newest-50 cap
+  was cut after the missed lines were merged in, so when the 50 newest heard
+  lines were all newer than the missed ones (live on 2026-10-21: 50 lines
+  from 19:13, 20 missed from 17:11), the control showed none unplayed. Only
+  the history is capped now; every missed or held line is listed, by time.
 - **The missed summary is spoken once per meeting, with its own count.**
   "You missed 4 lines during the meeting" was said again at every daemon
   start (ten times on 2026-10-21 after an 11:00 meeting): the cutoff for

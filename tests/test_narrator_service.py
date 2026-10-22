@@ -1791,7 +1791,9 @@ def test_a_hung_ui_utility_never_delays_a_heard_line() -> None:
         for i in range(3):
             t0 = time.monotonic()
             svc._heard(wav, None, text=f"line {i}")
-            assert time.monotonic() - t0 < 0.05, f"_heard took {time.monotonic() - t0:.3f} s"
+            # The hung client sleeps 2 s; 0.5 s still proves _heard never waits on it,
+            # and leaves room for a loaded machine (0.069 s at load 37, 2026-10-21).
+            assert time.monotonic() - t0 < 0.5, f"_heard took {time.monotonic() - t0:.3f} s"
         assert len(svc._history.load()) == 3
     finally:
         svc._close_player()
