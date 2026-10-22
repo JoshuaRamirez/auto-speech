@@ -102,7 +102,11 @@ class TestDaemonClientUnitMethods(unittest.TestCase):
     def test_speak_payload_defaults(self, mock_send: mock.MagicMock) -> None:
         client = DaemonClient()
         client.speak("hello world")
-        mock_send.assert_called_once_with(
+        payload = mock_send.call_args[0][0]
+        # Without a caller's id the client makes one, so its own retries never queue a line twice (ADR-025).
+        self.assertTrue(payload.pop("line_id").startswith("client-"))
+        self.assertEqual(
+            payload,
             {
                 "action": "speak",
                 "text": "hello world",
@@ -111,7 +115,7 @@ class TestDaemonClientUnitMethods(unittest.TestCase):
                 "session_id": None,
                 "voice_id": DEFAULT_VOICE_ID,
                 "speed": DEFAULT_SPEED,
-            }
+            },
         )
 
     @mock.patch.object(DaemonClient, "_send_request")
@@ -149,6 +153,7 @@ class TestDaemonClientUnitMethods(unittest.TestCase):
             session_id="sess-123",
             voice_id="af_bella",
             speed=1.5,
+            line_id="2026-10-22-003532.636-desk",
         )
         mock_send.assert_called_once_with(
             {
@@ -159,6 +164,7 @@ class TestDaemonClientUnitMethods(unittest.TestCase):
                 "session_id": "sess-123",
                 "voice_id": "af_bella",
                 "speed": 1.5,
+                "line_id": "2026-10-22-003532.636-desk",
             }
         )
 

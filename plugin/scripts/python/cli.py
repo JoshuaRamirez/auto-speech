@@ -186,8 +186,12 @@ def handle_speak(
             session_id=session_id,
             voice_id=args.voice if args.voice != "system" else "system",
             speed=args.speed,
+            line_id=getattr(args, "line_id", None),
         )
         if resp.status in ("ok", "queued"):
+            line = (resp.raw or {}).get("line") if isinstance(resp.raw, dict) else None
+            if isinstance(line, dict):
+                print(f"speak: line {line.get('line_id')} is already {line.get('state')}; not queued again", file=sys.stderr)
             return EXIT_OK
         return EXIT_FAILURE
     except Exception as exc:
@@ -540,6 +544,33 @@ def handle_autoplay(args: argparse.Namespace) -> int:
     return EXIT_INVALID_INPUT
 
 
+def _line_status_text(line: dict) -> str:
+    """One line for `narrate status --line-id` (ADR-025)."""
+
+    def at(key: str) -> str:
+        t = line.get(key)
+        return time.strftime("%H:%M:%S", time.localtime(float(t))) if t else "?"
+
+    state = line.get("state") or "unknown"
+    text = f"line {line.get('line_id')}: {state}"
+    if state == "queued":
+        text += f" since {at('queued_at')}"
+        if line.get("synth_started"):
+            text += f"; synthesizing since {at('synth_started')}"
+    elif state == "playing":
+        text += f" since {at('playing_at')}"
+    elif state == "done":
+        text += f" at {at('done_at')}"
+    elif state == "dropped":
+        text += f" at {at('dropped_at')} ({line.get('reason') or 'no reason given'})"
+    elif state == "unknown":
+        text += " (not seen in the last hour)"
+    sends = line.get("sends")
+    if isinstance(sends, int) and sends > 1:
+        text += f"; sent {sends} times, queued once"
+    return text
+
+
 def handle_narrate(args: argparse.Namespace) -> int:
     action = getattr(args, "narrate_action", None)
     if not action:
@@ -592,9 +623,10 @@ def handle_narrate(args: argparse.Namespace) -> int:
         enrolled_count = len(list(marker_dir.glob("*"))) if marker_dir.is_dir() else 0
         c = DaemonClient()
         raw: dict = {}
+        line_id = getattr(args, "line_id", None)
         if c._socket_path.is_socket():
             try:
-                raw = c.status().raw or {}
+                raw = c.status(line_id=line_id).raw or {}
             except Exception:  # noqa: BLE001
                 raw = {}
         daemon_alive = raw.get("status") == "ok"
@@ -609,6 +641,8 @@ def handle_narrate(args: argparse.Namespace) -> int:
             else:
                 print("stopped: no")
             print(f"state: {raw.get('daemon_state')}; queued: {raw.get('queued', 0)}")
+            if line_id:
+                print(_line_status_text(raw.get("line") or {"line_id": line_id, "state": "unknown"}))
         return EXIT_OK
 
     elif action == "restart":
@@ -1021,6 +1055,12 @@ def build_parser() -> argparse.ArgumentParser:
         help="Session ID for tracking speech events.",
     )
     p_speak.add_argument(
+        "--line-id",
+        type=str,
+        default=None,
+        help="The line's id: a line already queued, playing or done in the last ten minutes is not queued again (ADR-025).",
+    )
+    p_speak.add_argument(
         "--priority",
         type=int,
         default=int(Priority.EXPLICIT_MCP),
@@ -1162,6 +1202,12 @@ def build_parser() -> argparse.ArgumentParser:
     p_nr_status = sub_nr.add_parser(
         "status",
         help="Show narration daemon and marker status.",
+    )
+    p_nr_status.add_argument(
+        "--line-id",
+        type=str,
+        default=None,
+        help="Also say where this line is: queued (and since when it synthesizes), playing, done or dropped (ADR-025).",
     )
     p_nr_status.add_argument(
         "--session-id",

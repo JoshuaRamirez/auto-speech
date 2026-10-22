@@ -11,6 +11,7 @@ import json
 import os
 import socket
 import time
+import uuid
 from dataclasses import dataclass
 from enum import IntEnum
 from pathlib import Path
@@ -119,13 +120,18 @@ class DaemonClient:
         missed_id: Optional[str] = None,
         hold: bool = True,
         origin_file: Optional[str] = None,
+        line_id: Optional[str] = None,
     ) -> DaemonResponse:
         """Submits speech request to daemon priority queue (defaults mirror config_constants.py).
 
         `missed_id` names the missed-list line this replays (the daemon
         clears it once played); `hold=False` plays over other apps' sound;
         `origin_file` names the file the line came from (desk-say's pending
-        file), kept in the history sidecar (ADR-020)."""
+        file), kept in the history sidecar (ADR-020). `line_id` names the
+        line: a speak whose id is queued, playing or done in the last ten
+        minutes is acknowledged and not queued again (ADR-025). Without one,
+        this call makes its own, so the retries below never queue a line
+        twice; the reply's raw["line_id"] says which."""
         payload: dict[str, Any] = {
             "action": "speak",
             "text": text,
@@ -141,6 +147,7 @@ class DaemonClient:
             payload["hold"] = False
         if origin_file:
             payload["origin_file"] = origin_file
+        payload["line_id"] = line_id or f"client-{uuid.uuid4().hex[:16]}"
         return self._send_request(payload)
 
     def play_cache(
@@ -195,9 +202,13 @@ class DaemonClient:
             payload["id"] = line_id
         return self._send_request(payload)
 
-    def status(self) -> DaemonResponse:
-        """Retrieves daemon health, queue depths, and current playback state."""
-        return self._send_request({"action": "status"})
+    def status(self, line_id: Optional[str] = None) -> DaemonResponse:
+        """Retrieves daemon health, queue depths, and current playback state;
+        with `line_id`, raw["line"] says where that line is (ADR-025)."""
+        payload: dict[str, Any] = {"action": "status"}
+        if line_id:
+            payload["line_id"] = line_id
+        return self._send_request(payload)
 
     def _send_request(self, payload: dict[str, Any]) -> DaemonResponse:
         line = json.dumps(payload).encode("utf-8") + b"\n"
