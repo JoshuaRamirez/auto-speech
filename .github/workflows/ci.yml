@@ -27,6 +27,11 @@ jobs:
         uses: astral-sh/setup-uv@v6
 
       - name: Ruff (lint)
+        # Warn only until product hardening: hard checks come last (his
+        # 2026-10-15 12:51). 451 findings predate this; a red lint stopped
+        # every later step, so the tests never ran in CI. Set the repository
+        # variable LINT_STRICT=true to make it blocking again.
+        continue-on-error: ${{ vars.LINT_STRICT != 'true' }}
         run: uvx ruff check plugin/scripts/python tests
 
       - name: ShellCheck (warnings+)
