@@ -323,15 +323,15 @@ class TestRunAction(_Tmp):
         text = self.run_("status").text
         self.assertTrue(text.startswith(
             "speech history: on\nmax_gb: 20 GB on disk, the oldest pruned first\nheld now: 0 lines, 0.0 MB\n"
-            "keep: the player's view shows the newest 200 lines\nplayer after each line: off"
+            "keep: the player's view shows the newest 200 lines\nspeech control: off"
         ), text)
         self.assertIn("speech history: off", self.run_("off").text)
         self.assertFalse(self.store.load().enabled)
         self.assertIn("speech history: on", self.run_("on").text)
         r = run_action("player-on", store=self.store, history=self.history, player_note=lambda s: "the UI Utility is not installed; nothing opens")
-        self.assertIn("player after each line: on (the UI Utility is not installed; nothing opens)", r.text)
+        self.assertIn("speech control: on (the UI Utility is not installed; nothing opens)", r.text)
         self.assertTrue(self.store.load().player)
-        self.assertIn("player after each line: off", self.run_("player-off").text)
+        self.assertIn("speech control: off", self.run_("player-off").text)
 
     def test_max_gb_bounds_the_store_and_prunes_at_once(self):
         per = self._line_bytes()
@@ -614,7 +614,7 @@ class TestPlayerLauncher(_Tmp):
         (self.root / "player.json").write_text(json.dumps(
             {"outcome": "refused", "detail": "bad-value: clip", "at": "2026-10-21T01:02:03", "line_id": "x"}))
         r = run_action("status", store=self.store, history=self.history, player_note=lambda s: launcher.note(s))
-        self.assertIn("player after each line: on (opens after each line; last: refused 01:02:03: bad-value: clip)", r.text)
+        self.assertIn("speech control: on (opens after each line; last: refused 01:02:03: bad-value: clip)", r.text)
 
 
 class TestCli(_Tmp):

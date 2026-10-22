@@ -49,6 +49,7 @@ class QueueItem:
     retries: int = 0  # how many times this line timed out and was queued again (ADR-019)
     line_text: str = ""  # the words of a WAV payload (a cut-off line replayed whole)
     origin_file: str = ""  # the file the caller says this line came from (desk-say), for the history sidecar (ADR-020)
+    history_id: str = ""  # a history line played again from the speech control: not exported twice (ADR-022)
 
     def __post_init__(self) -> None:
         if self.enqueued_at is None:

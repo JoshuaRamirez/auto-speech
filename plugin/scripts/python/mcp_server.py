@@ -55,7 +55,7 @@ from missed_speech import ACTIONS as MISSED_ACTIONS, run_action as run_missed_ac
 from sound_yield import ACTIONS as SOUND_YIELD_ACTIONS, run_action as run_sound_yield_action
 from speaker import ACTIONS as SPEAKER_ACTIONS, run_action as run_speaker_action
 from speech_history import ACTIONS as HISTORY_ACTIONS, run_action as run_history_action
-from speech_player import PlayerLauncher
+import speech_control
 from transcript_locator import TranscriptLocator
 
 SERVER_NAME = "auto-speech"
@@ -389,8 +389,9 @@ HISTORY_TOOL = {
         "how many, 'as_json' for the sidecars); 'status' shows the settings; "
         "'on'/'off' switch the export; 'max-gb' bounds the store ('gb'); "
         "'keep' sets how many of the newest lines the player's view shows "
-        "('count'; deletes nothing); 'player-on'/'player-off' switch the player that opens "
-        "after each line (default off, never during a hold). Same verbs as "
+        "('count'; deletes nothing); 'player-on'/'player-off' switch the UI Utility's "
+        "speech control: what plays, with the history and missed lines below it "
+        "(default off, never opened during a hold). Same verbs as "
         "`auto-speech history` and the [history] config."
     ),
     "inputSchema": {
@@ -1534,7 +1535,7 @@ class McpServer:
                 as_json=as_json,
                 store=store,
                 history=self._speech_history,
-                player_note=lambda settings: PlayerLauncher(store, start_worker=False).note(settings),
+                player_note=speech_control.note,
             )
         except Exception as exc:  # noqa: BLE001
             return _ok(req_id, _tool_result(f"history failed: {exc}", is_error=True))

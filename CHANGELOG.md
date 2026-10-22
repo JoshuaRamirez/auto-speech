@@ -10,6 +10,17 @@ The Chrome extension under `chrome-extension/` is versioned independently
 ## [Unreleased]
 
 ### Added
+- **The speech control: a Mac-native floating control with the transcript
+  below it (ADR-022).** His 2026-10-21 20:07: "i want the same thing that
+  shows up like in the screenshot" / "and i wanted a transcript". With
+  `[history] player` on, the daemon opens the UI Utility's control piece
+  (contract 1.2) at start and keeps it current: the speaker as its title,
+  the line playing on top, the history newest first, and every missed
+  line as an unplayed item. Its play, hold, stop, skip, rate, play-item
+  and play-all act on the daemon: pause and resume through mpv, a heard
+  line replayed from its WAV, a missed line played through the missed
+  list. Never opened during a hold. The per-line player panel (ADR-021)
+  no longer opens by default (#m1021-2027-04bb).
 - **The UI Utility's player shows each line after it is heard (ADR-021).**
   His 2026-10-20 13:38: "Each time the Desk speaks, a small player pops up
   and plays the line's WAV". With `[history] player = true`

@@ -33,7 +33,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from state_paths import state_path
-from typing import Any, Optional
+from typing import Any, Callable, Optional
 
 # Daemon runs a UNIX domain socket server (socket.AF_UNIX) via unix_ipc_server._DaemonSocketServer
 
@@ -68,6 +68,7 @@ from sound_yield import ABORTED, DEFAULT_MAX_WAIT_SECONDS, REASON_MEETING as HOL
 from priority_arbiter import Priority, PriorityArbiter, QueueItem, QueueProxyFacade
 from speaker import Announcer, Plan
 from speech_history import SpeechHistory, clean_origin_file
+from speech_control import ControlActions, ControlDriver
 from speech_player import PlayerLauncher
 from unix_ipc_server import _DaemonSocketServer, control_payload
 from speech_priority import (
@@ -233,6 +234,27 @@ def _replay_flags(payload: dict) -> tuple[str, bool]:
     return missed_id, (hold if isinstance(hold, bool) else True)
 
 
+class _InProcessClient:
+    """missed_speech's client, answered by this daemon in process: the
+    control's play-item on a missed line queues it as `missed --play` does."""
+
+    def __init__(self, service: "NarratorService") -> None:
+        self._service = service
+
+    def speak(self, text: str, *, priority: int, source_hash: Optional[str] = None, voice_id: Optional[str] = None,
+              speed: float = DEFAULT_SPEED, missed_id: str = "", hold: bool = True) -> dict[str, Any]:
+        return self._service.dispatch_json({
+            "action": "speak", "text": text, "priority": int(priority), "source_hash": source_hash,
+            "voice_id": voice_id, "speed": speed, "missed_id": missed_id, "hold": hold,
+        })
+
+    def play_cache(self, source_hash: str, *, priority: int, missed_id: str = "", hold: bool = True) -> dict[str, Any]:
+        return self._service.dispatch_json({
+            "action": "play_cache", "source_hash": source_hash, "priority": int(priority),
+            "missed_id": missed_id, "hold": hold,
+        })
+
+
 class NarratorService:
     @property
     def _cache(self) -> CacheStore:
@@ -284,6 +306,7 @@ class NarratorService:
         speaker: Announcer | None = None,
         history: SpeechHistory | None = None,
         player: PlayerLauncher | Any | None = None,
+        control: ControlDriver | Any | None = None,
     ) -> None:
         self._config = config if config is not None else load_config()
         self._classifier = PhaseClassifier(silence_seconds=0.5, max_events_per_phase=1)
@@ -325,10 +348,25 @@ class NarratorService:
         # Names the desk only when the speaker changes (ADR-016).
         self._speaker: Announcer = speaker if speaker is not None else Announcer(log=_log)
         # Every line heard goes into the speech history as a WAV and a
-        # sidecar, up to max_gb on disk; the player opens on it when he turns it
-        # on, never while a hold stands (ADR-020).
+        # sidecar, up to max_gb on disk (ADR-020). With `[history] player`
+        # on, the UI Utility's speech control shows what plays, with the
+        # history and the missed lines below it, never opened while a hold
+        # stands (ADR-022). The per-line player panel (ADR-021) opens only
+        # when one is passed in: his 2026-10-21 20:07, "not the actual page".
         self._history: SpeechHistory = history if history is not None else SpeechHistory()
-        self._player = player if player is not None else PlayerLauncher(holding=self._hold_stands, log=_log)
+        self._player = player
+        self._control = (
+            control
+            if control is not None
+            else ControlDriver(
+                history=self._history,
+                missed=self._missed,
+                actions=self._control_actions(),
+                holding=self._hold_stands,
+                log=_log,
+                names=self._sender_name,
+            )
+        )
         self._last_hold_ended_at: Optional[float] = None
         self._sink_takes_hold_kwargs: Optional[bool] = None
         # The meeting watch (ADR-018): the main loop asks the gate every
@@ -375,6 +413,7 @@ class NarratorService:
         signal.signal(signal.SIGTERM, self._on_signal)
         signal.signal(signal.SIGINT, self._on_signal)
         _log(f"started pid={os.getpid()} provider={self._config['provider']}")
+        self._control_call("start")
         try:
             _log(f"priority: {raise_own_priority().describe()}")
         except Exception as exc:  # noqa: BLE001 — never let the boost stop the daemon
@@ -396,6 +435,7 @@ class NarratorService:
         finally:
             self._stop_socket_server()
             self._close_player()
+            self._control_call("close")
             # If neither shutdown path recorded a reason (e.g. tail_events
             # raised), treat it as a signal-style shutdown so the machine
             # reaches a legal pre-rest state before NOT_RUNNING.
@@ -1544,6 +1584,7 @@ class NarratorService:
             )
         except Exception as exc:  # noqa: BLE001
             _log(f"missed list write error: {exc!r}")
+        self._control_call("list_changed")
 
     def _sink_play(self, path: Path, timeout: Optional[float] = None, **hold_kwargs: Any) -> None:
         """sink.play with the hold keywords when the sink knows them
@@ -1554,17 +1595,24 @@ class NarratorService:
         if takes is None:
             try:
                 params = inspect.signature(play).parameters
-                takes = ("on_hold" in params, "timeout" in params)
+                takes = ("on_hold" in params, "timeout" in params, "on_start" in params)
             except (TypeError, ValueError):
-                takes = (False, False)
+                takes = (False, False, False)
             self._sink_takes_hold_kwargs = takes
         if isinstance(takes, bool):   # an older test set the flag by hand
-            takes = (takes, False)
+            takes = (takes, False, False)
+        takes = (*takes, False, False)[:3]
+        on_start = hold_kwargs.pop("on_start", None)
         kwargs: dict[str, Any] = {}
         if takes[0]:
             kwargs.update(hold_kwargs)
         if takes[1] and timeout is not None:
             kwargs["timeout"] = timeout
+        if on_start is not None:
+            if takes[2]:
+                kwargs["on_start"] = on_start
+            else:
+                on_start()  # a sink that cannot say: the play starts now
         play(path, **kwargs)
 
     def _play_item(self, path: Path, item: Optional[QueueItem], *, text: str, session_id: Optional[str] = None) -> bool:
@@ -1582,6 +1630,7 @@ class NarratorService:
         name = (text or Path(path).name)[:50]
 
         def on_hold(names: tuple[str, ...]) -> None:
+            self._control_call("held")
             if missed is None:
                 return
             try:
@@ -1589,10 +1638,39 @@ class NarratorService:
             except Exception as exc:  # noqa: BLE001
                 _log(f"missed list write error: {exc!r}")
 
+        sid = session_id or (getattr(item, "session_id", None) if item is not None else None)
+
+        def on_start() -> None:
+            self._control_call("playing", text, self._sender_name(sid))
+
+        heard = False
+        try:
+            heard = self._play_item_body(path, item, text=text, session_id=session_id, age=age, hold=hold,
+                                         held=held, on_hold=on_hold, on_start=on_start, name=name)
+            return heard
+        finally:
+            if not heard:
+                self._control_call("ended", None)
+
+    def _play_item_body(
+        self,
+        path: Path,
+        item: Optional[QueueItem],
+        *,
+        text: str,
+        session_id: Optional[str],
+        age: float,
+        hold: bool,
+        held: dict[str, MissedLine],
+        on_hold: Callable[[tuple[str, ...]], None],
+        on_start: Callable[[], None],
+        name: str,
+    ) -> bool:
+        missed = getattr(self, "_missed", None)
         budget = self._play_timeout(path)
         self._progress("playing", expect=(budget or 0.0) + self._max_wait_seconds())
         try:
-            self._sink_play(path, hold=hold, already_waited=age, on_hold=on_hold, timeout=budget)
+            self._sink_play(path, hold=hold, already_waited=age, on_hold=on_hold, on_start=on_start, timeout=budget)
         except PlaybackError as exc:
             if "timed out" not in str(exc) and "stalled" not in str(exc):
                 raise
@@ -1661,6 +1739,73 @@ class NarratorService:
         except Exception as exc:  # noqa: BLE001
             _log(f"player close error: {exc!r}")
 
+    # -- the speech control (ADR-022) ----------------------------------------------
+
+    def _control_call(self, name: str, *args: Any) -> None:
+        """Tell the speech control; never raises, never blocks speech."""
+        method = getattr(getattr(self, "_control", None), name, None)
+        if method is None:
+            return
+        try:
+            method(*args)
+        except Exception as exc:  # noqa: BLE001
+            _log(f"control {name} error: {exc!r}")
+
+    def _control_actions(self) -> ControlActions:
+        return ControlActions(
+            pause=lambda: self._sink_verb("pause"),
+            resume=lambda: self._sink_verb("resume"),
+            stop=self._handle_p1_interrupt,
+            restart=lambda: self._sink_verb("restart"),
+            skip=lambda: self._sink_verb("skip"),
+            set_rate=self._set_rate,
+            replay=self._replay_history_line,
+            play_missed=self._play_missed_ids,
+        )
+
+    def _sink_verb(self, name: str) -> bool:
+        verb = getattr(getattr(self, "_sink", None), name, None)
+        if verb is None:
+            return False
+        try:
+            return bool(verb())
+        except Exception as exc:  # noqa: BLE001
+            _log(f"control: sink {name} error: {exc!r}")
+            return False
+
+    def _set_rate(self, rate: float) -> float:
+        set_speed = getattr(getattr(self, "_sink", None), "set_speed", None)
+        if set_speed is None:
+            return 1.0
+        rate = float(set_speed(rate))
+        _log(f"control: playback rate {rate:g}")
+        return rate
+
+    def _replay_history_line(self, line: Any) -> None:
+        """A heard line, played again from its WAV over any other sound (he
+        asked); it is not exported to the history a second time."""
+        q_item = QueueItem(
+            priority=Priority.EXPLICIT_MCP,
+            payload=str(line.wav),
+            line_text=line.text,
+            history_id=line.id,
+            hold=False,
+        )
+        self._handle_p2_preemption(q_item)
+        self._update_depth(self._tts_queue.qsize())
+        self._last_event_ts = time.time()
+
+    def _play_missed_ids(self, ids: list[str]) -> int:
+        """Missed lines played through missed_speech's play, which takes each
+        off the list once heard."""
+        from missed_speech import play_ids
+
+        try:
+            return play_ids(ids, missed=self._missed, client=_InProcessClient(self))
+        except ConnectionError as exc:
+            _log(f"control: missed lines not queued: {exc!r}")
+            return 0
+
     def _hold_stands(self) -> bool:
         """True while a meeting or another app's sound holds speech; the
         player never pops up then. No gate: nothing holds."""
@@ -1682,7 +1827,17 @@ class NarratorService:
         """The line was heard: export it to the history, then hand it to the
         player launcher. Never raises; a failure is logged and speech goes on."""
         history = getattr(self, "_history", None)
-        if history is None:
+        replayed = getattr(item, "history_id", "") if item is not None else ""
+        if history is None or replayed:
+            # A history line played again from the control: already in the
+            # history, so not exported twice (ADR-022).
+            line = None
+            if history is not None and replayed:
+                try:
+                    line = history.get(replayed)
+                except Exception:  # noqa: BLE001
+                    line = None
+            self._control_call("ended", line)
             return
         sid = session_id or (getattr(item, "session_id", None) if item is not None else None)
         priority = getattr(item, "priority", None) if item is not None else getattr(self, "_active_priority", None)
@@ -1705,7 +1860,9 @@ class NarratorService:
             )
         except Exception as exc:  # noqa: BLE001
             _log(f"history export error: {exc!r}")
+            self._control_call("ended", None)
             return
+        self._control_call("ended", line)
         if line is None:
             return
         player = getattr(self, "_player", None)

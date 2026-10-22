@@ -6,8 +6,10 @@ request carries `"v":1`, `"cmd"` and a `"req"` id; its reply echoes the id,
 and events (which carry `"event"`) arrive interleaved with replies. A reader
 thread reads every line, so the utility's position events never back up.
 
-auto-speech uses only `hello` and `open` (specs/001-player-launch,
-contracts/player-handover.md). `launch` starts the utility in the
+auto-speech uses `hello` and `open` on the player (specs/001-player-launch,
+contracts/player-handover.md), and the control piece of rev 1.2 (`open`
+with panel control, then `state`, `items`, `item`, `source`), which
+speech_control drives. `launch` starts the utility in the
 background, never taking focus, and runs nothing at all when
 AUTO_SPEECH_PLAYER_LAUNCH=never (the test suite sets it: no test starts
 the real app). See docs/decisions/ADR-021.
@@ -27,6 +29,7 @@ from typing import Any, Callable, Mapping, Optional
 
 CONTRACT = 1
 PANEL = "player"
+CONTROL = "control"  # rev 1.2: the floating speech control with its list
 SOCK_ENV = "UI_UTILITY_SOCK"
 SILENT_ENV = "UI_UTILITY_SILENT"
 LAUNCH_ENV = "AUTO_SPEECH_PLAYER_LAUNCH"
@@ -188,10 +191,12 @@ class UiUtilityClient:
             raise ContractError("refused", f"{reply.get('error') or 'error'}: {reply.get('detail') or ''}".rstrip())
         return reply
 
-    def hello(self) -> dict[str, Any]:
+    def hello(self, piece: str = PANEL) -> dict[str, Any]:
+        """Says hello; ContractError("wrong contract") unless this copy speaks
+        contract 1 and offers `piece`."""
         reply = self.request({"cmd": "hello"})
         pieces = reply.get("pieces")
-        if reply.get("contract") != CONTRACT or not isinstance(pieces, list) or PANEL not in pieces:
+        if reply.get("contract") != CONTRACT or not isinstance(pieces, list) or piece not in pieces:
             raise ContractError("wrong contract", f"contract {reply.get('contract')!r}, pieces {pieces!r}")
         return reply
 

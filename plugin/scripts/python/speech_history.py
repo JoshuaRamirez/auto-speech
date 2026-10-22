@@ -581,7 +581,7 @@ def format_status(settings: HistorySettings, history: SpeechHistory, player_note
         f"max_gb: {_gb(settings.max_gb)} on disk, the oldest pruned first",
         f"held now: {n} line{'s' if n != 1 else ''}, {_mb(history.size_bytes())}",
         f"keep: the player's view shows the newest {settings.keep} line{'s' if settings.keep != 1 else ''}",
-        f"player after each line: {'on' if settings.player else 'off'}" + (f" ({player_note})" if player_note else ""),
+        f"speech control: {'on' if settings.player else 'off'}" + (f" ({player_note})" if player_note else ""),
         f"dir: {history.directory}",
     ]
     if settings.config_path:

@@ -169,6 +169,7 @@ class NativeAudioSink:
         self._stall_seconds: float = play_stall_from_env()
         self._ipc_path: Path | None = None
         self._last_position: float | None = None
+        self._speed: float = 1.0
 
     @property
     def stall_seconds(self) -> float:
@@ -203,6 +204,8 @@ class NativeAudioSink:
         ]
         if self._audio_output:
             argv.append(f"--ao={self._audio_output}")
+        if self._speed != 1.0:
+            argv.append(f"--speed={self._speed:g}")
         if self._ipc_path is not None:
             argv.append(f"--input-ipc-server={self._ipc_path}")
         argv.append(str(wav_path))
@@ -302,6 +305,7 @@ class NativeAudioSink:
         hold: bool = True,
         already_waited: float = 0.0,
         on_hold: Callable[[tuple[str, ...]], None] | None = None,
+        on_start: Callable[[], None] | None = None,
     ) -> None:
         """Plays wav file synchronously via mpv, blocking until playback finishes.
 
@@ -314,6 +318,7 @@ class NativeAudioSink:
                 queue; counts against the gate's longest wait.
             on_hold: Called once, with the blockers' names, when the gate
                 holds this playback.
+            on_start: Called once, just before mpv starts (after any hold).
 
         Raises:
             FileNotFoundError: If the WAV file does not exist.
@@ -333,6 +338,11 @@ class NativeAudioSink:
                 self._last_hold = None
             elif not self._await_sound_yield(path, already_waited=already_waited, on_hold=on_hold):
                 return
+            if on_start is not None:
+                try:
+                    on_start()
+                except Exception:  # noqa: BLE001 — a listener never stops the play
+                    logger.exception("on_start failed for %s", path)
             with self._state_lock:
                 self._interrupted = False
                 self._ipc_path = self._new_ipc_path()
@@ -471,6 +481,55 @@ class NativeAudioSink:
                     pass
         except ProcessLookupError:
             pass
+
+    # -- the speech control's verbs, on the playback now running (ADR-022) ------
+
+    def _mpv_command(self, command: list) -> bool:
+        """One command to the mpv now playing, over its socket. False when
+        nothing plays, the stall watch (and so the socket) is off, or mpv
+        does not answer."""
+        with self._state_lock:
+            path, proc = self._ipc_path, self._proc
+        if path is None or proc is None or proc.poll() is not None:
+            return False
+        try:
+            reply = MpvIpc.send(command, path, timeout=self._PROGRESS_READ_TIMEOUT)
+        except MpvIpcError:
+            return False
+        return reply.get("error") == "success"
+
+    def pause(self) -> bool:
+        """Pause the line now playing. A paused line is not a stall."""
+        return self._mpv_command(["set_property", "pause", True])
+
+    def resume(self) -> bool:
+        return self._mpv_command(["set_property", "pause", False])
+
+    def restart(self) -> bool:
+        """The line now playing, from its start."""
+        return self._mpv_command(["seek", 0, "absolute"])
+
+    def skip(self) -> bool:
+        """End the line now playing (never a held one: that is interrupt's)."""
+        if not self.is_playing:
+            return False
+        self.interrupt()
+        return True
+
+    MIN_SPEED, MAX_SPEED = 0.25, 4.0
+
+    @property
+    def speed(self) -> float:
+        """The playback rate every play starts at (mpv --speed)."""
+        return self._speed
+
+    def set_speed(self, rate: float) -> float:
+        """Set the playback rate for this and every later line; returns the
+        rate in effect (clamped to MIN_SPEED..MAX_SPEED)."""
+        rate = min(self.MAX_SPEED, max(self.MIN_SPEED, float(rate)))
+        self._speed = rate
+        self._mpv_command(["set_property", "speed", rate])
+        return rate
 
     @property
     def is_playing(self) -> bool:
