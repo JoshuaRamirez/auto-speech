@@ -699,8 +699,14 @@ class TestCliNarrate(BaseCliTestCase):
 
     def test_narrate_status_output(self) -> None:
         stdout = io.StringIO()
+        # A daemon that answers its status: the CLI asks the client the test
+        # gives it, never whatever socket the machine has.
+        client = mock.MagicMock()
+        client._socket_path.is_socket.return_value = True
+        client.status.return_value = mock.MagicMock(raw={"status": "ok", "daemon_state": "IDLE", "queued": 0, "stopped": False})
         with (
-            mock.patch("daemon_client.DaemonClient.is_alive", return_value=True),
+            mock.patch.object(cli, "DaemonClient", return_value=client),
+            mock.patch.object(Path, "home", return_value=Path(tempfile.gettempdir()) / "auto-speech-no-home"),
             mock.patch("sys.stdout", stdout),
         ):
             rc = cli.main(["narrate", "status", "--session-id", "sess-1"])
