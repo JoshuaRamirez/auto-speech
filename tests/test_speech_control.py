@@ -18,12 +18,18 @@ for _p in (str(SRC), str(Path(__file__).resolve().parent)):
     if _p not in sys.path:
         sys.path.insert(0, _p)
 
-import speech_control as sc  # noqa: E402
-from missed_speech import REASON_LONGEST_WAIT, REASON_MEETING, MissedLine, MissedList, play_ids  # noqa: E402
-from speech_control import CONTROL_ID, ControlActions, ControlDriver  # noqa: E402
-from speech_history import HistoryStore, SpeechHistory  # noqa: E402
-from ui_utility_client import UiUtilityClient  # noqa: E402
-from ui_utility_standin import StandIn  # noqa: E402
+import speech_control as sc
+from missed_speech import (
+    REASON_LONGEST_WAIT,
+    REASON_MEETING,
+    MissedLine,
+    MissedList,
+    play_ids,
+)
+from speech_control import CONTROL_ID, ControlActions, ControlDriver
+from speech_history import HistoryStore, SpeechHistory
+from ui_utility_client import UiUtilityClient
+from ui_utility_standin import StandIn
 
 T0 = 1_760_000_000.0
 
@@ -98,7 +104,6 @@ class _Base(unittest.TestCase):
 
     def no_launch(self):
         self.launches += 1
-        return None
 
     def driver(self, *, holding=lambda: False, installed=lambda: True, start_worker=False, names=None):
         d = ControlDriver(

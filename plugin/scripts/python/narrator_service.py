@@ -33,7 +33,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from state_paths import state_path
-from typing import Any, Callable, Optional
+from collections.abc import Callable
+from typing import Any, Optional
 
 # Daemon runs a UNIX domain socket server (socket.AF_UNIX) via unix_ipc_server._DaemonSocketServer
 
@@ -238,10 +239,10 @@ class _InProcessClient:
     """missed_speech's client, answered by this daemon in process: the
     control's play-item on a missed line queues it as `missed --play` does."""
 
-    def __init__(self, service: "NarratorService") -> None:
+    def __init__(self, service: NarratorService) -> None:
         self._service = service
 
-    def speak(self, text: str, *, priority: int, source_hash: Optional[str] = None, voice_id: Optional[str] = None,
+    def speak(self, text: str, *, priority: int, source_hash: str | None = None, voice_id: str | None = None,
               speed: float = DEFAULT_SPEED, missed_id: str = "", hold: bool = True) -> dict[str, Any]:
         return self._service.dispatch_json({
             "action": "speak", "text": text, "priority": int(priority), "source_hash": source_hash,
@@ -1655,10 +1656,10 @@ class NarratorService:
     def _play_item_body(
         self,
         path: Path,
-        item: Optional[QueueItem],
+        item: QueueItem | None,
         *,
         text: str,
-        session_id: Optional[str],
+        session_id: str | None,
         age: float,
         hold: bool,
         held: dict[str, MissedLine],

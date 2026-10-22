@@ -341,7 +341,7 @@ class NativeAudioSink:
             if on_start is not None:
                 try:
                     on_start()
-                except Exception:  # noqa: BLE001 — a listener never stops the play
+                except Exception:  # a listener never stops the play
                     logger.exception("on_start failed for %s", path)
             with self._state_lock:
                 self._interrupted = False

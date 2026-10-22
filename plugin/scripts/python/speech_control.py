@@ -24,13 +24,15 @@ See docs/decisions/ADR-022.
 
 from __future__ import annotations
 
+import contextlib
 import itertools
 import threading
 import time
 from collections import deque
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Callable, Optional
+from typing import Any
 
 import ui_utility_client
 from missed_speech import MissedLine, MissedList
@@ -55,7 +57,7 @@ _ORDER = (_SOURCE, _ITEMS, _NOW, _STATE)
 ICON = Path(__file__).resolve().parents[3] / "chrome-extension" / "icons" / "icon128.png"
 
 
-def _hhmm(epoch: float) -> Optional[str]:
+def _hhmm(epoch: float) -> str | None:
     if epoch <= 0:
         return None
     try:
@@ -64,7 +66,7 @@ def _hhmm(epoch: float) -> Optional[str]:
         return None
 
 
-def _sender(line: HistoryLine) -> Optional[str]:
+def _sender(line: HistoryLine) -> str | None:
     sender = line.sidecar.get("sender")
     name = sender.get("name") if isinstance(sender, dict) else None
     return str(name) if name else None
@@ -97,11 +99,11 @@ class ControlActions:
 @dataclass
 class _Model:
     state: str = IDLE
-    current: Optional[str] = None
-    source: Optional[str] = None
+    current: str | None = None
+    source: str | None = None
     rate: float = 1.0
     paused: bool = False  # held by the person's hold, not by another app's sound
-    now: Optional[dict[str, Any]] = None
+    now: dict[str, Any] | None = None
     pending: set[str] = field(default_factory=set)
 
 
@@ -116,9 +118,9 @@ class ControlDriver:
         holding: Callable[[], bool] | None = None,
         installed: Callable[[], bool] = utility_installed,
         log: Callable[[str], None] | None = None,
-        names: Callable[[Optional[str]], Optional[str]] | None = None,
+        names: Callable[[str | None], str | None] | None = None,
         client_factory: Callable[..., Any] = UiUtilityClient,
-        launch: Callable[[], Optional[list[str]]] = ui_utility_client.launch,
+        launch: Callable[[], list[str] | None] = ui_utility_client.launch,
         sleep: Callable[[float], None] = time.sleep,
         clock: Callable[[], float] = time.monotonic,
         icon: Path | None = ICON,
@@ -146,7 +148,7 @@ class ControlDriver:
         self._events: deque[dict[str, Any]] = deque()
         self._wake = False
         self._closed = False
-        self._worker: Optional[threading.Thread] = None
+        self._worker: threading.Thread | None = None
         self._client: Any = None
         self._open = False
         self._closed_by_user = False
@@ -170,7 +172,7 @@ class ControlDriver:
         """At daemon start: open the control when the setting is on."""
         self._change()
 
-    def playing(self, text: str, source: Optional[str]) -> None:
+    def playing(self, text: str, source: str | None) -> None:
         """A line starts playing (after any hold): on top of the list, current."""
         item_id = f"{NOW_PREFIX}{next(self._now_ids)}"
         now = {"id": item_id, "text": text, "at": _hhmm(time.time()), "clip": None}
@@ -188,7 +190,7 @@ class ControlDriver:
         """Another app's sound (or a meeting) holds the next line."""
         self._change(_STATE, state=HELD, paused=False)
 
-    def ended(self, line: Optional[HistoryLine] = None) -> None:
+    def ended(self, line: HistoryLine | None = None) -> None:
         """The line playing has ended: heard (and in the history as `line`),
         set aside, cut off or stopped. The list is sent again."""
         self._change(_ITEMS, _STATE, state=IDLE, now=None, paused=False,
@@ -206,10 +208,8 @@ class ControlDriver:
             client, self._client = self._client, None
             self._cond.notify_all()
         if client is not None:
-            try:
+            with contextlib.suppress(Exception):
                 client.close()
-            except Exception:  # noqa: BLE001
-                pass
 
     # -- the worker ---------------------------------------------------------------
 
@@ -302,10 +302,8 @@ class ControlDriver:
     def _drop_client(self) -> None:
         client, self._client = self._client, None
         if client is not None:
-            try:
+            with contextlib.suppress(Exception):
                 client.close()
-            except Exception:  # noqa: BLE001
-                pass
 
     def _greeted_client(self) -> Any:
         client = self._client
@@ -393,7 +391,7 @@ class ControlDriver:
             "rates": list(RATES) if rate in RATES else [rate, *RATES],
         }
 
-    def _update_request(self, kind: str) -> Optional[dict[str, Any]]:
+    def _update_request(self, kind: str) -> dict[str, Any] | None:
         if kind == _SOURCE:
             return {"cmd": "source", "id": CONTROL_ID, "source": self._source_obj()}
         if kind == _ITEMS:
@@ -448,9 +446,8 @@ class ControlDriver:
                 self.actions.restart()
             else:
                 self._replay_near(+1)
-        elif action == "skip-forward":
-            if now is not None:
-                self.actions.skip()
+        elif action == "skip-forward" and now is not None:
+            self.actions.skip()
 
     def _replay_near(self, step: int) -> None:
         """Replay the current history line (step 0) or the one before it (+1);
