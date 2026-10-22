@@ -103,6 +103,13 @@ SPEAK_TOOL = {
                     "The daemon names the desk only when the speaker changes."
                 ),
             },
+            "line_id": {
+                "type": "string",
+                "description": (
+                    "The line's id. A line whose id is already queued, playing or done in the "
+                    "last ten minutes is acknowledged and not queued again."
+                ),
+            },
         },
         "required": ["text"],
         "additionalProperties": False,
@@ -181,6 +188,10 @@ NARRATE_EVENT_TOOL = {
             "cwd": {
                 "type": "string",
                 "description": "Working directory for the event.",
+            },
+            "line_id": {
+                "type": "string",
+                "description": "The event's id: an event whose id the narrator took in during the last ten minutes is ignored.",
             },
         },
         "required": ["event"],
@@ -684,15 +695,24 @@ class McpServer:
         if session_id is not None and (not isinstance(session_id, str) or not session_id.strip()):
             return _ok(req_id, _tool_result("session_id must be a non-empty string", is_error=True))
         session_id = session_id or self._own_session_id()
+        line_id = args.get("line_id")
+        if line_id is not None and (not isinstance(line_id, str) or not line_id.strip()):
+            return _ok(req_id, _tool_result("line_id must be a non-empty string", is_error=True))
         try:
             if self._spawn is not None:
                 self._spawn(text)
             else:
                 client = self._client or DaemonClient()
                 try:
-                    resp = client.speak(text, priority=Priority.EXPLICIT_MCP, session_id=session_id)
+                    resp = client.speak(text, priority=Priority.EXPLICIT_MCP, session_id=session_id, line_id=line_id)
                     if resp.status == "error":
                         spawn_say_worker(text)
+                    line = (resp.raw or {}).get("line") if isinstance(resp.raw, dict) else None
+                    if isinstance(line, dict):
+                        return _ok(
+                            req_id,
+                            _tool_result(f"Line {line.get('line_id')} is already {line.get('state')}; not queued again."),
+                        )
                 except ConnectionError:
                     spawn_say_worker(text)
         except OSError as exc:
@@ -948,6 +968,9 @@ class McpServer:
             "payload": payload,
             "session_id": sid,
         }
+        line_id = args.get("line_id")
+        if isinstance(line_id, str) and line_id.strip():
+            record["line_id"] = line_id.strip()
 
         try:
             self._narrator_events_file.parent.mkdir(parents=True, exist_ok=True)

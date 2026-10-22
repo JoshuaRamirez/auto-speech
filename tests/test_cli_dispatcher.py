@@ -289,6 +289,7 @@ class TestCliSpeak(BaseCliTestCase):
             session_id="sess-1",
             voice_id="system",
             speed=1.0,
+            line_id=None,
         )
 
     def test_speak_uses_the_shell_session_when_no_flag_is_given(self) -> None:

@@ -10,6 +10,14 @@ The Chrome extension under `chrome-extension/` is versioned independently
 ## [Unreleased]
 
 ### Added
+- **One line id, one play (ADR-025).** A speak request takes `line_id`
+  (MCP speak, `auto-speech speak --line-id`, `DaemonClient.speak`,
+  `narrate_event`). A line already queued, playing, or done in the last ten
+  minutes is acknowledged with its state and not queued again. The status
+  reply answers for an id (`{"action": "status", "line_id": ID}` → `"line":
+  {"id", "state", …}` with timestamps, kept an hour), and so does `auto-speech
+  narrate status --line-id ID`. A line that is synthesizing reads `queued`
+  with `synth_started`.
 - **`auto-speech missed add --text … --source NAME [--at HH:MM] [--id ID]`**
   (ADR-024): a caller puts a held or cut line on the missed list through the
   daemon; the speech control lists it unplayed under its source.
@@ -141,6 +149,10 @@ The Chrome extension under `chrome-extension/` is versioned independently
   HOME to a temporary directory at import.
 
 ### Fixed
+- **A line played four times under heavy load (ADR-025).** On 2026-10-22 a
+  pegged Mac took 2.5 minutes to synthesize one line. desk-speaker and the
+  daemon client's own retry sent it again, and every copy played. Copies of
+  one id are now acknowledged, not queued. The client's retries carry one id.
 - **A stop stops; a restart drains first; only live sessions are heard
   (ADR-024).** His 2026-10-21 23:38: "you just interrupted yourself during the
   10 m thing. bug. fix." / "i think im hearing things from other

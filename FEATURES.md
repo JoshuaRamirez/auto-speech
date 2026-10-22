@@ -105,6 +105,10 @@ module that owns it. Release-by-release history is in
   no longer alive are ignored and listed by `doctor`; `auto-speech missed
   add` puts a held or cut line on the list through the daemon
   (`session_liveness.py`, `narrator_restart.py`).
+- **One line id, one play** (ADR-025): a speak's `line_id` dedups copies
+  (queued, playing, or done in the last ten minutes); status per id with
+  timestamps (`"line": {"id", "state", …}`, `narrate status --line-id`); a
+  synthesizing line reads `queued` with `synth_started` (`line_ledger.py`)
 - **Speech settings in the UI Utility's settings window** (ADR-023): beside
   the control, a settings piece (contract 1.3, id `auto-speech-settings`,
   source "Speech") with two groups. Speech: mute, autoplay reads, summary

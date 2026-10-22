@@ -261,8 +261,22 @@ def test_speak_invokes_daemon_client_directly() -> None:
     assert res["result"]["isError"] is False
     assert "Queued 16 characters" in res["result"]["content"][0]["text"]
     mock_client.speak.assert_called_once_with(
-        "hello sublimated", priority=Priority.EXPLICIT_MCP, session_id=None
+        "hello sublimated", priority=Priority.EXPLICIT_MCP, session_id=None, line_id=None
     )
+
+
+def test_speak_passes_the_line_id_and_says_when_it_is_already_queued() -> None:
+    """One line id, one play (ADR-025): a copy is acknowledged, not queued."""
+    mock_client = MagicMock()
+    mock_client.speak.return_value = DaemonResponse(
+        status="ok", action="speak", raw={"status": "ok", "duplicate": True, "line": {"line_id": "L1", "state": "queued"}}
+    )
+    server = McpServer(client=mock_client)
+    res = server.handle_line(
+        _req("tools/call", {"name": "speak", "arguments": {"text": "hello", "line_id": "L1"}})
+    )
+    assert mock_client.speak.call_args.kwargs["line_id"] == "L1"
+    assert "already queued; not queued again" in res["result"]["content"][0]["text"]
 
 
 def test_speak_carries_the_session_from_the_call_or_the_environment() -> None:
@@ -1612,6 +1626,7 @@ TESTS = [
     test_serve_writes_one_line_per_request,
     test_plugin_mcp_manifest_points_at_the_launcher,
     test_speak_invokes_daemon_client_directly,
+    test_speak_passes_the_line_id_and_says_when_it_is_already_queued,
     test_speak_falls_back_to_spawn_say_worker_on_connection_error,
     test_speak_falls_back_to_spawn_say_worker_on_daemon_error_status,
     # Group 3: autoplay_turn

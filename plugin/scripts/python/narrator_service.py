@@ -32,6 +32,7 @@ import wave
 from datetime import datetime, timezone
 from pathlib import Path
 
+from line_ledger import DROP_FAILED, DROP_INTERRUPTED, DROP_STOPPED, LineLedger, clean_line_id
 from session_liveness import SessionLiveness
 from state_paths import state_path
 from collections.abc import Callable
@@ -106,6 +107,8 @@ SYNTH_DIR = state_path("auto-speech-synth")
 WATERMARK_FILE = state_path("auto-speech-narrator-daemon.watermark")
 # His stop holds across a restart: the file says since when (ADR-024).
 STOPPED_FILE = state_path("auto-speech-stopped.json")
+# One line id, one play: every id seen in the last hour and its state (ADR-025).
+LINES_FILE = state_path("auto-speech-lines.json")
 # On SIGTERM the line in flight finishes; past this it is cut and set aside.
 # launchd's default exit timeout for a submitted job is 20 s.
 SHUTDOWN_FINISH_S = 15.0
@@ -392,6 +395,9 @@ class NarratorService:
         # Only sessions meant to speak are heard: a marker whose session is
         # not alive is ignored (ADR-024).
         self._liveness = SessionLiveness()
+        # One line id, one play (ADR-025): a speak whose id is queued,
+        # playing or done in the last ten minutes is not queued again.
+        self._lines = LineLedger(LINES_FILE)
         if tts_executor is not None:
             self._tts_executor = tts_executor
         elif synth is not None or engine is not None:
@@ -616,6 +622,19 @@ class NarratorService:
             speed = float(payload.get("speed", DEFAULT_SPEED))
             missed_id, hold = _replay_flags(payload)
             origin_file = clean_origin_file(payload.get("origin_file"))
+            line_id = clean_line_id(payload.get("line_id")) or self._line_ledger().for_missed(missed_id)
+            if line_id and priority != Priority.USER_INTERRUPT:
+                seen = self._line_ledger().admit(line_id, text)
+                if seen is not None:
+                    _log(f"speak: line {line_id} already {seen.state} (send {seen.sends}); not queued again")
+                    return {
+                        "status": "ok",
+                        "action": "speak",
+                        "duplicate": True,
+                        "line_id": line_id,
+                        "line": seen.public(),
+                        "queue_depth": self._tts_queue.qsize(),
+                    }
 
             cached_wav: Optional[Path] = None
             if source_hash and len(source_hash) == 64 and all(c in "0123456789abcdef" for c in source_hash):
@@ -637,6 +656,8 @@ class NarratorService:
                     missed_id=missed_id,
                     hold=hold,
                     origin_file=origin_file,
+                    line_id=line_id,
+                    line_text=text,
                 )
                 cache_hit = True
             else:
@@ -650,6 +671,7 @@ class NarratorService:
                     missed_id=missed_id,
                     hold=hold,
                     origin_file=origin_file,
+                    line_id=line_id,
                 )
                 cache_hit = False
 
@@ -666,12 +688,15 @@ class NarratorService:
 
             self._update_depth(self._tts_queue.qsize())
             self._last_event_ts = time.time()
-            return {
+            reply = {
                 "status": "queued",
                 "action": "speak",
                 "cache_hit": cache_hit,
                 "queue_depth": self._tts_queue.qsize(),
             }
+            if line_id:
+                reply["line_id"] = line_id
+            return reply
 
         elif action == "play_cache":
             source_hash = payload.get("source_hash")
@@ -747,6 +772,7 @@ class NarratorService:
             return self._missed_add(payload)
 
         elif action == "status":
+            asked = clean_line_id(payload.get("line_id"))
             depths = self._priority_arbiter.depths() if hasattr(self, "_priority_arbiter") else {}
             try:
                 hold = self._sink.hold_status
@@ -765,6 +791,8 @@ class NarratorService:
                 "stopped": self._is_stopped(),
                 "stopped_since": getattr(self, "_stopped_since", None),
                 "queued": sum(int(v) for v in depths.values()) if isinstance(depths, dict) else 0,
+                "line_in_flight": self._line_in_flight(),
+                **({"line": self._line_ledger().answer(asked)} if asked else {}),
             }
 
         return {
@@ -802,8 +830,12 @@ class NarratorService:
 
         purged = 0
         if hasattr(self, "_priority_arbiter"):
+            before = self._queued_line_ids()
             purged = self._priority_arbiter.purge_lower_queues()
             self._dropped_phases += purged
+            gone = before - self._queued_line_ids()
+            for line_id in gone:
+                self._line_ledger().dropped(line_id, DROP_STOPPED if self._is_stopped() else DROP_INTERRUPTED)
 
         self._update_depth(self._tts_queue.qsize())
 
@@ -949,6 +981,13 @@ class NarratorService:
                 continue
             if not self._marker_live(session_marker, session_id):
                 continue
+            # One id, taken in once (ADR-025): narrate_event's line_id.
+            event_id = clean_line_id(ev.get("line_id"))
+            if event_id:
+                if self._line_ledger().admit(event_id, str(ev.get("event", ""))) is not None:
+                    _log(f"event {event_id} already taken in; ignored")
+                    continue
+                self._line_ledger().done(event_id)
 
             # Stop event → flush in-flight phase but SUPPRESS narration.
             # The end-of-turn autoplay owns the final read; we don't want
@@ -1089,6 +1128,8 @@ class NarratorService:
                 self._tts_queue.task_done()
 
             if dropped is not None:
+                if getattr(dropped, "line_id", ""):
+                    self._line_ledger().dropped(dropped.line_id, "shed: the queue was full")
                 self._dropped_phases += 1
                 cat = getattr(getattr(dropped, "category", None), "value", None)
                 if cat is None:
@@ -1208,12 +1249,15 @@ class NarratorService:
             retries=item.retries + 1,
             line_text=text,
             origin_file=item.origin_file,
+            line_id=item.line_id,
         )
         try:
             self._tts_queue.put(again)
         except Exception as exc:  # noqa: BLE001
             _log(f"retry queue error: {exc!r}")
             return False
+        if item.line_id:
+            self._line_ledger().requeued(item.line_id, retry=True)
         _log(f"retry {again.retries} of {limit} queued for {text[:50]!r} ({reason}); it waits for the load to fall")
         return True
 
@@ -1372,6 +1416,9 @@ class NarratorService:
                 item_p = phase.priority
                 item_obj = phase
                 phase = phase.payload
+            line_id = getattr(item_obj, "line_id", "") if isinstance(item_obj, QueueItem) else ""
+            if line_id:
+                self._line_ledger().taken(line_id)
 
             stopping = getattr(self, "_stop", None)
             if stopping is not None and stopping.is_set():
@@ -1480,6 +1527,14 @@ class NarratorService:
                 _log(f"tts_worker error: {exc!r}")
             finally:
                 is_preempted = getattr(self, "_preempted", False)
+                if line_id:
+                    # A line the pass neither played nor set aside nor queued
+                    # again is dropped: cut by an interrupt, or failed (ADR-025).
+                    if is_preempted:
+                        self._line_ledger().requeued(line_id)
+                    else:
+                        cut = getattr(self, "_interrupted", False)
+                        self._line_ledger().settle(line_id, DROP_INTERRUPTED if cut else DROP_FAILED)
                 # When preempted, active item was re-queued; do not decrement _unfinished_tasks
                 if not is_preempted:
                     self._tts_queue.task_done()
@@ -1635,11 +1690,14 @@ class NarratorService:
         existing: Optional[MissedLine] = None,
     ) -> None:
         missed = getattr(self, "_missed", None)
+        line = self._missed_line(text, item, existing=existing)
+        if item is not None and getattr(item, "line_id", ""):
+            self._line_ledger().dropped(item.line_id, reason, missed_id=line.id if missed is not None else "")
         if missed is None:
             return
         try:
             missed.miss(
-                self._missed_line(text, item, existing=existing),
+                line,
                 reason=reason,
                 waited_seconds=waited,
                 held_for=held_for,
@@ -1703,6 +1761,8 @@ class NarratorService:
         sid = session_id or (getattr(item, "session_id", None) if item is not None else None)
 
         def on_start() -> None:
+            if item is not None and getattr(item, "line_id", ""):
+                self._line_ledger().playing(item.line_id)
             self._control_call("playing", text, self._sender_name(sid))
 
         heard = False
@@ -1791,6 +1851,8 @@ class NarratorService:
                     missed.remove(item.missed_id)
             except Exception as exc:  # noqa: BLE001
                 _log(f"missed list write error: {exc!r}")
+        if item is not None and getattr(item, "line_id", ""):
+            self._line_ledger().done(item.line_id)
         self._heard(path, item, text=text, session_id=session_id)
         return True
 
@@ -1879,6 +1941,23 @@ class NarratorService:
             return 0
 
     # -- his stop (ADR-024) -----------------------------------------------------
+
+    # -- one line id, one play (ADR-025) -------------------------------------------
+
+    def _line_ledger(self) -> LineLedger:
+        ledger = getattr(self, "_lines", None)
+        if ledger is None:  # a service built without __init__ (tests)
+            ledger = self._lines = LineLedger(None)
+        return ledger
+
+    def _queued_line_ids(self) -> set[str]:
+        return {q.line_id for q in self._queued_items() if isinstance(q, QueueItem) and q.line_id}
+
+    def _line_in_flight(self) -> Optional[dict[str, Any]]:
+        """The ledger's record of the line the worker has in hand, when it has an id."""
+        item = getattr(self, "_active_item", None)
+        line_id = getattr(item, "line_id", "") if isinstance(item, QueueItem) else ""
+        return self._line_ledger().answer(line_id) if line_id else None
 
     def _is_stopped(self) -> bool:
         return getattr(self, "_stopped_since", None) is not None
@@ -2255,6 +2334,8 @@ class NarratorService:
 
             budget = self._synthesis_timeout(spoken_line, profile)
             self._progress("synthesizing", expect=budget or 0.0)
+            if item is not None and item.line_id:
+                self._line_ledger().synth_started(item.line_id)
             if hasattr(self, "_tts_executor") and self._tts_executor is not None:
                 synth = getattr(self._tts_executor, "synth", getattr(self, "_synth", None))
                 if synth is not None and hasattr(self._tts_executor, "submit"):
