@@ -109,6 +109,14 @@ DEFAULT_PLAYERS = (
     "com.anthropic.claudefordesktop",
 )
 
+# Apps whose sound always holds speech, whatever the players and exception
+# lists say (his 2026-10-21 18:54: "im using speech feature in chrome ...
+# dont play auto speech when im using it"). Chrome's read-aloud and any tab's
+# audio play from Chrome or its helpers; held lines that wait past the
+# longest hold go to the missed list, where the Spoken Transcript app plays
+# them (#m1021-1854-f2a9). Matched like the other lists (see `_matches`).
+ALWAYS_HOLD_APPS = ("com.google.Chrome",)
+
 # Apps whose open microphone means a meeting (his 2026-10-20 12:32: the
 # listed meeting apps, Discord included). A browser on the list covers Meet;
 # any other app holding the microphone is "mic in use, not a meeting app".
@@ -302,6 +310,11 @@ class SoundYieldSettings:
     def is_player(self, proc: "AudioProcess") -> bool:
         """True when `proc` is on the players list (see `_matches`)."""
         return _matches(self.players, proc)
+
+    def always_holds(self, proc: "AudioProcess") -> bool:
+        """True when `proc` is an app whose sound always holds speech
+        (ALWAYS_HOLD_APPS): the exception and players lists do not apply."""
+        return _matches(ALWAYS_HOLD_APPS, proc)
 
     def is_meeting_app(self, proc: "AudioProcess") -> bool:
         """True when `proc` is on the meeting-apps list (see `_matches`)."""
@@ -961,6 +974,10 @@ class SoundYieldGate:
                 result.meeting.append(named)
             elif named.running_input and not named.running_output:
                 result.mic.append(named)  # CrownTalk, the speech daemon: not a meeting
+            elif settings.always_holds(named):
+                # Before the exceptions and the players: Chrome's speech and
+                # tab audio hold even with Chrome on his exception list.
+                result.blockers.append(named)
             elif settings.is_exception(named):
                 result.excepted.append(named)
             elif settings.hold_for == HOLD_FOR_PLAYERS and not settings.is_player(named):
@@ -1122,6 +1139,7 @@ def format_settings(settings: SoundYieldSettings) -> str:
         f"holds for: {rule}",
         f"players (apps whose sound holds speech): {players}",
         f"exceptions (apps whose sound does not hold speech): {exceptions}",
+        f"always hold (their sound holds speech whatever the lists say): {', '.join(ALWAYS_HOLD_APPS)}",
         f"longest hold: {settings.max_wait_seconds:g} s, then set aside as missed (auto-speech missed)",
         f"meeting hold: {meeting}",
         f"meeting apps (an open microphone here is a meeting): {meeting_apps}",
@@ -1162,7 +1180,8 @@ def format_assessment(assessment: Assessment, *, now: float | None = None) -> st
         for p in assessment.mic:
             lines.append(f"microphone in use: {p.label()} — not a meeting app, does not hold")
         for p in assessment.blockers:
-            lines.append(f"{_playing(p)}: {p.label()} — holds speech")
+            why = " (always: its speech and tab audio hold, whatever the lists say)" if s.always_holds(p) else ""
+            lines.append(f"{_playing(p)}: {p.label()} — holds speech{why}")
         for p in assessment.excepted:
             lines.append(f"{_playing(p)}: {p.label()} — on the exception list, does not hold")
         for p in assessment.others:

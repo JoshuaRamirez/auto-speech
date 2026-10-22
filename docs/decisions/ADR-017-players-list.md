@@ -97,3 +97,28 @@ and says that the players list and exceptions cannot apply there.
   ADR-015 rule unchanged.
 - I-20.4 `status` names the rule and the list; `check` names every
   running app and the reason it does or does not hold.
+
+## Amendment, 2026-10-21: Chrome always holds (#m1021-1854-f2a9)
+His 18:54: "im using speech feature in chrome - this is what i wanted,
+with a transcript below it. also, dont play auto speech when im using it.
+also, when u cant say things, that app will let me play what i missed".
+His exception list held Chrome out (ADR-018: "for its videos"), so
+Chrome's read-aloud played under auto-speech.
+
+Chrome is now an **always-hold app** (`ALWAYS_HOLD_APPS`): while Chrome
+or one of its helpers runs output, speech holds as it does for Spotify,
+and a line still held at the longest wait goes to the missed list, where
+the Spoken Transcript app plays it (`missed --play`). The exception and
+players lists do not apply to it. This is in code, not settings: his
+config is unchanged and no setting turns it off. The meeting check still
+comes first, so Meet in Chrome stays a meeting.
+
+The cost is the one this ADR names above: Core Audio cannot tell
+Chrome's read-aloud from a silent open stream in a tab, so a silent
+stream can hold speech too and set lines aside. That is now the accepted
+way to be wrong, since he can play what he missed.
+
+- I-20.5 A process matching `ALWAYS_HOLD_APPS` that runs output holds
+  speech (reason sound) whatever the players and exception lists say;
+  only a meeting outranks it. `status` lists the always-hold apps, and
+  `check` says why such a process holds.

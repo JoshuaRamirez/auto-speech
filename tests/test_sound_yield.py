@@ -549,9 +549,9 @@ class TestPlayersList(unittest.TestCase):
 
     def test_a_default_player_can_be_removed_and_reset_restores_the_defaults(self):
         store = _store(self.tmp)
-        settings, removed = store.remove_players(["Chrome"])
-        self.assertEqual(removed, ["com.google.Chrome"])
-        gate, _ = _gate(self.tmp, FakeProbe([[CHROME_HELPER]]))
+        settings, removed = store.remove_players(["com.spotify.client"])
+        self.assertEqual(removed, ["com.spotify.client"])
+        gate, _ = _gate(self.tmp, FakeProbe([[SPOTIFY]]))
         self.assertFalse(gate.assess().hold)
         self.assertEqual(store.reset_players().players, DEFAULT_PLAYERS)
         self.assertTrue(gate.assess().hold)
@@ -563,10 +563,63 @@ class TestPlayersList(unittest.TestCase):
         self.assertFalse(s.is_player(SPOTIFY))
 
     def test_exception_beats_the_players_list(self):
-        gate, _ = _gate(self.tmp, FakeProbe([[CHROME_HELPER]]), config='[sound_yield]\nexceptions = ["com.google.Chrome"]\n')
+        gate, _ = _gate(self.tmp, FakeProbe([[MUSIC]]), config='[sound_yield]\nexceptions = ["com.apple.Music"]\n')
         a = gate.assess()
         self.assertFalse(a.hold)
-        self.assertEqual([p.pid for p in a.excepted], [68655])
+        self.assertEqual([p.pid for p in a.excepted], [501])
+
+    # -- Chrome always holds (his 2026-10-21 18:54, #m1021-1854-f2a9) --------------
+
+    HIS_CONFIG = (
+        '[sound_yield]\nhold_for = "players"\n'
+        'players = ["com.apple.Music", "com.spotify.client", "com.google.Chrome"]\n'
+        'exceptions = ["com.google.Chrome.helper", "com.google.Chrome"]\n'
+        "max_wait_seconds = 3\n"
+    )
+
+    def test_chrome_speech_holds_even_on_his_exception_list(self):
+        # Chrome's read-aloud and tab audio play from its helper (or the app).
+        for proc in (CHROME_HELPER, AudioProcess(pid=68650, bundle_id="com.google.Chrome")):
+            gate, _ = _gate(self.tmp, FakeProbe([[proc]]), config=self.HIS_CONFIG)
+            a = gate.assess()
+            self.assertTrue(a.hold, proc)
+            self.assertEqual((a.reason, [p.pid for p in a.blockers], a.excepted), ("sound", [proc.pid], []))
+
+    def test_chrome_holds_like_spotify_then_is_set_aside_as_missed(self):
+        logs: list[str] = []
+        gate, clock = _gate(self.tmp, FakeProbe([[CHROME_HELPER]]), config=self.HIS_CONFIG, log=logs.append)
+        out = gate.wait_until_clear()
+        self.assertEqual(out.status, EXPIRED)
+        self.assertFalse(out.may_play)
+        self.assertGreaterEqual(out.waited_seconds, 3.0)
+        self.assertIn("setting this speech aside as missed", logs[-1])
+        # Spotify on the same terms, for comparison: the same outcome.
+        gate2, _ = _gate(self.tmp, FakeProbe([[SPOTIFY]]), config=self.HIS_CONFIG)
+        self.assertEqual(gate2.wait_until_clear().status, EXPIRED)
+
+    def test_chrome_stopping_lets_the_held_line_play(self):
+        gate, _ = _gate(self.tmp, FakeProbe([[CHROME_HELPER], [CHROME_HELPER], []]), config=self.HIS_CONFIG)
+        out = gate.wait_until_clear()
+        self.assertEqual(out.status, RESUMED)
+        self.assertTrue(out.may_play)
+
+    def test_chrome_holds_when_it_is_off_the_players_list_too(self):
+        cfg = '[sound_yield]\nhold_for = "players"\nplayers = ["com.apple.Music"]\n'
+        gate, _ = _gate(self.tmp, FakeProbe([[CHROME_HELPER]]), config=cfg)
+        self.assertTrue(gate.assess().hold)
+        # Another browser off the list still does not hold: only the always-hold apps do.
+        brave = AudioProcess(pid=70001, bundle_id="com.brave.Browser")
+        gate2, _ = _gate(self.tmp, FakeProbe([[brave]]), config=cfg)
+        self.assertFalse(gate2.assess().hold)
+
+    def test_status_and_check_say_chrome_always_holds(self):
+        gate, _ = _gate(self.tmp, FakeProbe([[CHROME_HELPER]]), config=self.HIS_CONFIG)
+        a = gate.assess()
+        text = format_assessment(a)
+        self.assertIn("holds speech (always: its speech and tab audio hold, whatever the lists say)", text)
+        self.assertIn("always hold (their sound holds speech whatever the lists say): com.google.Chrome", format_settings(a.settings))
+        self.assertTrue(SoundYieldSettings().always_holds(CHROME_HELPER))
+        self.assertFalse(SoundYieldSettings().always_holds(SPOTIFY))
 
     def test_hold_for_any_restores_the_old_rule(self):
         gate, _ = _gate(self.tmp, FakeProbe([[ANTIGRAVITY]]), config='[sound_yield]\nhold_for = "any"\n')
@@ -721,13 +774,14 @@ class TestMeetingHold(unittest.TestCase):
         )
         a = gate.assess()
         self.assertEqual((a.reason, [p.pid for p in a.meeting], a.excepted), (REASON_MEETING, [603], []))
-        # Chrome merely playing (a video) is still excepted.
+        # Chrome merely playing (a video, its read-aloud) holds as sound, not
+        # as a meeting, even on the exception list (#m1021-1854-f2a9).
         gate2, _, _ = _meeting_gate(
             self.tmp, FakeProbe([[replace(CHROME_MEET, running_input=False)]]),
             config='[sound_yield]\nexceptions = ["com.google.Chrome"]\n',
         )
         b = gate2.assess()
-        self.assertEqual((b.hold, [p.pid for p in b.excepted]), (False, [603]))
+        self.assertEqual((b.hold, b.reason, [p.pid for p in b.blockers], b.excepted), (True, REASON_SOUND, [603], []))
 
     def test_meeting_hold_can_be_switched_off_in_the_file(self):
         gate, _, _ = _meeting_gate(self.tmp, FakeProbe([[TEAMS]]), config='[sound_yield]\nmeeting_hold = false\n')

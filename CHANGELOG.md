@@ -87,6 +87,14 @@ The Chrome extension under `chrome-extension/` is versioned independently
   silent.
 
 ### Changed
+- **Chrome's speech holds auto-speech, like Spotify (ADR-017 amendment).**
+  His 2026-10-21 18:54: "dont play auto speech when im using it" (Chrome's
+  read-aloud). Chrome and its helpers are now always-hold apps: while they
+  play, speech holds; a line held past the longest wait goes to the missed
+  list for the Spoken Transcript app's `missed --play`. The exception and
+  players lists no longer apply to Chrome; his config is unchanged.
+  `yield status` lists the always-hold apps and `yield check` says why
+  Chrome holds (#m1021-1854-f2a9).
 - **No private paths in the published tree.** The agents' teamwork logs
   (`.agents/teamwork/`, all of it, the 139 files once published included)
   and their working files `PROJECT.md` and `TEST_READY.md` are no longer
