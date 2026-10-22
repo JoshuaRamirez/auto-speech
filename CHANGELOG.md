@@ -10,6 +10,16 @@ The Chrome extension under `chrome-extension/` is versioned independently
 ## [Unreleased]
 
 ### Added
+- **auto-speech's settings in the UI Utility's settings window (ADR-023).**
+  His 2026-10-21 22:26: "I can do settings on them both. And I want them to
+  icon bar up the top." With `[history] player` on, the daemon opens a
+  settings piece (contract 1.3) beside the control: mute, autoplay reads,
+  summary size, hold speech while another app plays sound, rate, name the
+  speaker; show the transcript at open, lines kept, the speech control on,
+  clear the missed list. Each change lands in its own file or marker and is
+  confirmed; a failure sends the old value back and logs why. The rate is
+  kept in `history.toml` and applied at start, so a restart keeps it; the
+  control lists `keep` heard lines. Off closes both pieces.
 - **The speech control: a Mac-native floating control with the transcript
   below it (ADR-022).** His 2026-10-21 20:07: "i want the same thing that
   shows up like in the screenshot" / "and i wanted a transcript". With

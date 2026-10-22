@@ -20,6 +20,13 @@ the worker owns the connection and sends every request. The client's
 reader thread hands events to the worker as well, since a request sent
 from the reader would wait on a reply only the reader can read.
 See docs/decisions/ADR-022.
+
+Beside the control, while `[history] player` is on, one settings piece
+(rev 1.3, id auto-speech-settings, source "Speech") puts auto-speech's
+settings in the UI Utility's settings window; speech_settings applies each
+change where the setting lives, and the worker confirms it with `values`
+(or sends the old value back). Only when the UI Utility offers the piece.
+See docs/decisions/ADR-023.
 """
 
 from __future__ import annotations
@@ -38,12 +45,14 @@ import ui_utility_client
 from missed_speech import MissedLine, MissedList
 from speech_history import HistoryLine, HistorySettings, HistoryStore, SpeechHistory
 from speech_player import CONNECT_RETRY_SECONDS, LAUNCH_WAIT_SECONDS, utility_installed
+from speech_settings import SETTINGS, SETTINGS_ID, SOURCE_NAME, SettingError, SettingsPlaces, SpeechSettings
 from ui_utility_client import CONTROL, ContractError, UiUtilityClient
 
 CONTROL_ID = "auto-speech"
 MISSED_PREFIX = "missed:"  # a missed-list line's item id
 NOW_PREFIX = "now-"  # the line playing now, before the history names it
-MAX_ITEMS = 50  # the newest history lines shown; missed and held lines are never cut
+MAX_ITEMS = 50  # the newest history lines skip-back walks; the list shows [history] keep
+# Missed and held lines are never cut from the list, whatever keep is.
 RATES = [1.0, 1.25, 1.5, 2.0, 0.75]
 
 IDLE = "idle"
@@ -125,6 +134,7 @@ class ControlDriver:
         clock: Callable[[], float] = time.monotonic,
         icon: Path | None = ICON,
         start_worker: bool = True,
+        settings: SpeechSettings | None = None,
     ) -> None:
         self._store = store or HistoryStore()
         self._history = history or SpeechHistory(store=self._store)
@@ -152,6 +162,11 @@ class ControlDriver:
         self._client: Any = None
         self._open = False
         self._closed_by_user = False
+        self._pieces: set[str] = set()  # what the UI Utility offered at hello
+        self._settings_open = False
+        self.settings = settings or SpeechSettings(
+            SettingsPlaces(history=self._store, missed=self._missed), set_rate=self.actions.set_rate
+        )
 
     # -- the narrator's side: change the model, wake the worker ------------------
 
@@ -169,8 +184,17 @@ class ControlDriver:
             self._cond.notify()
 
     def start(self) -> None:
-        """At daemon start: open the control when the setting is on."""
-        self._change()
+        """At daemon start: the kept rate goes to the sink, and the control
+        opens when the setting is on."""
+        try:
+            rate = self._store.load().rate
+            if rate != 1.0:
+                rate = float(self.actions.set_rate(rate))
+                self._say_once("rate", f"control: playback rate {rate:g}, as kept")
+        except Exception as exc:  # noqa: BLE001 — a rate that cannot apply leaves 1
+            self._say_once("rate", f"control: the kept rate did not apply: {exc!r}")
+            rate = 1.0
+        self._change(rate=rate)
 
     def playing(self, text: str, source: str | None) -> None:
         """A line starts playing (after any hold): on top of the list, current."""
@@ -259,17 +283,24 @@ class ControlDriver:
             pending = set(self._model.pending)
             self._model.pending.clear()
         try:
-            if self._open and (self._client is None or not self._client.connected):
+            if self._client is None or not self._client.connected:
                 self._open = False  # the connection was lost: open again, with everything
+                self._settings_open = False
             if not settings.player:
                 if self._open:
                     self._request({"cmd": "close", "id": CONTROL_ID})
                     self._open = False
+                if self._settings_open:
+                    self._request({"cmd": "close", "id": SETTINGS_ID})
+                    self._settings_open = False
                 return "off"
             if not self._open:
                 with self._cond:
-                    if self._closed_by_user:
-                        return "closed by him"
+                    closed_by_user = self._closed_by_user
+                if closed_by_user:
+                    if self._client is not None and self._client.connected:
+                        self._sync_settings()  # never a launch for this alone
+                    return "closed by him"
                 if not self._installed():
                     self._say_once("not installed", "control: on, but the UI Utility is not installed; nothing opens")
                     return "not installed"
@@ -280,6 +311,7 @@ class ControlDriver:
                 self._request(self._open_request())
                 self._open = True
                 self._say_once("opened", "control: the UI Utility's speech control is open")
+                self._sync_settings()
                 return "opened"
             sent = False
             for kind in _ORDER:
@@ -288,6 +320,7 @@ class ControlDriver:
                     if request is not None:
                         self._request(request)
                         sent = True
+            self._sync_settings()
             return "sent" if sent else "none"
         except ContractError as exc:
             self._open = False
@@ -298,6 +331,32 @@ class ControlDriver:
 
     def _request(self, obj: dict[str, Any]) -> dict[str, Any]:
         return self._greeted_client().request(obj)
+
+    def _sync_settings(self) -> None:
+        """Open the settings piece beside the control, once per connection,
+        when this copy of the UI Utility offers it. A refusal is logged and
+        leaves the control alone; a lost connection goes up to sync."""
+        if self._settings_open or SETTINGS not in self._pieces:
+            return
+        try:
+            self._request({
+                "cmd": "open",
+                "panel": SETTINGS,
+                "id": SETTINGS_ID,
+                "source": {"name": SOURCE_NAME, "icon": self._icon},
+                "groups": self.settings.groups(),
+            })
+        except ContractError as exc:
+            if exc.kind != "refused":
+                raise
+            self._say_once("settings refused", f"settings: the UI Utility refused the settings piece: {exc}")
+            return
+        self._settings_open = True
+        self._say_once("settings opened", "settings: auto-speech's settings are in the UI Utility's settings window")
+
+    def _send_values(self, values: dict[str, Any]) -> None:
+        if self._settings_open and values:
+            self._request({"cmd": "values", "id": SETTINGS_ID, "values": values})
 
     def _drop_client(self) -> None:
         client, self._client = self._client, None
@@ -311,6 +370,7 @@ class ControlDriver:
             return client
         self._drop_client()
         self._open = False  # a new connection has no control of ours yet
+        self._settings_open = False
         client = self._client_factory(on_event=self._on_event)
         try:
             client.connect()
@@ -331,10 +391,13 @@ class ControlDriver:
                     if self._clock() >= deadline:
                         raise ContractError("no socket", f"launched but no socket in {LAUNCH_WAIT_SECONDS:g} s") from None
         try:
-            client.hello(CONTROL)
+            reply = client.hello(CONTROL)
         except ContractError:
             client.close()
             raise
+        pieces = reply.get("pieces") if isinstance(reply, dict) else None
+        self._pieces = {str(p) for p in pieces} if isinstance(pieces, list) else set()
+        self._settings_open = False
         self._client = client
         return client
 
@@ -346,7 +409,7 @@ class ControlDriver:
         held line is in the list, however old, so he can play what he missed."""
         entries: list[tuple[float, dict[str, Any]]] = []
         try:
-            lines = self._history.load(limit=MAX_ITEMS)
+            lines = self._history.load(limit=max(1, self._store.load().keep))
         except Exception:  # noqa: BLE001 — an unreadable history shows as empty
             lines = []
         for line in lines:
@@ -390,6 +453,7 @@ class ControlDriver:
             "state": state,
             "rate": rate,
             "rates": list(RATES) if rate in RATES else [rate, *RATES],
+            "show": {"list": self._store.load().show_list},
         }
 
     def _update_request(self, kind: str) -> dict[str, Any] | None:
@@ -408,6 +472,9 @@ class ControlDriver:
     # -- the control's events -------------------------------------------------------
 
     def handle_event(self, evt: dict[str, Any]) -> None:
+        if evt.get("id") == SETTINGS_ID:
+            self._settings_event(evt)
+            return
         if evt.get("id") != CONTROL_ID:
             return
         kind = evt.get("event")
@@ -416,7 +483,9 @@ class ControlDriver:
         elif kind == "rate":
             rate = evt.get("rate")
             if isinstance(rate, (int, float)) and not isinstance(rate, bool) and rate > 0:
-                self._change(_STATE, rate=float(self.actions.set_rate(float(rate))))
+                rate = float(self.actions.set_rate(float(rate)))
+                self._change(_STATE, rate=rate)
+                self._keep_rate(rate)
         elif kind == "play-item":
             self._play_items([evt.get("item")])
         elif kind == "play-all":
@@ -426,6 +495,47 @@ class ControlDriver:
             self._open = False
             with self._cond:
                 self._closed_by_user = evt.get("by") == "user"
+
+    def _keep_rate(self, rate: float) -> None:
+        """A rate set at the control is kept for the next start, and shown in
+        the settings window."""
+        try:
+            self._store.set_rate(rate)
+        except (OSError, ValueError) as exc:
+            if self._log is not None:
+                self._log(f"control: rate {rate:g} not kept: {exc}")
+        self._send_values({"rate": self.settings.values()["rate"]})
+
+    def _settings_event(self, evt: dict[str, Any]) -> None:
+        kind = evt.get("event")
+        if kind == "closed":
+            self._settings_open = False
+            return
+        if kind != "setting":
+            return
+        item = str(evt.get("item") or "")
+        value = evt.get("value")
+        try:
+            old = self.settings.values()
+        except Exception:  # noqa: BLE001
+            old = {}
+        try:
+            applied = self.settings.apply(item, value)
+        except SettingError as exc:
+            if self._log is not None:
+                self._log(f"settings: {item} = {value!r} not applied: {exc}")
+            if item in old:
+                self._send_values({item: old[item]})
+            return
+        if self._log is not None:
+            self._log(f"settings: {item} = {value!r}" if item != "clear_missed" else "settings: missed list cleared")
+        self._send_values(applied)
+        if item == "rate":
+            self._change(_STATE, rate=float(applied["rate"]))
+        elif item in ("keep", "clear_missed"):
+            self._change(_ITEMS)
+        elif item == "player":
+            self._change()  # the next sync opens or closes both pieces
 
     def _control(self, action: str) -> None:
         with self._cond:
