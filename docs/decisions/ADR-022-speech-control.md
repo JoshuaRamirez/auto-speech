@@ -55,6 +55,8 @@ list, the history) live here.
 
 ## Consequences
 - A paused line holds the queue until he presses play or stop.
+- A long pause shows as an overdue step in `doctor` (it reads the
+  worker's expected end); nothing restarts the daemon over it.
 - The rate is the daemon's for its lifetime; a restart starts at 1.
 - Invariants: I-22.1 never opened during a hold; I-22.2 every item id is
   unique and the list is newest first; I-22.3 a replayed history line is
