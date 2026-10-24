@@ -97,7 +97,7 @@ class TestAppleSayEngine(unittest.TestCase):
                 partial.write_bytes(b"RIFFdummydataWAVE")
                 return mock.Mock(returncode=0, stdout="", stderr="")
 
-            with mock.patch("subprocess.run", side_effect=fake_run) as mock_run:
+            with mock.patch.object(AppleSayEngine, "_run_say", side_effect=lambda argv, timeout: fake_run(argv)) as mock_run:
                 engine.synthesize("Hello world", voice_profile=profile, out_path=out_wav)
                 self.assertTrue(out_wav.exists())
                 self.assertEqual(out_wav.read_bytes(), b"RIFFdummydataWAVE")
@@ -127,7 +127,7 @@ class TestAppleSayEngine(unittest.TestCase):
                 partial.write_bytes(b"RIFFdummydataWAVE")
                 return mock.Mock(returncode=0, stdout="", stderr="")
 
-            with mock.patch("subprocess.run", side_effect=fake_run) as mock_run:
+            with mock.patch.object(AppleSayEngine, "_run_say", side_effect=lambda argv, timeout: fake_run(argv)) as mock_run:
                 engine.synthesize("Hello default world", voice_profile=profile, out_path=out_wav)
                 cmd = mock_run.call_args[0][0]
                 self.assertEqual(cmd[0], "say")
@@ -146,7 +146,7 @@ class TestAppleSayEngine(unittest.TestCase):
                 partial.write_bytes(b"RIFFdummydataWAVE")
                 return mock.Mock(returncode=0, stdout="", stderr="")
 
-            with mock.patch("subprocess.run", side_effect=fake_run) as mock_run:
+            with mock.patch.object(AppleSayEngine, "_run_say", side_effect=lambda argv, timeout: fake_run(argv)) as mock_run:
                 engine.synthesize("-v is a flag", out_path=out_wav)
                 cmd = mock_run.call_args[0][0]
                 self.assertEqual(cmd[-2:], ["--", "-v is a flag"])
@@ -168,7 +168,7 @@ class TestAppleSayEngine(unittest.TestCase):
                 partial.write_bytes(b"RIFFdummydataWAVE")
                 return mock.Mock(returncode=0, stdout="", stderr="")
 
-            with mock.patch("subprocess.run", side_effect=fake_run) as mock_run:
+            with mock.patch.object(AppleSayEngine, "_run_say", side_effect=lambda argv, timeout: fake_run(argv)) as mock_run:
                 engine.synthesize("Hello faster world", voice_profile=profile, out_path=out_wav)
                 cmd = mock_run.call_args[0][0]
                 self.assertNotIn("-v", cmd)
@@ -187,7 +187,7 @@ class TestAppleSayEngine(unittest.TestCase):
                 partial.write_bytes(b"RIFFdummydataWAVE")
                 return mock.Mock(returncode=0, stdout="", stderr="")
 
-            with mock.patch("subprocess.run", side_effect=fake_run) as mock_run:
+            with mock.patch.object(AppleSayEngine, "_run_say", side_effect=lambda argv, timeout: fake_run(argv)) as mock_run:
                 engine.synthesize(large_text, out_path=out_wav)
                 cmd = mock_run.call_args[0][0]
                 self.assertIn("-f", cmd)

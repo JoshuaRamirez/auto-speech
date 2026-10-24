@@ -11,6 +11,7 @@ import logging
 import os
 import re
 import shutil
+import signal
 import subprocess
 import sys
 import tempfile
@@ -18,7 +19,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING
 
 from speech_priority import boosted_argv
-from tts_engine import TTSGenerationError
+from tts_engine import SynthesisTimeout, TTSGenerationError
 
 logger = logging.getLogger(__name__)
 
@@ -26,6 +27,13 @@ if TYPE_CHECKING:
     from voice_profile import VoiceProfile
 
 DEFAULT_SAY_RATE = 212
+
+# One `say` may run this long before it is killed (#m1023-1717-fd7b: one hung
+# for 18 h on 2026-10-22): 10 s, plus 0.15 s a character, at most 120 s.
+SAY_TIMEOUT_BASE_S = 10.0
+SAY_TIMEOUT_PER_CHAR_S = 0.15
+SAY_TIMEOUT_CAP_S = 120.0
+SAY_ATTEMPTS = 2   # a try and one retry
 APPLE_SAMPLE_RATE = 24000
 PREFERRED_VOICES = ("Ava (Premium)", "Ava (Enhanced)", "Ava", "Samantha (Premium)", "Samantha (Enhanced)", "Samantha")
 
@@ -130,7 +138,14 @@ class AppleSayEngine:
         self,
         voice: str | None = None,
         default_rate: int | None = None,
+        *,
+        timeout_base: float = SAY_TIMEOUT_BASE_S,
+        timeout_per_char: float = SAY_TIMEOUT_PER_CHAR_S,
+        timeout_cap: float = SAY_TIMEOUT_CAP_S,
     ) -> None:
+        self._timeout_base = float(timeout_base)
+        self._timeout_per_char = float(timeout_per_char)
+        self._timeout_cap = float(timeout_cap)
         self._voice = voice
         self._default_rate = default_rate
         self._explicit_rate = default_rate is not None
@@ -170,6 +185,31 @@ class AppleSayEngine:
             return None
 
         return candidate_str
+
+    def say_timeout(self, text: str) -> float:
+        """How long one `say` of `text` may run before it is killed."""
+        return min(self._timeout_cap, self._timeout_base + self._timeout_per_char * len(text or ""))
+
+    def worst_case_seconds(self, text: str) -> float:
+        """The longest synthesize() can take: every try timing out."""
+        return SAY_ATTEMPTS * self.say_timeout(text)
+
+    def _run_say(self, argv: list[str], timeout: float) -> subprocess.CompletedProcess:
+        """Run `say` in its own process group; past `timeout`, kill the whole
+        group (say's helpers too) and raise subprocess.TimeoutExpired."""
+        proc = subprocess.Popen(
+            argv, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, start_new_session=True,
+        )
+        try:
+            out, err = proc.communicate(timeout=timeout)
+        except subprocess.TimeoutExpired:
+            try:
+                os.killpg(proc.pid, signal.SIGKILL)
+            except OSError:
+                proc.kill()
+            proc.communicate()
+            raise
+        return subprocess.CompletedProcess(argv, proc.returncode, out, err)
 
     def resolve_rate(self, speed: float = 1.0) -> int:
         """Calculate words per minute based on profile speed multiplier."""
@@ -228,7 +268,19 @@ class AppleSayEngine:
             else:
                 cmd.extend(["--", text])
 
-            res = subprocess.run(boosted_argv(cmd), capture_output=True, text=True, check=False)
+            budget = self.say_timeout(text)
+            res = None
+            for attempt in range(1, SAY_ATTEMPTS + 1):
+                try:
+                    res = self._run_say(boosted_argv(cmd), budget)
+                    break
+                except subprocess.TimeoutExpired:
+                    logger.warning("say timed out after %.0fs (try %d of %d), killed: %r",
+                                   budget, attempt, SAY_ATTEMPTS, text[:50])
+                    if tmp_wav.exists():
+                        tmp_wav.unlink(missing_ok=True)
+            if res is None:
+                raise SynthesisTimeout(budget, final=True)
             if res.returncode != 0:
                 raise TTSGenerationError(f"say command failed with exit {res.returncode}: {res.stderr.strip()}")
 

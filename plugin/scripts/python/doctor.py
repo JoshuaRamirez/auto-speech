@@ -13,7 +13,9 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import shutil
+import subprocess
 import sys
 import time
 from pathlib import Path
@@ -59,6 +61,43 @@ def _default_daemon_alive(pid: int) -> bool:
     return _pid_is_our_daemon(pid)
 
 
+LAUNCHD_LABEL = "dev.auto-speech.narrator"
+
+
+def _default_launchctl() -> str | None:
+    """The launchctl to ask, or None to skip the launchd check: off where
+    tests run (AUTO_SPEECH_START_VIA_LAUNCHD=never, so a test never reads the
+    live narrator) and where there is no launchctl."""
+    if os.environ.get("AUTO_SPEECH_START_VIA_LAUNCHD", "").strip().lower() == "never":
+        return None
+    return shutil.which("launchctl")
+
+
+def _launchd_pid(launchctl: str | None, label: str = LAUNCHD_LABEL) -> int | None:
+    """The live pid launchd holds for `label`, or None (no job, not running,
+    or launchctl unavailable). `launchctl list LABEL` prints `"PID" = N;`
+    only while the job's process is alive."""
+    if not launchctl:
+        return None
+    try:
+        out = subprocess.run([launchctl, "list", label], capture_output=True, text=True, timeout=3, check=False)
+    except (OSError, subprocess.SubprocessError):
+        return None
+    if out.returncode != 0:
+        return None
+    m = re.search(r'"PID"\s*=\s*(\d+)\s*;', out.stdout)
+    if not m:
+        return None
+    pid = int(m.group(1))
+    try:
+        os.kill(pid, 0)
+    except PermissionError:
+        return pid
+    except OSError:
+        return None
+    return pid
+
+
 class Doctor:
     def __init__(
         self,
@@ -77,7 +116,11 @@ class Doctor:
         which=shutil.which,
         disk_usage=shutil.disk_usage,
         daemon_alive=_default_daemon_alive,
+        launchctl: str | None | object = ...,
+        missed_path: Path | None = None,
     ) -> None:
+        self._launchctl = _default_launchctl() if launchctl is ... else launchctl
+        self._missed_path = Path(missed_path) if missed_path is not None else None
         self._home = Path(home) if home is not None else Path(os.path.expanduser("~"))
         self._tmp = Path(tmp) if tmp is not None else Path("/tmp")
         self._config_dir = (
@@ -187,6 +230,20 @@ class Doctor:
 
     def _check_daemon(self, r: HealthReport) -> None:
         pid_file = self._tmp / "auto-speech-narrator-daemon.pid"
+        # The launchd job first (#m1023-1717-fd7b): its live pid is the
+        # narrator, whatever the pid file says. A stopping second daemon used
+        # to delete the pid file, and the doctor then read "not running" for
+        # a narrator 19 hours old.
+        lpid = _launchd_pid(self._launchctl)
+        if lpid is not None:
+            try:
+                fpid: int | None = int(pid_file.read_text().strip())
+            except (OSError, ValueError):
+                fpid = None
+            note = "" if fpid == lpid else (
+                "; its pid file is missing" if fpid is None else f"; its pid file names {fpid}")
+            r.add("narrator", Status.OK, f"running (pid={lpid}, launchd job {LAUNCHD_LABEL}){note}")
+            return
         try:
             pid = int(pid_file.read_text().strip())
         except (OSError, ValueError):
@@ -281,7 +338,29 @@ class Doctor:
         except (OSError, ValueError, TypeError, KeyError):
             return
         when = time.strftime("%H:%M", time.localtime(since))
-        r.add("stopped", Status.WARN, f"speech stopped since {when}; nothing plays until `auto-speech resume`")
+        waiting = self._lines_waiting_on_stop(since)
+        by = str(data.get("by") or "").strip() if isinstance(data, dict) else ""
+        r.add(
+            "stopped",
+            Status.WARN,
+            f"stopped since {when}, {waiting} line{'' if waiting == 1 else 's'} waiting"
+            + (f" (stopped by {by})" if by else "")
+            + "; nothing plays until a play or `auto-speech resume`",
+        )
+
+    def _lines_waiting_on_stop(self, since: float) -> int:
+        """The lines that arrived while he had speech stopped: they play on
+        his resume (missed list, reason `stopped`)."""
+        try:
+            from missed_speech import MISSED, REASON_STOPPED, MissedList, default_missed_path
+
+            path = self._missed_path or default_missed_path()
+            return sum(
+                1 for m in MissedList(path).load()
+                if m.status == MISSED and m.reason == REASON_STOPPED
+            )
+        except Exception:  # noqa: BLE001 - the doctor never fails on a count
+            return 0
 
     def _check_markers(self, r: HealthReport) -> None:
         """Enrolment markers whose session is not alive (ADR-024): ignored."""
