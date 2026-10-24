@@ -157,6 +157,7 @@ CHEAP=(
     test_speak_client.py
     test_cli_dispatcher.py
     test_ipc_command_key.py
+    test_say_hang.py
 )
 
 # Bash-script tests for shell helpers.

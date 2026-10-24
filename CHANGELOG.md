@@ -149,6 +149,23 @@ The Chrome extension under `chrome-extension/` is versioned independently
   HOME to a temporary directory at import.
 
 ### Fixed
+- **One hung `say` can never hold the narrator (#m1023-1717-fd7b).** On
+  2026-10-22 22:49 a `say` hung for 18 h on one line. Each `say` now runs in
+  its own process group under a timeout scaled to the line (10 s plus 0.15 s
+  a character, at most 120 s). Past it the whole group is killed and the line
+  tried once more; a second timeout sets the line aside as timed out and the
+  queue moves on. A line the executor times out is queued again at most once
+  (`timeout_retries` default 3 → 1). A daemon whose worker is still stuck at
+  its exit no longer lingers: it waits five seconds and leaves.
+- **The doctor reads the launchd job (#m1023-1717-fd7b).** It reported the
+  narrator "not running" while the launchd job's pid was 19 hours old: the
+  pid file had been removed by another daemon's shutdown, which unlinked it
+  without checking whose it was. The doctor now reports running whenever
+  `dev.auto-speech.narrator` has a live pid, and a daemon removes the pid file
+  only when it names itself.
+- **The doctor shows a held stop with its waiting lines**: "stopped since
+  HH:MM, N lines waiting". The stop's log line and `auto-speech-stopped.json`
+  now name what sent it (a socket interrupt or the speech control's stop).
 - **A line played four times under heavy load (ADR-025).** On 2026-10-22 a
   pegged Mac took 2.5 minutes to synthesize one line. desk-speaker and the
   daemon client's own retry sent it again, and every copy played. Copies of

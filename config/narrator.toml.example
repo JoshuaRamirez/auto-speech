@@ -72,7 +72,7 @@ play_timeout_margin_seconds = 15.0
 # last retry is it set aside on the missed list.
 play_stall_seconds = 15.0
 load_timeout_scale_cap = 4.0
-timeout_retries = 3
+timeout_retries = 1
 retry_load_per_core = 2.0
 retry_wait_seconds = 180.0
 

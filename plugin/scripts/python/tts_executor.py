@@ -8,7 +8,9 @@ from typing import Any, Callable, TypeVar
 
 from apple_say_engine import AppleSayEngine
 from resilient_synthesizer import ResilientSynthesizer
-from tts_engine import TTSEngine
+from tts_engine import SynthesisTimeout, TTSEngine
+
+__all__ = ["SynthesisTimeout", "TTSExecutor", "get_default_tts_engine"]
 
 T = TypeVar("T")
 
@@ -21,15 +23,6 @@ def get_default_tts_engine() -> Any:
     if preferred in ("say", "apple") or (sys.platform == "darwin" and shutil.which("say") is not None):
         return AppleSayEngine()
     return TTSEngine()
-
-
-class SynthesisTimeout(RuntimeError):
-    """A synthesis ran past its budget. The worker that ran it is abandoned
-    (it may be stuck inside the model) and a fresh one serves the next call."""
-
-    def __init__(self, seconds: float) -> None:
-        super().__init__(f"synthesis timed out after {seconds:.0f}s")
-        self.seconds = seconds
 
 
 class TTSExecutor:

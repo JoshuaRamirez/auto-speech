@@ -18,6 +18,7 @@ from __future__ import annotations
 import atexit
 import inspect
 import json
+import logging
 import os
 import re
 import queue
@@ -98,7 +99,7 @@ DEPTH_FILE = state_path("auto-speech-narration-depth")
 # A queue that is non-empty while this stands still is a stalled narrator.
 PROGRESS_FILE = state_path("auto-speech-narration-progress")
 SYNTHESIS_TIMEOUT_FLOOR_SECONDS = 30.0
-DEFAULT_TIMEOUT_RETRIES = 3          # ADR-019: a timed-out line is queued again this many times
+DEFAULT_TIMEOUT_RETRIES = 1          # ADR-019: a timed-out line is queued again this many times (one submission, at most one retry: #m1023-1717-fd7b)
 RETRY_DIR = state_path("auto-speech-retry")   # the WAV of a cut-off line, kept for its replay
 # Each line's synthesis WAV and its fragments: a directory of the daemon's
 # own, so the clean-up glob after a line reads a few names, not the system
@@ -195,6 +196,29 @@ def _existing_pid() -> int | None:
     except (OSError, ValueError):
         return None
     return pid if _pid_is_our_daemon(pid) else None
+
+
+def _release_pid_file(pid_file: Path, pid: int) -> None:
+    """Remove the pid file only when it names `pid`: a second daemon that
+    stops must not take the live one's pid file with it (#m1023-1717-fd7b:
+    the doctor read "not running" for a live narrator)."""
+    try:
+        if int(pid_file.read_text().strip()) != pid:
+            return
+    except (OSError, ValueError):
+        return
+    try:
+        pid_file.unlink()
+    except OSError:
+        pass
+
+
+def _stuck_threads() -> list[threading.Thread]:
+    """The live non-daemon threads besides this one: what would keep the
+    interpreter from exiting (a worker abandoned inside a hung synthesis)."""
+    me = threading.current_thread()
+    return [t for t in threading.enumerate() if t is not me and not t.daemon and t.is_alive()
+            and t is not threading.main_thread()]
 
 
 def _project_root() -> Path:
@@ -494,10 +518,7 @@ class NarratorService:
                         _log(f"sink interrupt error: {exc!r}")
                 tts_thread.join(timeout=3.0)
             self._set_aside_queued(REASON_RESTART)
-            try:
-                PID_FILE.unlink()
-            except OSError:
-                pass
+            _release_pid_file(PID_FILE, os.getpid())
             self._fsm.transition(NOT_RUNNING)  # *_SHUTDOWN → NOT_RUNNING
             _log("shutdown")
         return 0
@@ -761,7 +782,8 @@ class NarratorService:
         elif action == "interrupt":
             # playback_control stop, `auto-speech stop`, the web app's end:
             # his stop, which holds until a play or resume (ADR-024).
-            self._stop_speech()
+            by = str(payload.get("source") or payload.get("caller") or "").strip()[:80]
+            self._stop_speech(by=f"a socket interrupt ({by})" if by else "a socket interrupt (playback_control stop, auto-speech stop or the web app)")
             return {"status": "ok", "action": "interrupt", "stopped": True}
 
         elif action == "resume":
@@ -1318,7 +1340,18 @@ class NarratorService:
         if cps <= 0:
             cps = FALLBACK_CHARS_PER_SEC
         spoken = len(text) / cps
-        return max(SYNTHESIS_TIMEOUT_FLOOR_SECONDS, spoken * factor) * self._load_scale()
+        budget = max(SYNTHESIS_TIMEOUT_FLOOR_SECONDS, spoken * factor) * self._load_scale()
+        # An engine that times out its own process (AppleSayEngine: a try and
+        # one retry) gets the room to do so, so it is the one that kills a hung
+        # `say`; the executor's budget stays the backstop (#m1023-1717-fd7b).
+        engine = getattr(getattr(self, "_tts_executor", None), "engine", None)
+        worst = getattr(engine, "worst_case_seconds", None)
+        if callable(worst):
+            try:
+                budget = max(budget, float(worst(text)) + 5.0)
+            except (TypeError, ValueError):
+                pass
+        return budget
 
     def _submit_synthesis(self, synth: Any, text: str, profile: Any, out: Path, budget: Optional[float]) -> bool:
         """Run one synthesis on the executor, under its budget when the
@@ -1885,7 +1918,7 @@ class NarratorService:
         return ControlActions(
             pause=lambda: self._sink_verb("pause"),
             resume=lambda: self._sink_verb("resume"),
-            stop=self._stop_speech,
+            stop=lambda: self._stop_speech(by="the speech control's stop"),
             unstop=self._resume_speech,
             restart=lambda: self._sink_verb("restart"),
             skip=lambda: self._sink_verb("skip"),
@@ -1962,14 +1995,14 @@ class NarratorService:
     def _is_stopped(self) -> bool:
         return getattr(self, "_stopped_since", None) is not None
 
-    def _stop_speech(self) -> None:
+    def _stop_speech(self, by: str = "") -> None:
         """His stop: the line playing ends, the queue is cleared, and nothing
         plays until a play or resume. Lines that arrive meanwhile, from any
         caller, go on the missed list as `stopped`."""
         if not self._is_stopped():
             self._stopped_since = time.time()
-            _write_stopped(self._stopped_since)
-            _log("stopped: nothing plays until a play or resume; lines that arrive go on the missed list")
+            _write_stopped(self._stopped_since, by=by)
+            _log("stopped" + (f" by {by}" if by else "") + ": nothing plays until a play or resume; lines that arrive go on the missed list")
         self._handle_p1_interrupt()
 
     def _resume_speech(self, *, play_set_aside: bool = True) -> int:
@@ -2342,6 +2375,12 @@ class NarratorService:
                     try:
                         has_audio = self._submit_synthesis(synth, spoken_line, profile, temp_wav, budget)
                     except SynthesisTimeout as exc:
+                        if getattr(exc, "final", False):
+                            # The engine killed the hung process and retried
+                            # once already: the line is set aside, the queue moves on.
+                            self._set_aside(line, item, reason=REASON_TIMEOUT)
+                            _log(f"missed: {exc}; the hung synthesis was killed, set aside: {line[:50]!r}")
+                            return
                         # Queued again to synthesize once the load falls (ADR-019);
                         # set aside for him to replay only past its retries.
                         if self._retry(line, item, reason=str(exc)):
@@ -2438,14 +2477,17 @@ def _read_stopped() -> Optional[float]:
         return None
 
 
-def _write_stopped(since: Optional[float]) -> None:
+def _write_stopped(since: Optional[float], by: str = "") -> None:
     try:
         if since is None:
             STOPPED_FILE.unlink(missing_ok=True)
             return
         STOPPED_FILE.parent.mkdir(parents=True, exist_ok=True)
         tmp = STOPPED_FILE.with_name(STOPPED_FILE.name + ".tmp")
-        tmp.write_text(json.dumps({"since": since}) + "\n", encoding="utf-8")
+        rec: dict[str, Any] = {"since": since}
+        if by:
+            rec["by"] = by   # who stopped it, for the doctor and the desk
+        tmp.write_text(json.dumps(rec) + "\n", encoding="utf-8")
         os.replace(tmp, STOPPED_FILE)
     except OSError as exc:
         _log(f"stopped state not kept: {exc!r}")
@@ -2490,7 +2532,19 @@ def main() -> int:
         return 1
 
     svc = NarratorService()
-    return svc.run()
+    rc = svc.run()
+    # A worker abandoned inside a hung synthesis would hold the interpreter's
+    # exit for as long as it hangs (2026-10-23: 18 h as a husk with no socket
+    # and no pid file). Give threads a moment, then leave without them.
+    deadline = time.monotonic() + 5.0
+    while _stuck_threads() and time.monotonic() < deadline:
+        time.sleep(0.1)
+    stuck = _stuck_threads()
+    if stuck:
+        _log(f"exit: {len(stuck)} thread(s) still busy ({', '.join(t.name for t in stuck)}); leaving without them")
+        logging.shutdown()
+        os._exit(rc)
+    return rc
 
 
 if __name__ == "__main__":

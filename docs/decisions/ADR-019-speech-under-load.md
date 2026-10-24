@@ -39,7 +39,7 @@ the heavy work that was loading the machine (the Desk Keeper is putting that wor
    the start without a second synthesis), at the line's own priority, with `retries` counted on the item. Before a
    retry plays, the worker waits for the load per core to fall under `retry_load_per_core` (default 2), up to
    `retry_wait_seconds` (default 180), then goes ahead; an interrupt or a preemption during the wait puts the line back
-   unchanged. Only past `timeout_retries` (default 3) is the line set aside on the missed list as "timed out".
+   unchanged. Only past `timeout_retries` (default 3; 1 since #m1023-1717-fd7b) is the line set aside on the missed list as "timed out".
 
 ## Consequences
 

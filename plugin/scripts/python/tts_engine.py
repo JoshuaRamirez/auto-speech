@@ -31,6 +31,21 @@ class TTSGenerationError(RuntimeError):
     """Raised when Kokoro synthesis fails. Non-recoverable; halt the pipeline."""
 
 
+class SynthesisTimeout(RuntimeError):
+    """A synthesis ran past its budget. Not a TTSGenerationError on purpose:
+    splitting the line finer would only hang again.
+
+    `final` is True when the engine itself already killed the hung process
+    and retried once (AppleSayEngine, #m1023-1717-fd7b): the caller sets the
+    line aside and moves on, without queuing it again. False when the
+    executor gave up on its worker thread (TTSExecutor.submit)."""
+
+    def __init__(self, seconds: float, *, final: bool = False) -> None:
+        super().__init__(f"synthesis timed out after {seconds:.0f}s" + (" twice" if final else ""))
+        self.seconds = seconds
+        self.final = final
+
+
 class TTSNoSpeakableContentError(TTSGenerationError):
     """Raised when the input has no pronounceable content.
 
