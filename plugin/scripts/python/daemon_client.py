@@ -191,8 +191,14 @@ class DaemonClient:
         source: Optional[str] = None,
         at: Optional[float] = None,
         line_id: Optional[str] = None,
+        speech_line_id: Optional[str] = None,
+        origin_file: Optional[str] = None,
     ) -> DaemonResponse:
-        """Puts a line held or cut elsewhere on the missed list, through the daemon."""
+        """Puts a line held or cut elsewhere on the missed list, through the daemon.
+        `line_id` is the missed-list entry's id (historic name); `speech_line_id`
+        is the line's own speak id (ADR-025/026): a line already heard is not
+        added, one already on the list is the same entry, and its replay
+        carries the id so it plays once."""
         payload: dict[str, Any] = {"action": "missed_add", "text": text}
         if source:
             payload["source"] = source
@@ -200,6 +206,10 @@ class DaemonClient:
             payload["at"] = at
         if line_id:
             payload["id"] = line_id
+        if speech_line_id:
+            payload["line_id"] = speech_line_id
+        if origin_file:
+            payload["origin_file"] = origin_file
         return self._send_request(payload)
 
     def status(self, line_id: Optional[str] = None) -> DaemonResponse:

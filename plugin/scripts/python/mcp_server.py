@@ -107,7 +107,7 @@ SPEAK_TOOL = {
                 "type": "string",
                 "description": (
                     "The line's id. A line whose id is already queued, playing or done in the "
-                    "last ten minutes is acknowledged and not queued again."
+                    "last day is acknowledged and not queued again."
                 ),
             },
         },
@@ -191,7 +191,7 @@ NARRATE_EVENT_TOOL = {
             },
             "line_id": {
                 "type": "string",
-                "description": "The event's id: an event whose id the narrator took in during the last ten minutes is ignored.",
+                "description": "The event's id: an event whose id the narrator took in during the last day is ignored.",
             },
         },
         "required": ["event"],

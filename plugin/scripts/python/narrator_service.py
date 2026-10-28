@@ -33,7 +33,7 @@ import wave
 from datetime import datetime, timezone
 from pathlib import Path
 
-from line_ledger import DROP_FAILED, DROP_INTERRUPTED, DROP_STOPPED, LineLedger, clean_line_id
+from line_ledger import DROP_FAILED, DROP_INTERRUPTED, DROP_STOPPED, DONE, LineLedger, clean_line_id, default_lines_path
 from session_liveness import SessionLiveness
 from state_paths import state_path
 from collections.abc import Callable
@@ -109,7 +109,10 @@ WATERMARK_FILE = state_path("auto-speech-narrator-daemon.watermark")
 # His stop holds across a restart: the file says since when (ADR-024).
 STOPPED_FILE = state_path("auto-speech-stopped.json")
 # One line id, one play: every id seen in the last hour and its state (ADR-025).
-LINES_FILE = state_path("auto-speech-lines.json")
+# One line id, one play (ADR-025/026): kept beside the missed list so it outlives a reboot;
+# the old /tmp file is read once when the new one is not there yet.
+LINES_FILE = default_lines_path()
+LEGACY_LINES_FILE = state_path("auto-speech-lines.json")
 # On SIGTERM the line in flight finishes; past this it is cut and set aside.
 # launchd's default exit timeout for a submitted job is 20 s.
 SHUTDOWN_FINISH_S = 15.0
@@ -278,10 +281,12 @@ class _InProcessClient:
         self._service = service
 
     def speak(self, text: str, *, priority: int, source_hash: str | None = None, voice_id: str | None = None,
-              speed: float = DEFAULT_SPEED, missed_id: str = "", hold: bool = True) -> dict[str, Any]:
+              speed: float = DEFAULT_SPEED, missed_id: str = "", hold: bool = True, line_id: str = "",
+              session_id: str | None = None, origin_file: str | None = None) -> dict[str, Any]:
         return self._service.dispatch_json({
             "action": "speak", "text": text, "priority": int(priority), "source_hash": source_hash,
             "voice_id": voice_id, "speed": speed, "missed_id": missed_id, "hold": hold,
+            "line_id": line_id, "session_id": session_id, "origin_file": origin_file,
         })
 
     def play_cache(self, source_hash: str, *, priority: int, missed_id: str = "", hold: bool = True) -> dict[str, Any]:
@@ -421,7 +426,7 @@ class NarratorService:
         self._liveness = SessionLiveness()
         # One line id, one play (ADR-025): a speak whose id is queued,
         # playing or done in the last ten minutes is not queued again.
-        self._lines = LineLedger(LINES_FILE)
+        self._lines = LineLedger(LINES_FILE, legacy=LEGACY_LINES_FILE if LEGACY_LINES_FILE != LINES_FILE else None)
         if tts_executor is not None:
             self._tts_executor = tts_executor
         elif synth is not None or engine is not None:
@@ -459,6 +464,14 @@ class NarratorService:
         signal.signal(signal.SIGTERM, self._on_signal)
         signal.signal(signal.SIGINT, self._on_signal)
         _log(f"started pid={os.getpid()} provider={self._config['provider']}")
+        try:
+            from native_audio_sink import reap_orphaned_player
+
+            reaped = reap_orphaned_player()
+            if reaped is not None:
+                _log(f"player: stopped mpv pid={reaped}, left playing by a narrator that was killed outright")
+        except Exception as exc:  # noqa: BLE001
+            _log(f"player: orphan check error: {exc!r}")
         if getattr(self, "_stopped_since", None) is not None:
             _log("stopped: still stopped from before the restart; nothing plays until a play or resume")
         self._control_call("start")
@@ -648,6 +661,9 @@ class NarratorService:
                 seen = self._line_ledger().admit(line_id, text)
                 if seen is not None:
                     _log(f"speak: line {line_id} already {seen.state} (send {seen.sends}); not queued again")
+                    if seen.state == DONE:
+                        # Heard already: a copy still on the missed list goes (ADR-026).
+                        self._forget_missed(line_id, missed_id)
                     return {
                         "status": "ok",
                         "action": "speak",
@@ -1710,7 +1726,25 @@ class NarratorService:
             session_id=item.session_id,
             voice_id=item.voice_id or "",
             speed=float(item.speed),
+            line_id=getattr(item, "line_id", "") or "",
+            origin_file=getattr(item, "origin_file", "") or None,
         )
+
+    def _forget_missed(self, line_id: str, missed_id: str = "") -> None:
+        """The line was heard: its entries leave the missed list, by its
+        line id and by the missed id it was replayed under. Never raises."""
+        missed = getattr(self, "_missed", None)
+        if missed is None:
+            return
+        try:
+            gone = missed.remove_line(line_id) if line_id else 0
+            if missed_id and missed.remove(missed_id):
+                gone += 1
+        except Exception as exc:  # noqa: BLE001
+            _log(f"missed list write error: {exc!r}")
+            return
+        if gone:
+            self._control_call("list_changed")
 
     def _set_aside(
         self,
@@ -1724,12 +1758,14 @@ class NarratorService:
     ) -> None:
         missed = getattr(self, "_missed", None)
         line = self._missed_line(text, item, existing=existing)
-        if item is not None and getattr(item, "line_id", ""):
-            self._line_ledger().dropped(item.line_id, reason, missed_id=line.id if missed is not None else "")
+        line_id = getattr(item, "line_id", "") if item is not None else ""
         if missed is None:
+            if line_id:
+                self._line_ledger().dropped(line_id, reason)
             return
         try:
-            missed.miss(
+            # One entry per line id (ADR-026): set aside again, it is the same entry.
+            line = missed.miss(
                 line,
                 reason=reason,
                 waited_seconds=waited,
@@ -1737,6 +1773,8 @@ class NarratorService:
             )
         except Exception as exc:  # noqa: BLE001
             _log(f"missed list write error: {exc!r}")
+        if line_id:
+            self._line_ledger().dropped(line_id, reason, missed_id=line.id)
         self._control_call("list_changed")
 
     def _sink_play(self, path: Path, timeout: Optional[float] = None, **hold_kwargs: Any) -> None:
@@ -1886,6 +1924,7 @@ class NarratorService:
                 _log(f"missed list write error: {exc!r}")
         if item is not None and getattr(item, "line_id", ""):
             self._line_ledger().done(item.line_id)
+            self._forget_missed(item.line_id)  # any other copy of it on the list (ADR-026)
         self._heard(path, item, text=text, session_id=session_id)
         return True
 
@@ -2087,17 +2126,36 @@ class NarratorService:
             queued_at = float(at) if at is not None else time.time()
         except (TypeError, ValueError):
             return {"status": "error", "error_code": "INVALID_PAYLOAD", "message": f"missed add: bad time {at!r}"}
-        line_id = str(payload.get("id") or "").strip() or new_id()
+        entry_id = str(payload.get("id") or "").strip() or new_id()
+        # The speech line's own id (ADR-026): a line already heard is not
+        # added, and one the narrator already holds is the same entry.
+        speech_id = clean_line_id(payload.get("line_id"))
+        origin_file = clean_origin_file(payload.get("origin_file")) or None
+        if speech_id and self._line_ledger().is_done(speech_id):
+            _log(f"missed: line {speech_id} was heard already; not added for {source or 'a caller'}")
+            return {"status": "ok", "action": "missed_add", "duplicate": True, "line_id": speech_id,
+                    "line": self._line_ledger().answer(speech_id)}
         missed = getattr(self, "_missed", None)
         if missed is None:
             return {"status": "error", "error_code": "NO_MISSED_LIST", "message": "missed add: no missed list"}
         try:
-            missed.miss(MissedLine(id=line_id, text=text, queued_at=queued_at, source=source), reason=REASON_ADDED)
+            held = missed.find_line(speech_id)
+            if held is not None:
+                _log(f"missed: line {speech_id} is on the list already; {source or 'a caller'}'s copy is the same entry")
+                return {"status": "ok", "action": "missed_add", "id": held.id, "line_id": speech_id, "duplicate": True}
+            stored = missed.miss(
+                MissedLine(id=entry_id, text=text, queued_at=queued_at, source=source,
+                           line_id=speech_id, origin_file=origin_file),
+                reason=REASON_ADDED,
+            )
         except Exception as exc:  # noqa: BLE001
             return {"status": "error", "error_code": "WRITE_FAILED", "message": f"missed add: {exc!r}"}
-        _log(f"missed: added by {source or 'a caller'}: {text[:50]!r}")
+        _log(f"missed: added by {source or 'a caller'}: {text[:50]!r}" + (f" (line {speech_id})" if speech_id else ""))
         self._control_call("list_changed")
-        return {"status": "ok", "action": "missed_add", "id": line_id}
+        reply = {"status": "ok", "action": "missed_add", "id": stored.id}
+        if speech_id:
+            reply["line_id"] = speech_id
+        return reply
 
     def _marker_live(self, marker: Path, session_id: str) -> bool:
         """An enrolment marker counts only while its session is alive (ADR-024)."""

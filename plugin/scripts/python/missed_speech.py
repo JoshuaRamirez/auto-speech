@@ -8,6 +8,11 @@ the hold. It leaves the list only when it has played, by itself once the
 sound stops or by `missed --play`. Nothing held is ever dropped. See
 ADR-015.
 
+One speech line, one entry (ADR-026): a line that carries a `line_id` (the
+speak request's, ADR-025) keeps it here, so a line set aside twice, or set
+aside and also added by its caller, is one entry; its replay carries the id,
+so the narrator plays it once whichever path delivers it.
+
 One file, one shape, two readers: the CLI (`auto-speech missed`,
 `--play`, `--clear`) and the MCP tool (`missed(action)`) share
 `run_action` so they say the same thing. The daemon is the only writer
@@ -79,6 +84,8 @@ class MissedLine:
     speed: float = 1.0
     announced: bool = False  # a meeting line already counted in a spoken summary
     source: Optional[str] = None  # who said it, when a caller named it (`missed add --source`)
+    line_id: str = ""  # the speak request's line id (ADR-025/026): one entry per id, and its replay carries it
+    origin_file: Optional[str] = None  # the file the line came from (desk-say's), for the history sidecar
 
     def to_dict(self) -> dict[str, Any]:
         d = asdict(self)
@@ -103,6 +110,8 @@ class MissedLine:
             speed=float(d.get("speed") or 1.0),
             announced=bool(d.get("announced")),
             source=str(d["source"]) if d.get("source") else None,
+            line_id=str(d.get("line_id") or ""),
+            origin_file=str(d["origin_file"]) if d.get("origin_file") else None,
         )
 
     @property
@@ -242,17 +251,39 @@ class MissedList:
         return self._mutate(go)
 
     def upsert(self, line: MissedLine) -> MissedLine:
-        """Add the line, or replace the one with the same id."""
+        """Add the line, or replace the one with the same id, or the one with
+        the same speech line id (ADR-026): one line is one entry, under the
+        id it first had, so a replay already queued under that id stays
+        right. Returns the line as stored."""
 
         def go(lines: list[MissedLine]) -> MissedLine:
             for i, existing in enumerate(lines):
                 if existing.id == line.id:
                     lines[i] = line
                     return line
+            if line.line_id:
+                for i, existing in enumerate(lines):
+                    if existing.line_id == line.line_id:
+                        stored = replace(
+                            line,
+                            id=existing.id,
+                            queued_at=min(existing.queued_at, line.queued_at) if existing.queued_at else line.queued_at,
+                            source=line.source or existing.source,
+                            session_id=line.session_id or existing.session_id,
+                            origin_file=line.origin_file or existing.origin_file,
+                        )
+                        lines[i] = stored
+                        return stored
             lines.append(line)
             return line
 
         return self._mutate(go)
+
+    def find_line(self, line_id: str) -> Optional[MissedLine]:
+        """The entry for a speech line id, or None."""
+        if not line_id:
+            return None
+        return next((m for m in self._read() if m.line_id == line_id), None)
 
     def hold(self, line: MissedLine, held_for: Iterable[str] = ()) -> MissedLine:
         return self.upsert(replace(line, status=HELD, held_for=tuple(held_for), reason="", missed_at=None))
@@ -278,6 +309,19 @@ class MissedList:
             return len(lines) != before
 
         return self._mutate(go)
+
+    def remove_line(self, line_id: str) -> int:
+        """The speech line has played, by whichever path: every entry for
+        its id leaves the list. Returns how many went."""
+        if not line_id or not any(m.line_id == line_id for m in self._read(include_expired=True)):
+            return 0  # asked after every play: no write unless one is there
+
+        def go(lines: list[MissedLine]) -> int:
+            before = len(lines)
+            lines[:] = [m for m in lines if m.line_id != line_id]
+            return before - len(lines)
+
+        return self._mutate(go, include_expired=True)
 
     def clear(self) -> int:
         def go(lines: list[MissedLine]) -> int:
@@ -422,6 +466,10 @@ def _send(lines: list[MissedLine], *, missed: MissedList, client: Any, sent: lis
 
     for m in lines:
         if m.text:
+            # The line's own id, sender and file go with it (ADR-026): the
+            # narrator plays one id once, and its history names the sender.
+            same_line = {k: v for k, v in (("line_id", m.line_id), ("session_id", m.session_id),
+                                           ("origin_file", m.origin_file)) if v}
             client.speak(
                 m.text,
                 priority=Priority.EXPLICIT_MCP,
@@ -430,6 +478,7 @@ def _send(lines: list[MissedLine], *, missed: MissedList, client: Any, sent: lis
                 speed=m.speed,
                 missed_id=m.id,
                 hold=False,
+                **same_line,
             )
         elif m.source_hash:
             client.play_cache(m.source_hash, priority=Priority.EXPLICIT_MCP, missed_id=m.id, hold=False)

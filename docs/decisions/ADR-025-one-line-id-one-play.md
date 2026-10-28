@@ -1,6 +1,8 @@
 # ADR-025: one line id, one play, even under heavy load
 
-Status: accepted, 2026-10-22 (#m1022-0045-542f, #m1022-0052-03b1; outcome 0043 T03)
+Status: accepted, 2026-10-22 (#m1022-0045-542f, #m1022-0052-03b1; outcome 0043 T03). Amended by ADR-026
+(2026-10-27): a done id is refused while kept, a day, not ten minutes; ids are kept a day, at
+most 2,000, beside the missed list.
 
 ## Context
 His 2026-10-22 00:42: "Check your auto speech log. It's something messed up

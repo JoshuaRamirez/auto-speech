@@ -16,13 +16,21 @@ A speak request may carry a `line_id`. The ledger keeps every id for an hour:
   dropped   it will not play: purged by a stop, lost in a restart,
             set aside (meeting, timeout, stale), or failed; `reason` says which
 
-A speak whose id is queued, playing, or done within the last ten minutes is
-acknowledged with that state and not queued again. A dropped id is admitted
-again: a replay follows only a real interruption.
+A speak whose id is queued, playing, or done is acknowledged with that
+state and not queued again. A dropped id is admitted again: a replay follows
+only a real interruption.
 
-The ledger is kept in a file in the state folder, so an id survives a
-restart. An id still queued or playing when the daemon starts was lost in
-the restart and reads as dropped.
+On 2026-10-27 his "Why am I hearing duplication when you say things?"
+(ADR-026): a line held across his stop was replayed from the missed list
+with no id, and desk-speaker's resend carried the id, so the narrator could
+not tell them apart. Now a done id is refused for as long as it is kept
+(a day, the missed list's own longest age), not ten minutes, and the ledger
+holds at most MAX_LINES ids, the oldest settled ones going first.
+
+The ledger is kept in a file beside the missed list (~/.local/state/
+auto-speech/lines.json), so an id survives a restart and a reboot. An id
+still queued or playing when the daemon starts was lost in the restart and
+reads as dropped.
 """
 
 from __future__ import annotations
@@ -47,8 +55,9 @@ DROP_FAILED = "failed"
 DROP_INTERRUPTED = "interrupted"
 DROP_STOPPED = "stopped"
 
-DEDUP_DONE_S = 600.0  # a line done this recently is not played again
-KEEP_S = 3600.0  # how long an id is kept
+KEEP_S = 24 * 3600.0  # how long an id is kept; a done id is refused all that time
+DEDUP_DONE_S = KEEP_S  # (ADR-026) a line done this recently is not played again: while it is kept
+MAX_LINES = 2000  # the most ids kept; past it the oldest settled ones go
 MAX_ID_LEN = 200
 TEXT_PREVIEW = 60
 
@@ -89,6 +98,20 @@ class LineRecord:
         return rec if rec.state in STATES else None
 
 
+def default_lines_path() -> Path:
+    """Where the live daemon keeps the ledger: AUTO_SPEECH_LINES_FILE, else
+    the runtime state folder when one is set (a test or a dev daemon), else
+    beside the missed list, which outlives a reboot."""
+    override = os.environ.get("AUTO_SPEECH_LINES_FILE", "").strip()
+    if override:
+        return Path(override)
+    if os.environ.get("AUTO_SPEECH_TMP_ROOT", "").strip():
+        from state_paths import state_path
+
+        return state_path("auto-speech-lines.json")
+    return Path.home() / ".local" / "state" / "auto-speech" / "lines.json"
+
+
 def clean_line_id(value: Any) -> str:
     """A caller's id, trimmed; "" when there is none or it is unusable."""
     if not isinstance(value, (str, int)) or isinstance(value, bool):
@@ -102,12 +125,18 @@ def clean_line_id(value: Any) -> str:
 class LineLedger:
     """Thread-safe: the IPC threads admit and ask, the tts worker moves lines on."""
 
-    def __init__(self, path: Optional[Path] = None, *, clock: Callable[[], float] = time.time) -> None:
+    def __init__(
+        self,
+        path: Optional[Path] = None,
+        *,
+        clock: Callable[[], float] = time.time,
+        legacy: Optional[Path] = None,
+    ) -> None:
         self._path = Path(path) if path is not None else None
         self._clock = clock
         self._lock = threading.Lock()
         self._lines: dict[str, LineRecord] = {}
-        self._load()
+        self._load(legacy)
 
     # -- the caller's side ---------------------------------------------------------
 
@@ -167,6 +196,11 @@ class LineLedger:
             r.state, r.done_at, r.reason, r.in_pass = DONE, now, "", False
             r.plays += 1
         self._move(line_id, go)
+
+    def is_done(self, line_id: str) -> bool:
+        """True when the id played to its end and is still kept."""
+        rec = self.get(line_id) if line_id else None
+        return rec is not None and rec.state == DONE
 
     def dropped(self, line_id: str, reason: str, *, missed_id: str = "") -> None:
         def go(r: LineRecord, now: float) -> None:
@@ -229,12 +263,20 @@ class LineLedger:
     def _prune(self, now: float) -> None:
         for key in [k for k, r in self._lines.items() if r.state in (DONE, DROPPED) and now - r.updated_at > KEEP_S]:
             del self._lines[key]
+        over = len(self._lines) - MAX_LINES
+        if over > 0:
+            settled = sorted((r.updated_at, k) for k, r in self._lines.items() if r.state in (DONE, DROPPED))
+            for _, key in settled[:over]:
+                del self._lines[key]
 
-    def _load(self) -> None:
+    def _load(self, legacy: Optional[Path] = None) -> None:
         if self._path is None:
             return
+        source = self._path
+        if not source.exists() and legacy is not None and Path(legacy).exists():
+            source = Path(legacy)  # the file's old place (/tmp, before ADR-026): read once, written to the new
         try:
-            raw = json.loads(self._path.read_text(encoding="utf-8"))
+            raw = json.loads(source.read_text(encoding="utf-8"))
         except (OSError, ValueError):
             return
         now = self._clock()
