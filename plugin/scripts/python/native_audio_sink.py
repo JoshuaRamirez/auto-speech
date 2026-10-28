@@ -119,6 +119,88 @@ def default_sound_yield_gate() -> SoundYieldGate | None:
 DEFAULT_SOUND_YIELD_FACTORY: Callable[[], SoundYieldGate | None] = default_sound_yield_gate
 
 
+# The flags only auto-speech's own player carries (mpv_argv): a pid in the
+# pid file is ours only when its command line has all of them.
+_OWN_PLAYER_FLAGS = ("--really-quiet", "--no-video", "--input-media-keys=no")
+
+
+def reap_orphaned_player(
+    pid_path: Path | None = None,
+    *,
+    ps: Callable[[int], tuple[int, str] | None] | None = None,
+    kill: Callable[[int, int], None] = os.kill,
+    wait_s: float = 1.0,
+) -> int | None:
+    """Stops a player left behind by a narrator that was killed outright.
+
+    On 2026-10-27 a line paused from the speech control held the 11:01
+    narrator for 50 minutes; the restart's SIGTERM gave it less time than
+    its shutdown takes, launchd's SIGKILL followed, and the mpv it had
+    started kept running with no parent (its pid file still named it). A
+    narrator calls this as it starts: the pid in the file is stopped only
+    when it is auto-speech's own player (its own flags) and orphaned
+    (parent pid 1), so a player another live process owns is never
+    touched. Returns the pid stopped, or None. Never raises."""
+    pid_path = MPV_PID_PATH if pid_path is None else pid_path
+    try:
+        pid = int(pid_path.read_text().strip())
+    except (OSError, ValueError):
+        return None
+    if pid <= 1 or pid == os.getpid():
+        return None
+    look = ps or _ps_parent_and_command
+    try:
+        found = look(pid)
+    except Exception:  # noqa: BLE001
+        return None
+    if found is None:  # gone already: the file is stale
+        try:
+            pid_path.unlink(missing_ok=True)
+        except OSError:
+            pass
+        return None
+    ppid, command = found
+    first = command.split(" ", 1)[0]
+    if ppid != 1 or os.path.basename(first) != "mpv" or not all(f in command for f in _OWN_PLAYER_FLAGS):
+        return None
+    try:
+        kill(pid, signal.SIGTERM)
+        deadline = time.monotonic() + wait_s
+        while time.monotonic() < deadline:
+            if look(pid) is None:
+                break
+            time.sleep(0.05)
+        else:
+            kill(pid, signal.SIGKILL)
+    except (ProcessLookupError, PermissionError):
+        pass
+    except Exception:  # noqa: BLE001
+        return None
+    try:
+        pid_path.unlink(missing_ok=True)
+    except OSError:
+        pass
+    return pid
+
+
+def _ps_parent_and_command(pid: int) -> tuple[int, str] | None:
+    """(parent pid, command line) of a live process, or None."""
+    try:
+        out = subprocess.run(
+            ["ps", "-o", "ppid=,command=", "-p", str(pid)],
+            capture_output=True, text=True, timeout=5, check=False, stdin=subprocess.DEVNULL,
+        ).stdout.strip()
+    except (OSError, subprocess.SubprocessError):
+        return None
+    if not out:
+        return None
+    ppid, _, command = out.partition(" ")
+    try:
+        return int(ppid), command.strip()
+    except ValueError:
+        return None
+
+
 class NativeAudioSink:
     """Synchronous audio sink playing WAV files via mpv with interrupt support.
 

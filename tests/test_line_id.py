@@ -124,13 +124,13 @@ class TestLedger(unittest.TestCase):
         self.ledger.playing(LINE)
         self.assertEqual(self.ledger.admit(LINE).state, PLAYING)
 
-    def test_a_done_line_blocks_for_ten_minutes_then_may_play_again(self):
+    def test_a_done_line_blocks_while_it_is_kept_then_may_play_again(self):
         self.ledger.admit(LINE)
         self.ledger.done(LINE)
         self.clock.t += DEDUP_DONE_S - 1
         self.assertEqual(self.ledger.admit(LINE).state, DONE)
         self.clock.t += 2
-        self.assertIsNone(self.ledger.admit(LINE), "past ten minutes the same id is a new line")
+        self.assertIsNone(self.ledger.admit(LINE), "past its keeping (a day) the same id is a new line")
 
     def test_a_dropped_line_is_admitted_again(self):
         self.ledger.admit(LINE)
@@ -139,7 +139,7 @@ class TestLedger(unittest.TestCase):
         self.assertIsNone(self.ledger.admit(LINE), "a replay follows a real interruption")
         self.assertEqual(self.ledger.answer(LINE)["sends"], 2)
 
-    def test_ids_are_kept_an_hour(self):
+    def test_ids_are_kept_a_day(self):
         self.ledger.admit(LINE)
         self.ledger.done(LINE)
         self.clock.t += KEEP_S - 5
@@ -204,7 +204,7 @@ class _Daemon(unittest.TestCase):
             p.start()
             self.addCleanup(p.stop)
         self.sink = _Sink()
-        self.synth = _SlowSynth(SLOW_S)
+        self.synth = _SlowSynth(getattr(self, "synth_s", SLOW_S))
         self.svc = self.service()
         self.worker = threading.Thread(target=self.svc._tts_worker, daemon=True)
         self.worker.start()
@@ -334,6 +334,199 @@ class TestSlowSynthesis(_Daemon):
         self.assertIsNone(self.speak("Nothing comes out.").get("duplicate"), "a failed line may be sent again")
 
 
+# --- ADR-026: one line, one play across his stop and resume (#m1027-1628-c253) -------------
+#
+# His 2026-10-27 16:27: "Why am I hearing duplication when you say things?" At 16:23 a desk line
+# came in while speech was stopped; desk-speaker kept it in its pending folder AND put it on the
+# missed list with no id. His play replayed the missed copy (no id), then desk-speaker's resend
+# (with the id) played it again. At 13:03 three lines each played three times: each was on the
+# missed list three times (two set-asides in a meeting and desk-speaker's own add), none with an id.
+
+
+class TestOnePlayAcrossStop(_Daemon):
+    synth_s = 0.02
+
+    def missed(self):
+        return self.svc._missed.load()
+
+    def played_count(self) -> int:
+        return len(self.sink.played)
+
+    def settle(self) -> None:
+        time.sleep(0.3)
+
+    def stop(self) -> None:
+        self.svc._stop_speech(by="test")
+
+    def test_a_line_queued_while_stopped_plays_once_on_resume_and_a_resend_is_refused(self):
+        self.stop()
+        self.assertEqual(self.speak("Held across his stop.")["status"], "queued")
+        self.wait_for(lambda: self.line()["state"] == DROPPED, 5, self.line)
+        [held] = self.missed()
+        self.assertEqual((held.line_id, held.reason), (LINE, REASON_STOPPED), "the narrator holds it, under its id")
+        self.assertEqual(self.played_count(), 0)
+
+        self.svc.dispatch_json({"action": "resume"})
+        self.wait_for(lambda: self.line()["state"] == DONE, 5, self.line)
+        resend = self.speak("Held across his stop.")  # desk-speaker's copy after the stop lifts
+        self.assertEqual((resend.get("duplicate"), resend["line"]["state"]), (True, DONE))
+        self.settle()
+        self.assertEqual(self.played_count(), 1, "played exactly once")
+        self.assertEqual(self.missed(), [], "off the missed list once heard")
+
+    def test_the_same_line_by_both_paths_plays_once_whichever_comes_first(self):
+        # The 16:23 order: held while stopped, his play replays the missed copy, desk-speaker resends.
+        self.stop()
+        self.svc.dispatch_json({"action": "missed_add", "text": "My advice.", "source": "desk-say x.txt",
+                                "line_id": LINE})
+        [entry] = self.missed()
+        self.assertEqual(self.svc._play_missed_ids([entry.id]), 1)
+        self.wait_for(lambda: self.line()["state"] == DONE, 5, self.line)
+        self.assertTrue(self.speak("My advice.").get("duplicate"))
+        self.settle()
+        self.assertEqual(self.played_count(), 1)
+
+        # The other order: the resend lands first, then his play of the (stale) missed copy.
+        self.stop()
+        other = "2026-10-27-162557.391-desk"
+        self.svc.dispatch_json({"action": "missed_add", "text": "Comments.", "line_id": other})
+        [entry] = self.missed()
+        self.svc._resume_speech(play_set_aside=False)
+        self.speak("Comments.", other)
+        self.wait_for(lambda: self.line(other)["state"] == DONE, 5)
+        self.assertEqual(self.missed(), [], "the copy on the list left when the line played")
+        self.svc._play_missed_ids([entry.id])
+        self.settle()
+        self.assertEqual(self.played_count(), 2, "each line once")
+
+    def test_a_line_set_aside_twice_and_added_by_its_caller_is_one_entry_and_plays_once(self):
+        # The 13:03 triples: two set-asides in a meeting (a send and its retry) and desk-speaker's add.
+        from missed_speech import REASON_MEETING
+        from missed_speech import run_action
+        from priority_arbiter import QueueItem
+
+        for _ in range(2):
+            self.svc._lines.admit(LINE, "Status update.")
+            self.svc._set_aside("Status update.", QueueItem(priority=2, payload="Status update.", line_id=LINE,
+                                                            origin_file=f"{LINE}.txt"), reason=REASON_MEETING)
+        added = self.svc.dispatch_json({"action": "missed_add", "text": "Status update.", "source": f"desk-say {LINE}.txt",
+                                        "line_id": LINE})
+        self.assertTrue(added.get("duplicate"), "the narrator holds it already: the same entry")
+        [entry] = self.missed()
+        self.assertEqual((entry.line_id, entry.reason, entry.origin_file), (LINE, REASON_MEETING, f"{LINE}.txt"))
+
+        result = run_action("play", missed=self.svc._missed, client=narrator_service._InProcessClient(self.svc))
+        self.assertTrue(result.ok, result.text)
+        self.wait_for(lambda: self.line()["state"] == DONE, 5, self.line)
+        self.settle()
+        self.assertEqual(self.played_count(), 1)
+        self.assertEqual(self.missed(), [])
+
+    def test_a_line_already_heard_is_not_added_to_the_missed_list(self):
+        self.speak("Heard once.")
+        self.wait_for(lambda: self.line()["state"] == DONE, 5)
+        reply = self.svc.dispatch_json({"action": "missed_add", "text": "Heard once.", "line_id": LINE})
+        self.assertEqual((reply["status"], reply.get("duplicate")), ("ok", True))
+        self.assertEqual(self.missed(), [])
+
+    def test_a_replay_carries_the_lines_sender_and_file(self):
+        self.stop()
+        self.svc.dispatch_json({"action": "speak", "text": "From the desk.", "priority": 2, "line_id": LINE,
+                                "session_id": "sess-1", "origin_file": f"{LINE}.txt"})
+        self.wait_for(lambda: self.line()["state"] == DROPPED, 5)
+        client = MagicMock()
+        from missed_speech import play_ids
+
+        play_ids([self.missed()[0].id], missed=self.svc._missed, client=client)
+        kwargs = client.speak.call_args.kwargs
+        self.assertEqual((kwargs["line_id"], kwargs["session_id"], kwargs["origin_file"]), (LINE, "sess-1", f"{LINE}.txt"))
+
+
+class TestLedgerBound(unittest.TestCase):
+    def test_the_ledger_keeps_at_most_max_lines_dropping_the_oldest_settled(self):
+        import line_ledger
+
+        tmp = Path(tempfile.mkdtemp(prefix="auto-speech-lines-"))
+        self.addCleanup(shutil.rmtree, tmp, True)
+        clock = _Clock()
+        with patch.object(line_ledger, "MAX_LINES", 5):
+            ledger = LineLedger(tmp / "lines.json", clock=clock)
+            for i in range(8):
+                clock.t += 1
+                ledger.admit(f"l{i}")
+                ledger.done(f"l{i}")
+            kept = json.loads((tmp / "lines.json").read_text())["lines"]
+        self.assertLessEqual(len(kept), 6)  # the bound, plus the line just admitted
+        self.assertEqual(ledger.answer("l0")["state"], "unknown", "the oldest went first")
+        self.assertEqual(ledger.answer("l7")["state"], DONE)
+
+    def test_the_old_tmp_file_is_read_once_when_the_new_one_is_not_there(self):
+        tmp = Path(tempfile.mkdtemp(prefix="auto-speech-lines-"))
+        self.addCleanup(shutil.rmtree, tmp, True)
+        old = LineLedger(tmp / "old.json")
+        old.admit(LINE)
+        old.done(LINE)
+        moved = LineLedger(tmp / "new.json", legacy=tmp / "old.json")
+        self.assertEqual(moved.answer(LINE)["state"], DONE)
+        self.assertTrue((tmp / "new.json").exists())
+
+    def test_the_live_ledger_sits_beside_the_missed_list_and_a_test_root_moves_it(self):
+        from line_ledger import default_lines_path
+
+        with patch.dict(os.environ, {"AUTO_SPEECH_LINES_FILE": "", "AUTO_SPEECH_TMP_ROOT": ""}):
+            self.assertEqual(default_lines_path(), Path.home() / ".local/state/auto-speech/lines.json")
+        with patch.dict(os.environ, {"AUTO_SPEECH_LINES_FILE": "", "AUTO_SPEECH_TMP_ROOT": "/x/y"}):
+            self.assertEqual(default_lines_path(), Path("/x/y/auto-speech-lines.json"))
+
+
+class TestOrphanedPlayer(unittest.TestCase):
+    """The 11:01 narrator's mpv outlived it (SIGKILL after a paused line held it): the next start stops it."""
+
+    OWN = "/opt/homebrew/bin/mpv --really-quiet --no-video --keep-open=no --idle=no --input-media-keys=no /tmp/x.wav"
+
+    def setUp(self) -> None:
+        self.tmp = Path(tempfile.mkdtemp(prefix="auto-speech-mpvpid-"))
+        self.addCleanup(shutil.rmtree, self.tmp, True)
+        self.pid_file = self.tmp / "auto-speech-mpv.pid"
+        self.pid_file.write_text("4242")
+        self.killed: list[tuple[int, int]] = []
+
+    def reap(self, found):
+        from native_audio_sink import reap_orphaned_player
+
+        alive = {"v": found}
+
+        def ps(pid):
+            return alive["v"]
+
+        def kill(pid, sig):
+            self.killed.append((pid, sig))
+            alive["v"] = None
+
+        return reap_orphaned_player(self.pid_file, ps=ps, kill=kill, wait_s=0.2)
+
+    def test_an_orphaned_player_of_ours_is_stopped(self):
+        import signal as _signal
+
+        self.assertEqual(self.reap((1, self.OWN)), 4242)
+        self.assertEqual(self.killed, [(4242, _signal.SIGTERM)])
+        self.assertFalse(self.pid_file.exists())
+
+    def test_a_player_with_a_live_parent_is_never_touched(self):
+        self.assertIsNone(self.reap((777, self.OWN)))
+        self.assertEqual(self.killed, [])
+
+    def test_a_process_that_is_not_our_player_is_never_touched(self):
+        self.assertIsNone(self.reap((1, "/opt/homebrew/bin/mpv some-song.mp3")))
+        self.assertIsNone(self.reap((1, "/usr/bin/python3 --really-quiet --no-video --input-media-keys=no")))
+        self.assertEqual(self.killed, [])
+
+    def test_a_stale_pid_file_is_cleared(self):
+        self.assertIsNone(self.reap(None))
+        self.assertFalse(self.pid_file.exists())
+
+
+
 # --- the callers ------------------------------------------------------------------------
 
 
@@ -429,7 +622,17 @@ class TestCli(unittest.TestCase):
         t = time.time()
         self.assertIn("done at", cli._line_status_text({"line_id": "x", "state": "done", "done_at": t}))
         self.assertIn("(stopped)", cli._line_status_text({"line_id": "x", "state": "dropped", "dropped_at": t, "reason": "stopped"}))
-        self.assertIn("not seen in the last hour", cli._line_status_text({"line_id": "x", "state": "unknown"}))
+        self.assertIn("not seen in the last day", cli._line_status_text({"line_id": "x", "state": "unknown"}))
+
+    def test_missed_add_passes_the_speech_line_id_and_file(self):
+        client = MagicMock()
+        client.missed_add.return_value = MagicMock(status="ok", raw={"id": "e1", "line_id": LINE})
+        args = cli.build_parser().parse_args(
+            ["missed", "add", "--text", "A line.", "--source", "desk-say", "--line-id", LINE, "--origin-file", f"{LINE}.txt"])
+        with redirect_stdout(io.StringIO()):
+            self.assertEqual(cli.handle_missed(args, client=client), 0)
+        kwargs = client.missed_add.call_args.kwargs
+        self.assertEqual((kwargs["speech_line_id"], kwargs["origin_file"], kwargs["line_id"]), (LINE, f"{LINE}.txt", None))
 
     def test_speak_passes_the_line_id(self):
         client = MagicMock()

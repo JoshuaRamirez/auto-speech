@@ -564,7 +564,7 @@ def _line_status_text(line: dict) -> str:
     elif state == "dropped":
         text += f" at {at('dropped_at')} ({line.get('reason') or 'no reason given'})"
     elif state == "unknown":
-        text += " (not seen in the last hour)"
+        text += " (not seen in the last day)"
     sends = line.get("sends")
     if isinstance(sends, int) and sends > 1:
         text += f"; sent {sends} times, queued once"
@@ -800,7 +800,7 @@ def _parse_at(hhmm: str, now: float | None = None) -> float:
 
 
 def handle_missed_add(args: argparse.Namespace, client: Any | None = None) -> int:
-    """`auto-speech missed add --text … --source NAME [--at HH:MM] [--id ID]`:
+    """`auto-speech missed add --text … --source NAME [--at HH:MM] [--id ID] [--line-id ID] [--origin-file NAME]`:
     a line held or cut elsewhere, put on the missed list through the daemon
     (the one writer); the speech control lists it unplayed."""
     text = (getattr(args, "text", None) or "").strip()
@@ -816,14 +816,25 @@ def handle_missed_add(args: argparse.Namespace, client: Any | None = None) -> in
             return EXIT_INVALID_INPUT
     client = client or DaemonClient()
     try:
-        resp = client.missed_add(text, source=getattr(args, "source", None), at=at, line_id=getattr(args, "id", None))
+        resp = client.missed_add(
+            text,
+            source=getattr(args, "source", None),
+            at=at,
+            line_id=getattr(args, "id", None),
+            speech_line_id=getattr(args, "line_id", None),
+            origin_file=getattr(args, "origin_file", None),
+        )
     except Exception as exc:  # noqa: BLE001
         print(f"missed add: the daemon did not answer: {exc}", file=sys.stderr)
         return EXIT_FAILURE
     if resp.status != "ok":
         print(resp.message or f"missed add: {resp.error_code}", file=sys.stderr)
         return EXIT_FAILURE
-    print(f"missed add: on the missed list as {(resp.raw or {}).get('id')}")
+    raw = resp.raw or {}
+    if raw.get("duplicate") and raw.get("line"):
+        print(f"missed add: line {raw.get('line_id')} was heard already; not added")
+        return 0
+    print(f"missed add: on the missed list as {raw.get('id')}")
     return EXIT_OK
 
 
@@ -1058,7 +1069,7 @@ def build_parser() -> argparse.ArgumentParser:
         "--line-id",
         type=str,
         default=None,
-        help="The line's id: a line already queued, playing or done in the last ten minutes is not queued again (ADR-025).",
+        help="The line's id: a line already queued, playing or done in the last day is not queued again (ADR-025/026).",
     )
     p_speak.add_argument(
         "--priority",
@@ -1275,6 +1286,10 @@ def build_parser() -> argparse.ArgumentParser:
     p_md.add_argument("--source", default=None, help="missed add: who said it (the control shows it).")
     p_md.add_argument("--at", default=None, help="missed add: when it was said, HH:MM (default now).")
     p_md.add_argument("--id", default=None, help="missed add: an id of the caller's (default a new one).")
+    p_md.add_argument("--line-id", dest="line_id", default=None,
+                      help="missed add: the line's speak id (ADR-026): a line already heard is not added, and its replay plays once.")
+    p_md.add_argument("--origin-file", dest="origin_file", default=None,
+                      help="missed add: the file the line came from, kept in the history when it plays.")
     md_mode = p_md.add_mutually_exclusive_group()
     md_mode.add_argument("--play", action="store_true", help="Replay the missed lines, oldest first, over any other sound.")
     md_mode.add_argument("--clear", action="store_true", help="Forget every line on the missed list.")

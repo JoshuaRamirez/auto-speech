@@ -149,6 +149,15 @@ The Chrome extension under `chrome-extension/` is versioned independently
   HOME to a temporary directory at import.
 
 ### Fixed
+- **One line, one play across his stop (ADR-026).** His 2026-10-27 16:27:
+  "Why am I hearing duplication when you say things?" A missed-list entry now
+  keeps its line's id (one entry per id) and its replay carries the id, the
+  sender and the file. The narrator refuses an id it has played for as long as
+  it keeps it (a day; at most 2,000 ids, beside the missed list so it outlives
+  a reboot), and a line heard by any path leaves the missed list.
+  `missed add --line-id/--origin-file` does not add a line already heard. A
+  narrator starting up stops an mpv left orphaned by a narrator killed
+  outright (only auto-speech's own player, only with parent pid 1).
 - **One hung `say` can never hold the narrator (#m1023-1717-fd7b).** On
   2026-10-22 22:49 a `say` hung for 18 h on one line. Each `say` now runs in
   its own process group under a timeout scaled to the line (10 s plus 0.15 s
