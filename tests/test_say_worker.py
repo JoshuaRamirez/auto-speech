@@ -96,5 +96,21 @@ def main() -> int:
     return 1
 
 
+def setUpModule() -> None:
+    sys.path.insert(0, str(Path(__file__).resolve().parent))
+    from narrator_reaper import guard_start
+
+    guard_start()
+
+
+def tearDownModule() -> None:
+    """Every narrator a test here started (the client's auto-start runs the
+    start script) is stopped, even after a failure, and none may survive
+    (#m1030-1044-b20b)."""
+    from narrator_reaper import guard_end_or_fail
+
+    guard_end_or_fail()
+
+
 if __name__ == "__main__":
     sys.exit(main())

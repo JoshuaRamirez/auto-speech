@@ -76,6 +76,9 @@ cleanup_state_dir() {
     if [[ -n "$pid" ]] && ps -o command= -p "$pid" 2>/dev/null | grep -q narrator_service.py; then
         kill "$pid" 2>/dev/null || true
     fi
+    # Every narrator holding a file in the private folder, not only the one
+    # the pid file names (#m1030-1044-b20b: two were left running).
+    "${PYTHON:-$VENV/bin/python}" "$TESTS_DIR/narrator_reaper.py" check "$STATE_DIR" >/dev/null 2>&1 || true
     rm -rf "$STATE_DIR"
 }
 trap cleanup_state_dir EXIT
@@ -218,6 +221,20 @@ run_one_py() {
         failed=$((failed + 1))
         fails+=("$f")
     fi
+    check_no_narrator_left "$f"
+}
+
+# A test file that leaves a narrator running in the private folder fails,
+# and the narrator is stopped (#m1030-1044-b20b).
+check_no_narrator_left() {
+    local out
+    if ! out="$("$PYTHON" "$TESTS_DIR/narrator_reaper.py" check "$STATE_DIR")"; then
+        echo "[leak] $1 left a narrator running: $out"
+        if [[ " ${fails[*]-} " != *" $1 "* ]]; then
+            failed=$((failed + 1))
+            fails+=("$1 (left a narrator running)")
+        fi
+    fi
 }
 
 run_one_sh() {
@@ -236,6 +253,7 @@ run_one_sh() {
         failed=$((failed + 1))
         fails+=("$f")
     fi
+    check_no_narrator_left "$f"
 }
 
 if [[ $HERMETIC -eq 1 ]]; then

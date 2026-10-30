@@ -46,11 +46,19 @@ for _p in (str(SRC), str(Path(__file__).resolve().parent)):
 os.environ.setdefault("AUTO_SPEECH_TMP_ROOT", tempfile.mkdtemp(prefix="auto-speech-tests-"))
 os.environ.setdefault("AUTO_SPEECH_MISSED_FILE", os.path.join(os.environ["AUTO_SPEECH_TMP_ROOT"], "missed.json"))
 
+from narrator_reaper import narrators_under, reap_narrators  # noqa: E402
 from quiet_audio import ensure_quiet  # noqa: E402
 
 ensure_quiet()
 
 LIVE_SOCKET = Path("/tmp/auto-speech-daemon.sock")
+
+# Every private folder a test here starts a narrator under: reaped in each
+# test's tearDown, and checked once more after the last test (#m1030-1044-b20b).
+PRIVATE_DIRS: list[Path] = []
+# Moved aside (never removed) after the last check, so a survivor's files
+# stay where that check looks.
+MOVE_AFTER: list[Path] = []
 
 # A narrator child: imports first (slow, uneven), then waits for the go file
 # so both reach main() together, as the two starts did at 10:53:26. main()
@@ -122,6 +130,8 @@ class TestTwoStartsTogether(unittest.TestCase):
     def setUp(self) -> None:
         # A short path: AF_UNIX paths are capped near 104 bytes on macOS.
         self.state = Path(tempfile.mkdtemp(prefix="as-one-", dir="/tmp"))
+        PRIVATE_DIRS.append(self.state)
+        MOVE_AFTER.append(self.state)
         self.env = _private_env(self.state)
         self.sock = Path(self.env["AUTO_SPEECH_DAEMON_SOCK"])
         self.pid_file = self.state / "auto-speech-narrator-daemon.pid"
@@ -130,18 +140,28 @@ class TestTwoStartsTogether(unittest.TestCase):
         self.procs: list[subprocess.Popen] = []
 
     def tearDown(self) -> None:
+        # Each child leads its own process group: stop the group, wait, then
+        # kill what is left; reap anything else under the private folder.
         for p in self.procs:
             if p.poll() is None:
-                p.send_signal(signal.SIGTERM)
+                try:
+                    os.killpg(p.pid, signal.SIGTERM)
+                except OSError:
+                    pass
         for p in self.procs:
             try:
                 p.wait(timeout=25)
             except subprocess.TimeoutExpired:
-                p.kill()
+                try:
+                    os.killpg(p.pid, signal.SIGKILL)
+                except OSError:
+                    pass
                 p.wait(timeout=5)
             if p.stderr is not None:
                 p.stderr.close()
-        shutil.move(str(self.state), tempfile.mkdtemp(prefix="as-one-done-"))
+        survivors = reap_narrators(self.state)
+        still = [p.pid for p in self.procs if p.poll() is None] + survivors
+        self.assertEqual(still, [], "every narrator this test started is gone")
 
     def _spawn(self, go: Path) -> subprocess.Popen:
         # "/narrator_service.py" in argv: the daemon's own identity check
@@ -152,6 +172,7 @@ class TestTwoStartsTogether(unittest.TestCase):
             stdout=subprocess.DEVNULL,
             stderr=subprocess.PIPE,
             text=True,
+            start_new_session=True,
         )
         self.procs.append(p)
         return p
@@ -292,6 +313,7 @@ class TestStartScriptSerializes(unittest.TestCase):
 
     STUB = """import os, time
 root = os.environ["AUTO_SPEECH_TMP_ROOT"]
+hold = open(os.path.join(root, "stub.hold"), "w")  # so the reaper finds it
 with open(os.path.join(root, "spawns.log"), "a") as f:
     f.write(f"{os.getpid()}\\n")
 time.sleep(0.6)
@@ -304,14 +326,15 @@ time.sleep(4)
         from test_narrator_start_label import _tree
 
         self.tmp, self.state, self.stub_bin, _ = _tree()
+        PRIVATE_DIRS.append(self.state)
+        MOVE_AFTER.append(self.tmp)
         (self.tmp / "plugin" / "scripts" / "python" / "narrator_service.py").write_text(self.STUB)
 
     def tearDown(self) -> None:
-        try:
-            os.kill(int((self.state / "auto-speech-narrator-daemon.pid").read_text().strip()), signal.SIGTERM)
-        except (OSError, ValueError):
-            pass
-        shutil.move(str(self.tmp), tempfile.mkdtemp(prefix="as-script-done-"))
+        # The start script detaches what it spawns (setsid): no process group
+        # of ours reaches it, so it is found by the files it holds.
+        survivors = reap_narrators(self.state)
+        self.assertEqual(survivors, [], "every narrator the start script spawned is gone")
 
     def test_two_starts_at_once_spawn_one_narrator(self) -> None:
         env = {k: v for k, v in os.environ.items() if not k.startswith("AUTO_SPEECH_")}
@@ -325,6 +348,25 @@ time.sleep(4)
         self.assertEqual(len(spawns), 1, f"one narrator spawned, not {len(spawns)}: {outs}")
         self.assertTrue(any("already running" in o for o, _ in outs), outs)
         self.assertFalse((self.state / "auto-speech-narrator-start.lock.d").exists(), "the start lock is released")
+
+
+class TestZzzNoNarratorLeftRunning(unittest.TestCase):
+    """Runs last (unittest orders classes by name): no narrator holding a
+    file under any private folder of this module is alive."""
+
+    def test_no_narrator_started_here_is_still_running(self) -> None:
+        self.assertTrue(PRIVATE_DIRS, "the narrator tests ran first")
+        left = {str(d): narrators_under(d) for d in PRIVATE_DIRS}
+        self.assertEqual({d: p for d, p in left.items() if p}, {}, "narrators left running")
+
+
+def tearDownModule() -> None:
+    left = {str(d): reap_narrators(d) for d in PRIVATE_DIRS}
+    left = {d: p for d, p in left.items() if p}
+    for d in MOVE_AFTER:
+        if d.exists():
+            shutil.move(str(d), tempfile.mkdtemp(prefix="as-done-"))
+    assert not left, f"narrators survived the reaper: {left}"
 
 
 if __name__ == "__main__":

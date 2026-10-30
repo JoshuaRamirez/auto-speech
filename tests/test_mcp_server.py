@@ -1711,9 +1711,18 @@ def load_tests(
 
 
 def main() -> int:
-    for t in TESTS:
-        t()
-        print(f"  ok  {t.__name__}")
+    sys.path.insert(0, str(Path(__file__).resolve().parent))
+    from narrator_reaper import guard_end_or_fail, guard_start
+
+    guard_start()
+    try:
+        for t in TESTS:
+            t()
+            print(f"  ok  {t.__name__}")
+    finally:
+        # Every narrator a test here started is stopped, even after a
+        # failure, and none may survive (#m1030-1044-b20b).
+        guard_end_or_fail()
     print(f"mcp_server: {len(TESTS)} tests passed")
     return 0
 

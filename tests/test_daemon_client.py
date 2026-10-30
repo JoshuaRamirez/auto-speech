@@ -248,8 +248,11 @@ class TestDaemonClientLiveRoundTrip(unittest.TestCase):
 
     def test_connection_failure_raises_connection_error(self) -> None:
         client = DaemonClient(socket_path="/tmp/nonexistent_test_sock_123.sock", max_retries=1)
-        with self.assertRaises(ConnectionError):
-            client.speak("Test fail")
+        # The auto-start is stubbed: the real one runs the start script, which
+        # left a detached narrator running after the test (#m1030-1044-b20b).
+        with mock.patch.object(client, "ensure_daemon_running", return_value=False):
+            with self.assertRaises(ConnectionError):
+                client.speak("Test fail")
 
     def test_ensure_daemon_running_invoked_when_socket_missing(self) -> None:
         client = DaemonClient(socket_path="/tmp/nonexistent_test_sock_456.sock", max_retries=1)
@@ -259,6 +262,22 @@ class TestDaemonClientLiveRoundTrip(unittest.TestCase):
             except Exception:
                 pass
             mock_ensure.assert_called_once()
+
+
+def setUpModule() -> None:
+    sys.path.insert(0, str(Path(__file__).resolve().parent))
+    from narrator_reaper import guard_start
+
+    guard_start()
+
+
+def tearDownModule() -> None:
+    """Every narrator a test here started (the client's auto-start runs the
+    start script) is stopped, even after a failure, and none may survive
+    (#m1030-1044-b20b)."""
+    from narrator_reaper import guard_end_or_fail
+
+    guard_end_or_fail()
 
 
 if __name__ == "__main__":
