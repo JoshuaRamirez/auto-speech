@@ -175,6 +175,12 @@ The Chrome extension under `chrome-extension/` is versioned independently
   HOME to a temporary directory at import.
 
 ### Fixed
+- **`auto-speech queue` is answered, never spoken (#m1030-1008-fac1).** On
+  2026-10-30 at 10:18 the new `queue` request reached the socket, which did not
+  list `queue` among its controls, so `{"action": "queue"}` fell through to the
+  legacy text wire and was spoken aloud (as `{"command":"status"}` was on
+  10-18). `queue` is now a control, and a test reads `dispatch_json` and fails
+  for any action the daemon handles that the socket would speak instead.
 - **The speech control's stop is a playback act, and it stops a play-from
   run (ADR-024, #m1030-0948).** His 2026-10-30 09:48: "the stop button in
   the speech app kills the server. its just supposed to be a playback
