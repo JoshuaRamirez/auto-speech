@@ -800,7 +800,8 @@ def _parse_at(hhmm: str, now: float | None = None) -> float:
 
 
 def handle_missed_add(args: argparse.Namespace, client: Any | None = None) -> int:
-    """`auto-speech missed add --text … --source NAME [--at HH:MM] [--id ID] [--line-id ID] [--origin-file NAME]`:
+    """`auto-speech missed add --text … --source NAME [--at HH:MM] [--id ID] [--line-id ID] [--origin-file NAME]
+    [--session-id SID]`:
     a line held or cut elsewhere, put on the missed list through the daemon
     (the one writer); the speech control lists it unplayed."""
     text = (getattr(args, "text", None) or "").strip()
@@ -823,6 +824,7 @@ def handle_missed_add(args: argparse.Namespace, client: Any | None = None) -> in
             line_id=getattr(args, "id", None),
             speech_line_id=getattr(args, "line_id", None),
             origin_file=getattr(args, "origin_file", None),
+            session_id=getattr(args, "session_id", None),
         )
     except Exception as exc:  # noqa: BLE001
         print(f"missed add: the daemon did not answer: {exc}", file=sys.stderr)
@@ -1325,6 +1327,8 @@ def build_parser() -> argparse.ArgumentParser:
                       help="missed add: the line's speak id (ADR-026): a line already heard is not added, and its replay plays once.")
     p_md.add_argument("--origin-file", dest="origin_file", default=None,
                       help="missed add: the file the line came from, kept in the history when it plays.")
+    p_md.add_argument("--session-id", dest="session_id", default=None,
+                      help="missed add: the session that wrote the line; the narrator records its desk as the sender.")
     md_mode = p_md.add_mutually_exclusive_group()
     md_mode.add_argument("--play", action="store_true", help="Replay the missed lines, oldest first, over any other sound.")
     md_mode.add_argument("--clear", action="store_true", help="Forget every line on the missed list.")

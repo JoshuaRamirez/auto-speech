@@ -616,7 +616,9 @@ class ControlDriver:
         for m in missed:
             item = {"id": MISSED_PREFIX + m.id, "text": m.label, "at": _hhmm(m.queued_at), "time": _rfc3339(m.queued_at),
                     "clip": None, "unplayed": True}
-            name = m.source or self._names(m.session_id)
+            # The sender recorded with the line, else its session's desk, else
+            # the label of the caller that handed it over (#m1030-1058-d1ad).
+            name = m.sender or self._names(m.session_id) or m.source
             if name:
                 item["source"] = name
             entries.append((m.queued_at, item))
