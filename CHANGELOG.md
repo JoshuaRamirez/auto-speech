@@ -175,6 +175,17 @@ The Chrome extension under `chrome-extension/` is versioned independently
   HOME to a temporary directory at import.
 
 ### Fixed
+- **One narrator, one socket: a start that loses the race never removes the
+  live socket (ADR-029, #m1030-1044-b20b).** On 2026-10-30 at 10:53 a restart
+  started two narrators in the same second. The one that failed to bind
+  ("Address already in use") removed the socket file on its way out: the
+  live narrator's. The survivor ran with no way in ("daemon alive: False", no
+  desk line could arrive) until a restart by hand. Now the narrator holds a
+  start lock for its life, so a second start exits at once without touching
+  the pid file or the socket. A narrator removes only the socket file it
+  bound itself (by inode). A start never takes a socket that a live server
+  answers on as "stale". The start script serializes its check-and-spawn.
+  A stale pid file is still reclaimed on the next start.
 - **A line on the missed list keeps its sender (#m1030-1058-d1ad).** On
   2026-10-30 at 10:57 the queue listed desk lines with no sender beside
   others from the same desk named "Master Desk". desk-speaker had handed

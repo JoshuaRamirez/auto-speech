@@ -16,6 +16,8 @@ the end-of-turn response.
 from __future__ import annotations
 
 import atexit
+import errno
+import fcntl
 import inspect
 import json
 import logging
@@ -76,7 +78,7 @@ from speaker import Announcer, Plan
 from speech_history import SpeechHistory, clean_origin_file, estimate_word_timings
 from speech_control import MISSED_PREFIX, ControlActions, ControlDriver, rfc3339
 from speech_player import PlayerLauncher
-from unix_ipc_server import _DaemonSocketServer, control_payload
+from unix_ipc_server import _DaemonSocketServer, control_payload, socket_answers, unlink_if_bound
 from speech_priority import (
     DEFAULT_LOAD_SCALE_CAP,
     DEFAULT_RETRY_LOAD_PER_CORE,
@@ -93,6 +95,11 @@ from voice_profile_store import VoiceProfileStore
 
 EVENTS_LOG = state_path("auto-speech-narrator-events.jsonl")
 PID_FILE = state_path("auto-speech-narrator-daemon.pid")
+# Held (flock) by the one running narrator for its whole life: a second start
+# finds it taken and leaves without touching the pid file or the socket
+# (#m1030-1044-b20b). The kernel drops it when the holder dies, so a stale
+# pid file is still reclaimed on the next start.
+START_LOCK_FILE = state_path("auto-speech-narrator-daemon.lock")
 LOG_FILE = state_path("auto-speech-narrator-daemon.log")
 DEPTH_FILE = state_path("auto-speech-narration-depth")
 # The worker's last step, for the doctor: {"at", "event", "depth", "expected_done_at"}.
@@ -199,6 +206,27 @@ def _existing_pid() -> int | None:
     except (OSError, ValueError):
         return None
     return pid if _pid_is_our_daemon(pid) else None
+
+
+def _take_start_lock(lock_file: Path) -> int | None:
+    """Take the narrator's start lock without waiting: the open fd that holds
+    it, or None when another live narrator holds it. The fd is kept open for
+    the narrator's life; closing it (or exiting) releases the lock."""
+    try:
+        lock_file.parent.mkdir(parents=True, exist_ok=True)
+        fd = os.open(lock_file, os.O_RDWR | os.O_CREAT, 0o644)
+    except OSError as exc:
+        _log(f"start lock: cannot open {lock_file}: {exc}; starting without it")
+        return -1
+    try:
+        fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except OSError as exc:
+        os.close(fd)
+        if exc.errno in (errno.EWOULDBLOCK, errno.EAGAIN, errno.EACCES):
+            return None
+        _log(f"start lock: cannot lock {lock_file}: {exc}; starting without it")
+        return -1
+    return fd
 
 
 def _release_pid_file(pid_file: Path, pid: int) -> None:
@@ -456,6 +484,9 @@ class NarratorService:
                 os.environ.get("AUTO_SPEECH_DAEMON_SOCK", str(DEFAULT_SOCKET_PATH))
             )
         self._socket_server: _DaemonSocketServer | None = None
+        # The socket file this narrator bound, by (st_dev, st_ino): the only
+        # one it ever removes (#m1030-1044-b20b).
+        self._socket_bound_file: tuple[int, int] | None = None
         self._socket_thread: threading.Thread | None = None
         self._queue_lock = threading.Lock()
         self._atexit_registered = False
@@ -570,6 +601,13 @@ class NarratorService:
             return
 
         self._socket_path.parent.mkdir(parents=True, exist_ok=True)
+        if socket_answers(self._socket_path):
+            # Another narrator serves here. Its file is never removed: on
+            # 2026-10-30 a narrator that lost this race took the live one's
+            # socket with it on the way out (#m1030-1044-b20b).
+            msg = f"a live narrator already answers at {self._socket_path}; leaving its socket in place"
+            _log(f"failed to start socket server: {msg}")
+            raise OSError(errno.EADDRINUSE, msg)
         try:
             if self._socket_path.exists() or self._socket_path.is_symlink():
                 _log(f"unlinking stale socket file: {self._socket_path}")
@@ -583,6 +621,7 @@ class NarratorService:
                 on_text=self.enqueue_text,
                 dispatcher=self,
             )
+            self._socket_bound_file = self._socket_server.bound_file
             self._socket_thread = threading.Thread(
                 target=self._socket_server.serve_forever,
                 name="daemon-socket-server",
@@ -598,12 +637,15 @@ class NarratorService:
             raise
 
     def _cleanup_socket_file(self) -> None:
-        """Safe unlinking of socket file (can be called via atexit)."""
-        try:
-            if self._socket_path.exists() or self._socket_path.is_symlink():
-                self._socket_path.unlink(missing_ok=True)
-        except OSError:
-            pass
+        """Remove the socket file, only if it is still the one this narrator
+        bound (can be called via atexit). A narrator that never bound, or
+        whose path another server has taken since, leaves the file alone: it
+        is that server's way in (#m1030-1044-b20b)."""
+        bound = getattr(self, "_socket_bound_file", None)
+        if bound is None:
+            return
+        unlink_if_bound(self._socket_path, bound)
+        self._socket_bound_file = None
 
     def _stop_socket_server(self) -> None:
         """Stop socket server, close listening socket, and remove file."""
@@ -2812,6 +2854,19 @@ def _sweep_stale_session_markers() -> None:
 
 
 def main() -> int:
+    # One narrator at a time (#m1030-1044-b20b): the pid-file check alone let
+    # two starts in the same second both through, since neither had written
+    # its pid yet. The lock is taken before anything is touched and held for
+    # the narrator's life, so the start that loses leaves at once, with the
+    # pid file and the socket as the winner has them.
+    lock_fd = _take_start_lock(START_LOCK_FILE)
+    if lock_fd is None:
+        pid = _existing_pid()
+        who = f"pid={pid}" if pid is not None else "starting"
+        _log(f"not started: another narrator holds the start lock ({who})")
+        print(f"narrator daemon already running ({who})", file=sys.stderr)
+        return 1
+    # A narrator from before the lock holds none: the pid check still stands.
     existing = _existing_pid()
     if existing is not None:
         print(f"narrator daemon already running (pid={existing})", file=sys.stderr)
@@ -2819,6 +2874,10 @@ def main() -> int:
 
     svc = NarratorService()
     rc = svc.run()
+    # The socket is closed and the pid file released: let the next start in
+    # now, not after the wait for stuck threads below.
+    if lock_fd >= 0:
+        os.close(lock_fd)
     # A worker abandoned inside a hung synthesis would hold the interpreter's
     # exit for as long as it hangs (2026-10-23: 18 h as a husk with no socket
     # and no pid file). Give threads a moment, then leave without them.

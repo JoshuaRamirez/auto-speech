@@ -30,6 +30,45 @@ fi
 # shellcheck source=daemon_pid.sh
 source "$PLUGIN_SCRIPTS_DIR/shell/daemon_pid.sh"
 
+# One start at a time (#m1030-1044-b20b): on 2026-10-30 10:53 two starts in
+# the same second both found no pid file and both spawned a narrator. The
+# check-and-spawn below runs under this lock (a directory: macOS has no
+# flock(1)), so a second start waits, then finds the first one's pid file.
+# A lock left by a start that died is reclaimed by its owner's pid. The
+# narrator's own start lock (narrator_service.py) is the guard of last
+# resort for any path that does not come through here.
+START_LOCK="$STATE_DIR/auto-speech-narrator-start.lock.d"
+_start_lock_held=0
+for _ in $(seq 1 50); do
+    if mkdir "$START_LOCK" 2>/dev/null; then
+        echo "$$" > "$START_LOCK/pid"
+        _start_lock_held=1
+        break
+    fi
+    owner="$(cat "$START_LOCK/pid" 2>/dev/null || true)"
+    if [[ -n "$owner" ]] && ! kill -0 "$owner" 2>/dev/null; then
+        # Renamed first (atomic), so two waiters cannot both clear it.
+        if mv "$START_LOCK" "$START_LOCK.stale.$$" 2>/dev/null; then
+            rm -f "$START_LOCK.stale.$$/pid"
+            rmdir "$START_LOCK.stale.$$" 2>/dev/null || true
+        fi
+        continue
+    fi
+    sleep 0.2
+done
+# shellcheck disable=SC2329  # invoked by the EXIT trap
+release_start_lock() {
+    if [[ "$_start_lock_held" -eq 1 ]]; then
+        rm -f "$START_LOCK/pid"
+        rmdir "$START_LOCK" 2>/dev/null || true
+        _start_lock_held=0
+    fi
+}
+trap release_start_lock EXIT
+if [[ "$_start_lock_held" -eq 0 ]]; then
+    echo "narrator daemon: another start held the start lock for 10 s; starting anyway (the narrator's own lock still holds)" >&2
+fi
+
 if [[ -f "$PID_FILE" ]]; then
     PID="$(cat "$PID_FILE" 2>/dev/null || true)"
     # Only "already running" if the pid is a LIVE instance of OUR daemon.

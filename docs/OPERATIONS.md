@@ -210,4 +210,5 @@ seconds, burners at nice 19, silent).
 | Narration never speaks | `doctor` `narrator` + `/tmp/auto-speech-narrator-daemon.out` | provider downgraded to Mock (MLX load failed) — see the daemon log |
 | Config change ignored | `doctor` `config` | a typo/bad type warned there; fix the TOML |
 | Stale "already running" | — | reclaimed automatically on next start (PID-identity guard) |
+| Narrator running but "daemon alive: False", no socket file | `auto-speech narrate status`; the daemon log | fixed by ADR-029 (a losing start removed the live socket); if seen again, `auto-speech narrate stop` then start, and report it |
 | Deps differ across machines | `doctor` `updates` | `bash setup/bootstrap.sh --force` |
