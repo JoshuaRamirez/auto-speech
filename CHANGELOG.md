@@ -175,6 +175,25 @@ The Chrome extension under `chrome-extension/` is versioned independently
   HOME to a temporary directory at import.
 
 ### Fixed
+- **No test writes to his live speech store (#m1030-1241-6e0a).** On
+  2026-10-30 at 11:02 and 11:03 tests/e2e/test_tier5_adversarial_lifecycle.py,
+  run by hand with a private `AUTO_SPEECH_TMP_ROOT` but no
+  `AUTO_SPEECH_HISTORY_DIR`, built a NarratorService with no history passed
+  in; `SpeechHistory()` took its default, `~/.local/state/auto-speech/history`,
+  and 258 fixture lines ("req_0222".."req_0349", "success_item_3") became rows
+  in his speech player. They were moved aside to
+  `/tmp/speech-history-test-junk-2026-10-30/`. Now one bootstrap,
+  `tests/isolation.py`, gives every state path (the runtime folder, socket,
+  missed list, meeting file, history and its settings, line ledger, the UI
+  Utility's socket) a private place unless the caller named one, and points
+  HOME at a private home, so a path no variable names lands there too. Every
+  test file imports it before any auto-speech module, `tests/e2e` registers it
+  as a package, and `tests/run_all.sh` takes its exports from it.
+  `tests/test_tests_never_touch_live_state.py` checks the imports, the
+  runner, that every state variable the product reads is covered, and runs
+  the 11:03 test in a subprocess, as it was run then and with no variables:
+  his live folder is unchanged and the line lands in the private history.
+  Nothing in the product refuses a write.
 - **One narrator, one socket: a start that loses the race never removes the
   live socket (ADR-029, #m1030-1044-b20b).** On 2026-10-30 at 10:53 a restart
   started two narrators in the same second. The one that failed to bind

@@ -7,6 +7,7 @@ calls the helper at import.
 
 from __future__ import annotations
 
+import isolation  # noqa: F401,E402,I001  -- before any auto-speech module: private stores only (#m1030-1241-6e0a)
 import os
 import re
 import sys

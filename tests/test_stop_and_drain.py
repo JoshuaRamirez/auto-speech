@@ -8,6 +8,7 @@ private socket. Run directly or through tests/run_all.sh."""
 
 from __future__ import annotations
 
+import isolation  # noqa: F401,E402,I001  -- before any auto-speech module: private stores only (#m1030-1241-6e0a)
 import argparse
 import io
 import os
