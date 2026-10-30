@@ -48,7 +48,7 @@ The default install exposes 8 curated commands:
 | Command | Does |
 |---|---|
 | `/auto-speech-speak [n]` | speak the n-th most recent assistant message (default 1) |
-| `/auto-speech-replay [n]` | replay the n-th most recent cached entry |
+| `/auto-speech-replay [n]` | replay the n-th most recent line of the speech history |
 | `/auto-speech-app` | launch the localhost web app |
 | `/auto-speech-autoplay-on` | enable end-of-turn autoplay for THIS session (off by default) |
 | `/auto-speech-autoplay-off` | turn THIS session back off |

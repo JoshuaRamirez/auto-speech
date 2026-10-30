@@ -9,7 +9,7 @@ Covers:
   - speak tool (100% backward compatibility, parameter validation, global mute, fallbacks)
   - autoplay_turn tool (extraction, min-len check, caching hash, rewriting, fallbacks, mute)
   - narrate_event tool (parameter validation, enrollment gating, daemon check, JSONL logging)
-  - playback_control tool (stop, pause, resume, restart, seek targets, replay cache, mute)
+  - playback_control tool (stop, pause, resume, restart, seek targets, replay from history, mute)
   - session_configure tool (autoplay markers, narrate markers, solo scope, config TOML)
   - doctor tool (human text report, structured JSON, health failure isError signaling)
   - stdio line framing and protocol errors
@@ -47,7 +47,6 @@ import mcp_server  # noqa: E402
 from assistant_message import AssistantMessage  # noqa: E402
 from autoplay_gate import AutoplayGate  # noqa: E402
 from autoplay_scope import SoloScope  # noqa: E402
-from cache_entry import CacheEntry  # noqa: E402
 from claude_cli_rewriter import ClaudeCliRewriteError  # noqa: E402
 from daemon_client import DaemonResponse, Priority  # noqa: E402
 from health_report import Check, HealthReport, Status  # noqa: E402
@@ -898,52 +897,52 @@ def test_playback_control_seek_invalid_target_returns_error() -> None:
         assert "seek requires a target" in res["result"]["content"][0]["text"]
 
 
-def test_playback_control_replay_cached_audio() -> None:
-    mock_store = MagicMock()
-    entry = CacheEntry(
-        source_hash="abcd" * 16,
-        voice_id="system",
-        speed=1.0,
-        char_count=40,
-        duration_seconds=2.5,
-        created_at="now",
-        chars_per_second_at_creation=16.0,
-    )
-    mock_store.list_by_recency.return_value = [(Path("/tmp/audio.wav"), entry)]
+def _private_history(lines: int):
+    """A private speech history holding `lines` short lines (T40)."""
+    import wave
 
+    from speech_history import HistoryStore, SpeechHistory
+
+    tmp = Path(tempfile.mkdtemp(prefix="auto-speech-mcp-history-"))
+    src = tmp / "src.wav"
+    with wave.open(str(src), "wb") as w:
+        w.setnchannels(1)
+        w.setsampwidth(2)
+        w.setframerate(16000)
+        w.writeframes(b"\x00\x00" * 800)
+    history = SpeechHistory(tmp / "history", store=HistoryStore(tmp / "history.toml"))
+    exported = [history.export(src, text=f"line {i}", spoken_at=1_800_000_000 + i) for i in range(lines)]
+    return history, exported
+
+
+def test_playback_control_replay_plays_the_newest_history_line() -> None:
+    history, exported = _private_history(1)
     mock_client = MagicMock()
-    mock_client.play_cache.return_value = DaemonResponse(status="ok", action="play_cache")
+    mock_client.play_history.return_value = DaemonResponse(status="queued", action="play_history")
 
-    server = McpServer(client=mock_client, cache_store=mock_store)
+    server, _ = _server(client=mock_client, speech_history=history)
 
     res = _call_tool(server, "playback_control", {"action": "replay", "ordinal": 1})
     assert res["result"]["isError"] is False
-    assert "Replaying cached audio" in res["result"]["content"][0]["text"]
-    mock_client.play_cache.assert_called_once_with("abcd" * 16, session_id=None)
+    assert "Replaying speech history line #1" in res["result"]["content"][0]["text"]
+    mock_client.play_history.assert_called_once_with(exported[0].id)
+    mock_client.play_cache.assert_not_called()
 
 
-def test_playback_control_replay_empty_cache_and_bounds() -> None:
-    mock_store = MagicMock()
-    mock_store.list_by_recency.return_value = []
-
-    server = McpServer(cache_store=mock_store)
+def test_playback_control_replay_empty_history_and_bounds() -> None:
+    empty, _ = _private_history(0)
+    mock_client = MagicMock()
+    server, _ = _server(client=mock_client, speech_history=empty)
     res = _call_tool(server, "playback_control", {"action": "replay", "ordinal": 1})
     assert res["result"]["isError"] is True
-    assert "No cached audio available" in res["result"]["content"][0]["text"]
+    assert "speech history is empty" in res["result"]["content"][0]["text"]
 
-    entry = CacheEntry(
-        source_hash="abcd" * 16,
-        voice_id="system",
-        speed=1.0,
-        char_count=40,
-        duration_seconds=2.5,
-        created_at="now",
-        chars_per_second_at_creation=16.0,
-    )
-    mock_store.list_by_recency.return_value = [(Path("/tmp/audio.wav"), entry)]
+    one, _ = _private_history(1)
+    server, _ = _server(client=mock_client, speech_history=one)
     res = _call_tool(server, "playback_control", {"action": "replay", "ordinal": 5})
     assert res["result"]["isError"] is True
-    assert "No cached audio available" in res["result"]["content"][0]["text"]
+    assert "holds 1 line; you asked for #5" in res["result"]["content"][0]["text"]
+    mock_client.play_history.assert_not_called()
 
 
 def test_playback_control_replay_honors_global_mute() -> None:
@@ -1659,8 +1658,8 @@ TESTS = [
     test_playback_control_resume_honors_global_mute,
     test_playback_control_seek_targets,
     test_playback_control_seek_invalid_target_returns_error,
-    test_playback_control_replay_cached_audio,
-    test_playback_control_replay_empty_cache_and_bounds,
+    test_playback_control_replay_plays_the_newest_history_line,
+    test_playback_control_replay_empty_history_and_bounds,
     test_playback_control_replay_honors_global_mute,
     # Group 6: session_configure
     test_session_configure_autoplay_on_and_off,

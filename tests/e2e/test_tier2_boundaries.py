@@ -301,7 +301,6 @@ class TestTier2R3Boundaries(unittest.TestCase):
         """Verifies surviving modules can be imported without missing legacy symbols."""
         surviving_modules = [
             "autoplay_worker",
-            "replay",
             "control",
             "web_server",
         ]
