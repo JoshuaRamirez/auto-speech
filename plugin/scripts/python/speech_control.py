@@ -38,6 +38,7 @@ import time
 from collections import deque
 from collections.abc import Callable
 from dataclasses import dataclass, field
+from datetime import datetime
 from pathlib import Path
 from typing import Any
 
@@ -71,6 +72,17 @@ def _hhmm(epoch: float) -> str | None:
         return None
     try:
         return time.strftime("%H:%M", time.localtime(epoch))
+    except (OverflowError, OSError, ValueError):
+        return None
+
+
+def _rfc3339(epoch: float) -> str | None:
+    """The moment as RFC 3339 with the local offset, to the second (contract
+    1.5's `time`, read by the control's Date and Time columns)."""
+    if epoch <= 0:
+        return None
+    try:
+        return datetime.fromtimestamp(int(epoch)).astimezone().isoformat(timespec="seconds")
     except (OverflowError, OSError, ValueError):
         return None
 
@@ -202,7 +214,8 @@ class ControlDriver:
     def playing(self, text: str, source: str | None) -> None:
         """A line starts playing (after any hold): on top of the list, current."""
         item_id = f"{NOW_PREFIX}{next(self._now_ids)}"
-        now = {"id": item_id, "text": text, "at": _hhmm(time.time()), "clip": None}
+        at = time.time()
+        now = {"id": item_id, "text": text, "at": _hhmm(at), "time": _rfc3339(at), "clip": None}
         if source:
             now["source"] = source
         kinds = [_NOW, _STATE]
@@ -416,7 +429,8 @@ class ControlDriver:
         except Exception:  # noqa: BLE001 — an unreadable history shows as empty
             lines = []
         for line in lines:
-            item = {"id": line.id, "text": line.text, "at": _hhmm(line.spoken_at), "clip": str(line.wav)}
+            item = {"id": line.id, "text": line.text, "at": _hhmm(line.spoken_at), "time": _rfc3339(line.spoken_at),
+                    "clip": str(line.wav)}
             name = _sender(line)
             if name:
                 item["source"] = name
@@ -426,7 +440,8 @@ class ControlDriver:
         except Exception:  # noqa: BLE001
             missed = []
         for m in missed:
-            item = {"id": MISSED_PREFIX + m.id, "text": m.label, "at": _hhmm(m.queued_at), "clip": None, "unplayed": True}
+            item = {"id": MISSED_PREFIX + m.id, "text": m.label, "at": _hhmm(m.queued_at), "time": _rfc3339(m.queued_at),
+                    "clip": None, "unplayed": True}
             name = m.source or self._names(m.session_id)
             if name:
                 item["source"] = name
@@ -494,6 +509,8 @@ class ControlDriver:
         elif kind == "play-all":
             ids = evt.get("items")
             self._play_items(list(ids) if isinstance(ids, list) else [])
+        elif kind == "play-from":
+            self._play_from(evt.get("from"), evt.get("items"))
         elif kind == "closed":
             self._open = False
             with self._cond:
@@ -580,15 +597,34 @@ class ControlDriver:
         index = 0 if at is None else min(len(lines) - 1, at + step)
         self.actions.replay(lines[index])
 
-    def _play_items(self, ids: list[Any]) -> None:
+    def _play_items(self, ids: list[Any], *, restart_now: bool = True) -> int:
+        """Each id queued in the order given: a heard line replayed from its
+        WAV, a missed line through the missed list (off it once heard), the
+        line playing now restarted (only when restart_now). Every play goes
+        on the narrator's explicit band, first in, first out: none cuts
+        another off. Unknown ids are skipped. Returns how many were queued."""
+        queued = 0
         for raw in ids:
             if not isinstance(raw, str) or not raw:
                 continue
             if raw.startswith(MISSED_PREFIX):
-                self.actions.play_missed([raw[len(MISSED_PREFIX):]])
+                queued += int(self.actions.play_missed([raw[len(MISSED_PREFIX):]]) or 0)
             elif raw.startswith(NOW_PREFIX):
-                self.actions.restart()
+                if restart_now:
+                    self.actions.restart()
+                    queued += 1
             else:
                 line = self._history.get(raw)
                 if line is not None:
                     self.actions.replay(line)
+                    queued += 1
+        return queued
+
+    def _play_from(self, since: Any, ids: Any) -> None:
+        """Contract 1.5's play-from: every listed line at or after `since`,
+        oldest first, as the control sends them (ADR-027). The line playing
+        now is not restarted: it plays on to its end, and the rest follow.
+        One line in the narrator's log says what was asked."""
+        queued = self._play_items(list(ids) if isinstance(ids, list) else [], restart_now=False)
+        if self._log is not None:
+            self._log(f"control: play-from {since} ({queued} lines)")

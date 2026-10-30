@@ -95,7 +95,9 @@ module that owns it. Release-by-release history is in
   on top and highlighted, the history newest first, and the missed lines as
   unplayed items. Its play, hold, stop, skip back and forward, rate,
   play-item and play-all act on the daemon. Never opened during a hold
-  (`speech_control.py`).
+  (`speech_control.py`). Each item carries its `time` (RFC 3339) for the
+  Date and Time columns, and play-from plays every line from a chosen time
+  to the latest, oldest first, each once and to its end (ADR-027).
 - **Stop, drained restart, live sessions** (ADR-024): a stop holds every
   later line on the missed list until `auto-speech resume` or the control's
   play (`stopped` in status and `narrate status`, kept across a restart);
