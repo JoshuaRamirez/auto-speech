@@ -9,7 +9,9 @@ Provides DualWireRequestHandler supporting:
 
 from __future__ import annotations
 
+import errno
 import json
+import os
 import socket
 import socketserver
 from pathlib import Path
@@ -192,11 +194,54 @@ class _DaemonSocketServer(socketserver.ThreadingUnixStreamServer):
         self.dispatcher = dispatcher
         super().__init__(str(server_address), DualWireRequestHandler)
 
+    # (st_dev, st_ino) of the socket file this server bound: the one file it
+    # may remove (#m1030-1044-b20b). None until bound.
+    bound_file: Optional[tuple[int, int]] = None
+
     def server_bind(self) -> None:
+        path = Path(self.server_address)
+        if socket_answers(path):
+            # A live server owns this path. Taking it would orphan that
+            # server: the file must stay, and this bind fails.
+            raise OSError(errno.EADDRINUSE, f"a live server already answers at {path}")
         try:
-            path = Path(self.server_address)
             if path.exists() or path.is_symlink():
                 path.unlink(missing_ok=True)
         except OSError:
             pass
         super().server_bind()
+        st = os.lstat(path)
+        self.bound_file = (st.st_dev, st.st_ino)
+
+
+def socket_answers(path: str | Path, timeout: float = 0.5) -> bool:
+    """True when something accepts a connection on the UNIX socket at `path`:
+    a live server, whose file must never be removed."""
+    s = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+    s.settimeout(timeout)
+    try:
+        s.connect(str(path))
+        return True
+    except OSError:
+        return False
+    finally:
+        s.close()
+
+
+def unlink_if_bound(path: str | Path, bound_file: Optional[tuple[int, int]]) -> bool:
+    """Remove the socket file at `path` only when it is still the file this
+    process bound (`bound_file`, from _DaemonSocketServer.bound_file). A file
+    another server put there since is left alone. True when removed."""
+    if bound_file is None:
+        return False
+    try:
+        st = os.lstat(path)
+    except OSError:
+        return False
+    if (st.st_dev, st.st_ino) != bound_file:
+        return False
+    try:
+        os.unlink(path)
+    except OSError:
+        return False
+    return True

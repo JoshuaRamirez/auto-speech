@@ -152,6 +152,19 @@ run_custom_case "malformed non-json payload bails cleanly" \
 run_custom_case "empty payload bails cleanly" \
     '' "" "no" 0
 
+# The hook starts a narrator when none runs: it is stopped here, and none may
+# survive (#m1030-1044-b20b). Only a private state folder; never /tmp.
+if [[ -n "${AUTO_SPEECH_TMP_ROOT:-}" && "${AUTO_SPEECH_TMP_ROOT%/}" != "/tmp" ]]; then
+    REAPER_PY="$(dirname "${BASH_SOURCE[0]}")/../.venv/bin/python"
+    [[ -x "$REAPER_PY" ]] || REAPER_PY=python3
+    if ! left="$("$REAPER_PY" "$(dirname "${BASH_SOURCE[0]}")/narrator_reaper.py" reap "$AUTO_SPEECH_TMP_ROOT")"; then
+        echo "FAIL: the hook's narrator survived the reaping ($left)"
+        failures=$((failures + 1))
+    elif [[ -n "$left" ]]; then
+        echo "[reaped] the narrator the hook started: $left"
+    fi
+fi
+
 echo
 echo "narrator_hook gate: $ran ran, $failures failed"
 exit $failures
