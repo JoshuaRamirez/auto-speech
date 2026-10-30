@@ -24,7 +24,14 @@ sends and what it does with the events.
   (`_sender_name`, the name the history records) and its estimated words.
 - **One row per line.** `items()` keeps one row per id and one history row
   per spoken line (sidecar `line_id`, else `origin_file`, else its id),
-  the newest.
+  the newest. Amended 2026-10-30 (#m1030-1241-6e0a): until then the history
+  never wrote `line_id`, so only `origin_file` held; now it does. Two records
+  sharing either key are one line. A missed entry whose `line_id` or
+  `origin_file` matches a heard row is not a second row. A line heard later
+  than it came (set aside by his stop, then played from the missed list)
+  keeps its row at the time it came (sidecar `said_at_epoch`, the missed
+  entry's `queued_at`), so its missed row becomes its heard row in place
+  instead of a new row on top at the time of the play.
 - **Words and position.** The row playing carries `words` in the player
   panel's `text.words` shape: the sidecar's `word_timings.words` for a
   heard line, `estimate_word_timings(text, clip duration)` for a fresh or

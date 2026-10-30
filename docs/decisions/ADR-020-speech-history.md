@@ -49,7 +49,10 @@ clip played after a separate name clip), `spoken_at` (local ISO time, ms)
 and `spoken_at_epoch`, `sender` (`session_id`, and the desk `name` from
 the agents' notes whether or not it was said aloud), `priority` and
 `priority_name`, `duration_seconds`, `word_timings`, `wav`, `voice_id`,
-`speed`, `source_hash`, `origin_file`. `origin_file` is the name (never
+`speed`, `source_hash`, `origin_file`, and (2026-10-30, #m1030-1241-6e0a)
+`line_id`, the speak request's id (ADR-025) or null, and `said_at_epoch`,
+present only for a line heard later than it came (played from the missed
+list): when it came. `origin_file` is the name (never
 a path) of the file the caller says the line came from, or null:
 desk-say's pending file (`2026-10-20-150900.674-desk.txt`) when the line
 came through desk-speaker and desk-speaker passes it (`speak(...,

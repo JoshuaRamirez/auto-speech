@@ -109,6 +109,17 @@ def _words(line: HistoryLine) -> list[dict[str, Any]]:
     return list(words) if isinstance(words, list) else []
 
 
+def _line_keys(fields: dict[str, Any]) -> set[str]:
+    """The keys that name one spoken line: its speak id and the file it came
+    from (either one is enough to know two records are the same line)."""
+    keys = set()
+    for key in ("line_id", "origin_file"):
+        value = fields.get(key)
+        if isinstance(value, str) and value:
+            keys.add(f"{key}:{value}")
+    return keys
+
+
 def _line_key(line: HistoryLine) -> str:
     """One spoken line, however often its record was written: its speak id,
     else the file it came from, else its own id."""
@@ -156,8 +167,9 @@ class ControlActions:
     # many were taken out (ADR-027, #m1030-0939-c4f9).
     begin_run: Callable[[], int] = lambda: 0
     end_run: Callable[[], None] = lambda: None
-    # Ends his stop (ADR-024) and queues the lines that arrived while stopped;
-    # how many were queued, or -1 when speech was not stopped.
+    # Ends his stop (ADR-024), and only that: what it set aside stays on the
+    # missed list (#m1030-1241-6e0a). How many lines it left there, or -1
+    # when speech was not stopped.
     unstop: Callable[[], int] = lambda: -1
     # Contract 1.6: within the line playing, and the queue tab.
     seek: Callable[[float], bool] = lambda seconds: False  # move by seconds, negative back
@@ -599,21 +611,25 @@ class ControlDriver:
             lines = []
         keys: set[str] = set()
         for line in sorted(lines, key=lambda h: h.spoken_at, reverse=True):
-            key = _line_key(line)
-            if key in keys:
+            mine = _line_keys(line.sidecar) or {_line_key(line)}
+            if mine & keys:
                 continue  # the same spoken line written twice: one row, the newest
-            keys.add(key)
-            item = {"id": line.id, "text": line.text, "at": _hhmm(line.spoken_at), "time": _rfc3339(line.spoken_at),
-                    "clip": str(line.wav)}
+            keys |= mine
+            # A line heard later than it came (set aside, then played from the
+            # missed list) keeps its row at the time it came (#m1030-1241-6e0a).
+            at = line.said_at
+            item = {"id": line.id, "text": line.text, "at": _hhmm(at), "time": _rfc3339(at), "clip": str(line.wav)}
             name = _sender(line)
             if name:
                 item["source"] = name
-            entries.append((line.spoken_at, item))
+            entries.append((at, item))
         try:
             missed: list[MissedLine] = self._missed.load()
         except Exception:  # noqa: BLE001
             missed = []
         for m in missed:
+            if _line_keys({"line_id": m.line_id, "origin_file": m.origin_file}) & keys:
+                continue  # a copy of a line already heard: the heard row stands for it (one line, one row)
             item = {"id": MISSED_PREFIX + m.id, "text": m.label, "at": _hhmm(m.queued_at), "time": _rfc3339(m.queued_at),
                     "clip": None, "unplayed": True}
             # The sender recorded with the line, else its session's desk, else
@@ -772,8 +788,10 @@ class ControlDriver:
             state, paused = self._model.state, self._model.paused
         playing_now = state != IDLE
         if action == "play":
-            if self.actions.unstop() > 0:
-                return  # the lines his stop set aside play, in order
+            if self.actions.unstop() >= 0:
+                # His stop lifts, and only that: what it set aside stays on
+                # the missed list for Play from or Play all (#m1030-1241-6e0a).
+                return
             if state == HELD and paused:
                 if self.actions.resume():
                     with self._cond:

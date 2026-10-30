@@ -184,7 +184,8 @@ class DaemonClient:
         return self._send_request(payload)
 
     def resume(self) -> DaemonResponse:
-        """Ends his stop (ADR-024); the lines that arrived while stopped play."""
+        """Ends his stop (ADR-024), and only that: the lines it set aside stay
+        on the missed list (#m1030-1241-6e0a)."""
         return self._send_request({"action": "resume"})
 
     def missed_add(

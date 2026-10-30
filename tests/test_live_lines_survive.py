@@ -6,8 +6,9 @@ desk line. The replays may be cleared three ways, and each keeps a live line
 (a line not yet heard, from a desk or a session) that was waiting:
 
   (a) his stop at the control (ADR-024, #16): the replays go; a waiting live
-      line goes on the missed list as `stopped` and plays on his next play.
-      Proven end to end here: test_a_live_line_waiting_behind_replays_plays_on_the_play_after_his_stop.
+      line goes on the missed list as `stopped`. His next play lifts the stop
+      only (#m1030-1241-6e0a); his Play all plays the live lines. Proven end
+      to end here: test_a_live_line_waiting_behind_replays_stays_on_the_list_and_plays_on_his_play_all.
   (b) a shutdown set-aside (_set_aside_queued / _set_aside_item): replays
       dropped, live lines on the missed list as `restart`. Proven by
       test_stop_and_drain.TestSigterm.test_whatever_is_still_queued_goes_on_the_missed_list_in_order.
@@ -19,9 +20,11 @@ Nothing is heard (a recording sink); everything is in a temporary folder."""
 
 from __future__ import annotations
 
+import isolation  # noqa: F401,E402,I001  -- before any auto-speech module: private stores only (#m1030-1241-6e0a)
 import os
 import sys
 import tempfile
+import time
 from pathlib import Path
 
 SRC = Path(__file__).resolve().parents[1] / "plugin" / "scripts" / "python"
@@ -61,7 +64,7 @@ class TestLiveLinesSurviveAStop(_Daemon):
         self.wait_for(lambda: self.line(line_id)["state"] == DONE, 5, lambda: self.line(line_id))
         self.wait_for(lambda: any(h.text == text for h in self.svc._history.load()), 5)
 
-    def test_a_live_line_waiting_behind_replays_plays_on_the_play_after_his_stop(self):
+    def test_a_live_line_waiting_behind_replays_stays_on_the_list_and_plays_on_his_play_all(self):
         for k in range(1, 5):
             self.say(f"Heard {k}.", f"2026-10-30-09300{k}.000-desk")
         heard = self.svc._history.load()
@@ -83,7 +86,13 @@ class TestLiveLinesSurviveAStop(_Daemon):
         self.assertEqual({m.reason for m in waiting}, {REASON_STOPPED})
         self.assertEqual(len(self.sink.played), before + 1, "nothing played after the stop")
 
-        d._on_event(dict(PLAY))  # his next play
+        d._on_event(dict(PLAY))  # his next play: the stop lifts, and only that (#m1030-1241-6e0a)
+        self.assertIsNone(self.svc._stopped_since, "his play ended the stop")
+        time.sleep(0.2)
+        self.assertEqual(len(self.sink.played), before + 1, "nothing his stop set aside plays by itself")
+        self.assertEqual([m.text for m in self.svc._missed.load()], [t for t, _ in LIVE], "still on the list")
+        rows = [i["id"] for i in d.items() if i.get("unplayed")]
+        d.handle_event({"event": "play-all", "id": CONTROL_ID, "items": list(reversed(rows))})  # his Play all, oldest first
         self.wait_for(lambda: all(self.line(i)["state"] == DONE for _, i in LIVE), 5,
                       lambda: [self.line(i) for _, i in LIVE])
         self.wait_for(lambda: self.svc._tts_queue.qsize() == 0, 5)
@@ -94,7 +103,6 @@ class TestLiveLinesSurviveAStop(_Daemon):
         texts = [h.text for h in self.svc._history.load()]
         self.assertEqual(texts[-2:], [t for t, _ in LIVE], "heard once each, in the order they came")
         self.assertEqual(self.svc._missed.load(), [], "off the missed list once heard")
-        self.assertIsNone(self.svc._stopped_since, "his play ended the stop")
 
 
 if __name__ == "__main__":

@@ -62,6 +62,7 @@ class QueueItem:
     queue_id: str = field(default_factory=_next_queue_id)  # stable while it waits: the control's queue tab names it (contract 1.6)
     sender: str = ""  # the desk that sent it, as recorded on its missed entry: a replay keeps its name (#m1030-1058-d1ad)
     control_run: int = 0  # the speech control's play-from/play-all run this replay belongs to; 0: none (ADR-027)
+    said_at: float = 0.0  # when a line replayed from the missed list first came: its row keeps that time (#m1030-1241-6e0a)
 
     def __post_init__(self) -> None:
         if self.enqueued_at is None:

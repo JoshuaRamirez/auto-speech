@@ -29,38 +29,26 @@ elif [[ "${1:-}" == "--web" ]]; then
     shift
 fi
 
-# Isolation: every test process gets its own runtime state directory, so no
-# test can reach the LIVE daemon's socket (/tmp/auto-speech-daemon.sock),
-# its pid file, its log, the mpv pid file or the autoplay markers. Code
-# resolves all of those through AUTO_SPEECH_TMP_ROOT (state_paths.py);
-# a daemon a test auto-starts lands in here too and is stopped at exit.
+# Isolation: every test process gets its own state, never his live store
+# (#m1030-1241-6e0a: on 10-30 a test run by hand without
+# AUTO_SPEECH_HISTORY_DIR wrote 258 fixture lines into his speech history).
+# One list of every state path, tests/isolation.py, gives this runner its
+# exports and every test file imports it before any auto-speech module, so a
+# test run by hand is isolated the same way. Under STATE_DIR: the socket, pid
+# files and logs (AUTO_SPEECH_TMP_ROOT, state_paths.py), the missed list, the
+# meeting file, the speech history and its settings, the line ledger, the UI
+# Utility's socket, and a private HOME. A daemon a test starts never goes
+# through launchd (2026-10-20 20:02: a niced run replaced his narrator), and
+# no test starts the real UI Utility (ADR-021).
 STATE_DIR="$(mktemp -d /tmp/auto-speech-tests.XXXXXX)"
-export AUTO_SPEECH_TMP_ROOT="$STATE_DIR"
-export AUTO_SPEECH_DAEMON_SOCK="$STATE_DIR/auto-speech-daemon.sock"
-export AUTO_SPEECH_MISSED_FILE="$STATE_DIR/missed.json"
-export AUTO_SPEECH_MEETING_FILE="$STATE_DIR/meeting.json"
-export AUTO_SPEECH_HISTORY_DIR="$STATE_DIR/history"
-export AUTO_SPEECH_HISTORY_CONFIG="$STATE_DIR/history.toml"
-# A daemon a test starts never goes through launchd, so it never takes the
-# live narrator's label (2026-10-20 20:02: a niced run replaced his narrator).
-export AUTO_SPEECH_START_VIA_LAUNCHD=never
-echo "[isolation] AUTO_SPEECH_TMP_ROOT=$STATE_DIR"
-echo "[isolation] AUTO_SPEECH_DAEMON_SOCK=$AUTO_SPEECH_DAEMON_SOCK"
-echo "[isolation] AUTO_SPEECH_MISSED_FILE=$AUTO_SPEECH_MISSED_FILE"
-echo "[isolation] AUTO_SPEECH_MEETING_FILE=$AUTO_SPEECH_MEETING_FILE"
-echo "[isolation] AUTO_SPEECH_HISTORY_DIR=$AUTO_SPEECH_HISTORY_DIR"
-echo "[isolation] AUTO_SPEECH_HISTORY_CONFIG=$AUTO_SPEECH_HISTORY_CONFIG"
-echo "[isolation] AUTO_SPEECH_START_VIA_LAUNCHD=never"
-# No test starts the real UI Utility: a silent copy a test started would stay
-# as his copy (its contract: "A copy already running keeps its mode"). The
-# player launcher talks to a stand-in on this private socket, and never runs
-# a launch command (ADR-021).
-export UI_UTILITY_SOCK="$STATE_DIR/ui-utility.sock"
-export UI_UTILITY_SILENT=1
-export AUTO_SPEECH_PLAYER_LAUNCH=never
-echo "[isolation] UI_UTILITY_SOCK=$UI_UTILITY_SOCK"
-echo "[isolation] UI_UTILITY_SILENT=1"
-echo "[isolation] AUTO_SPEECH_PLAYER_LAUNCH=never"
+ISOLATION_PYTHON="${AUTO_SPEECH_TEST_PYTHON:-$VENV/bin/python}"
+[[ -x "$ISOLATION_PYTHON" ]] || ISOLATION_PYTHON="$(command -v python3)"
+if ! exports="$("$ISOLATION_PYTHON" "$TESTS_DIR/isolation.py" --exports "$STATE_DIR")"; then
+    echo "error: tests/isolation.py could not give the private paths; not running" >&2
+    exit 1
+fi
+eval "$exports"
+printf '%s\n' "$exports" | sed 's/^export /[isolation] /'
 # No test plays sound (his 2026-10-20 10:40 "turn off the speech tests"): mpv goes to
 # its null output unless AUTO_SPEECH_TEST_REAL_AUDIO=1 is set on purpose. Each test
 # that can reach mpv also sets this itself (tests/quiet_audio.py), so a bare run is silent too.
@@ -167,6 +155,9 @@ CHEAP=(
     test_cli_dispatcher.py
     test_ipc_command_key.py
     test_say_hang.py
+    test_tests_never_touch_live_state.py
+    test_resume_lifts_only.py
+    test_one_line_one_row.py
 )
 
 # Bash-script tests for shell helpers.

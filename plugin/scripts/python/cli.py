@@ -304,9 +304,9 @@ def handle_pause(_args: argparse.Namespace) -> int:
 
 
 def _daemon_resume() -> int:
-    """Ends his stop in the daemon (ADR-024). How many lines that arrived
-    while stopped were queued again; -1 when speech was not stopped or the
-    daemon is not running."""
+    """Ends his stop in the daemon (ADR-024), and only that: the lines it set
+    aside stay on the missed list (#m1030-1241-6e0a). How many it left there;
+    -1 when speech was not stopped or the daemon is not running."""
     sock = _get_daemon_socket_path()
     if not sock.is_socket():
         return -1
@@ -316,14 +316,17 @@ def _daemon_resume() -> int:
         return -1
     if not isinstance(raw, dict) or raw.get("was_stopped") is not True:
         return -1
-    return int(raw.get("queued") or 0)
+    return int(raw.get("set_aside") or 0)
 
 
 def handle_resume(_args: argparse.Namespace) -> int:
-    queued = _daemon_resume()
+    left = _daemon_resume()
     rc, msg = _send_mpv_command(["set_property", "pause", False])
-    if queued >= 0:
-        print(f"resumed: speech was stopped; {queued} line{'s' if queued != 1 else ''} that arrived meanwhile queued again")
+    if left >= 0:
+        print(
+            f"resumed: speech was stopped; new lines play. {left} line{'s' if left != 1 else ''} the stop set aside"
+            f" stay{'s' if left == 1 else ''} on the missed list: play them with Play all or Play from"
+        )
         return EXIT_OK
     if rc != EXIT_OK:
         print(msg, file=sys.stderr)

@@ -105,7 +105,9 @@ module that owns it. Release-by-release history is in
   or moves it in place; `auto-speech queue` lists it in the terminal.
 - **Stop, drained restart, live sessions** (ADR-024): a stop holds every
   later line on the missed list until `auto-speech resume` or the control's
-  play (`stopped` in status and `narrate status`, kept across a restart);
+  play, which lift the stop only: what it set aside stays on the missed list
+  for Play from or Play all (`stopped` in status and `narrate status`, kept
+  across a restart);
   `auto-speech narrate restart [--when-quiet] [--timeout S]` waits for the
   queue and desk-speaker to drain, then kickstarts the launchd job; SIGTERM
   finishes the line in flight and sets the queue aside; markers of sessions

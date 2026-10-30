@@ -175,6 +175,47 @@ The Chrome extension under `chrome-extension/` is versioned independently
   HOME to a temporary directory at import.
 
 ### Fixed
+- **One spoken line, one row, whatever path it takes (ADR-028 amended,
+  #m1030-1241-6e0a).** At 12:39 a 10:55 line his stop had set aside was
+  played from the missed list: once heard, its history record was a new row
+  on top at 12:40:23 and its 10:55 row was gone, so it looked like a new
+  line. And the 0.7.1 dedupe by line id never held: the history did not write
+  the line's id into its sidecar. Now the sidecar keeps `line_id` and, for a
+  line heard later than it came, `said_at_epoch`; the row of a line played
+  from the missed list stays at the time it came and is the row selected; two
+  records with the same `line_id` or `origin_file` are one row; a missed copy
+  of a heard line is not a second row.
+- **A resume lifts his stop, and only that (ADR-024 amended,
+  #m1030-1241-6e0a).** His stop was at 11:00; at 12:37 he turned speech back
+  on and a 10:55 line the stop had set aside played by itself ("1 line(s)
+  that arrived while stopped queued again"). Now `auto-speech resume`,
+  playback_control resume, the socket's `resume` (so desk-speaker's
+  `desk-speak on`) and the control's play glyph lift the stop and queue
+  nothing: only lines that come after the resume play. What the stop cut or
+  set aside stays on the missed list for his Play all or Play from; a
+  caller's resend of such a line is kept there, not queued. The socket's
+  `resume` takes `play_set_aside` (default false; true queues the stop's lines
+  again) and logs its `source`, as desk-speaker sends them. The reply carries
+  `set_aside: N`, and the CLI and MCP say the lines stay on the missed list.
+- **No test writes to his live speech store (#m1030-1241-6e0a).** On
+  2026-10-30 at 11:02 and 11:03 tests/e2e/test_tier5_adversarial_lifecycle.py,
+  run by hand with a private `AUTO_SPEECH_TMP_ROOT` but no
+  `AUTO_SPEECH_HISTORY_DIR`, built a NarratorService with no history passed
+  in; `SpeechHistory()` took its default, `~/.local/state/auto-speech/history`,
+  and 258 fixture lines ("req_0222".."req_0349", "success_item_3") became rows
+  in his speech player. They were moved aside to
+  `/tmp/speech-history-test-junk-2026-10-30/`. Now one bootstrap,
+  `tests/isolation.py`, gives every state path (the runtime folder, socket,
+  missed list, meeting file, history and its settings, line ledger, the UI
+  Utility's socket) a private place unless the caller named one, and points
+  HOME at a private home, so a path no variable names lands there too. Every
+  test file imports it before any auto-speech module, `tests/e2e` registers it
+  as a package, and `tests/run_all.sh` takes its exports from it.
+  `tests/test_tests_never_touch_live_state.py` checks the imports, the
+  runner, that every state variable the product reads is covered, and runs
+  the 11:03 test in a subprocess, as it was run then and with no variables:
+  his live folder is unchanged and the line lands in the private history.
+  Nothing in the product refuses a write.
 - **One narrator, one socket: a start that loses the race never removes the
   live socket (ADR-029, #m1030-1044-b20b).** On 2026-10-30 at 10:53 a restart
   started two narrators in the same second. The one that failed to bind

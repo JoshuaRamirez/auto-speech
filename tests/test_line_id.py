@@ -13,6 +13,7 @@ own socket. Run directly or through tests/run_all.sh."""
 
 from __future__ import annotations
 
+import isolation  # noqa: F401,E402,I001  -- before any auto-speech module: private stores only (#m1030-1241-6e0a)
 import argparse
 import io
 import json
@@ -319,8 +320,13 @@ class TestSlowSynthesis(_Daemon):
         self.assertIsNotNone(dropped["dropped_at"])
         self.assertEqual(self.line("first")["reason"], "interrupted", "cut mid-synthesis by the stop")
 
-        # His resume replays what the stop set aside, under the same id.
+        # His resume lifts the stop only (#m1030-1241-6e0a); his play of the
+        # set-aside line plays it, under the same id.
         self.svc.dispatch_json({"action": "resume"})
+        time.sleep(SLOW_S)
+        self.assertEqual((self.line("second")["state"], self.sink.played), (DROPPED, []), "not played by the resume")
+        [entry] = [m for m in self.svc._missed.load() if m.line_id == "second"]
+        self.assertEqual(self.svc._play_missed_ids([entry.id]), 1)
         self.wait_for(lambda: self.line("second")["state"] == DONE, SLOW_S * 3 + 5)
         self.assertEqual(len(self.sink.played), 1)
         again = self.speak("Waiting behind it.", "second")
@@ -358,7 +364,10 @@ class TestOnePlayAcrossStop(_Daemon):
     def stop(self) -> None:
         self.svc._stop_speech(by="test")
 
-    def test_a_line_queued_while_stopped_plays_once_on_resume_and_a_resend_is_refused(self):
+    def test_a_line_queued_while_stopped_stays_set_aside_on_resume_and_plays_once_on_his_play(self):
+        # #m1030-1241-6e0a replaces "plays once on resume": a resume lifts the
+        # stop only. The line stays on the missed list (a resend of it stays
+        # there too) until his Play all or Play from, and then plays once.
         self.stop()
         self.assertEqual(self.speak("Held across his stop.")["status"], "queued")
         self.wait_for(lambda: self.line()["state"] == DROPPED, 5, self.line)
@@ -367,9 +376,17 @@ class TestOnePlayAcrossStop(_Daemon):
         self.assertEqual(self.played_count(), 0)
 
         self.svc.dispatch_json({"action": "resume"})
+        resend = self.speak("Held across his stop.")  # a caller's copy after the stop lifts
+        self.assertEqual((resend.get("duplicate"), resend.get("set_aside"), resend.get("missed_id")),
+                         (True, True, held.id), "kept on the missed list, not queued")
+        self.settle()
+        self.assertEqual(self.played_count(), 0, "nothing set aside plays by itself after the resume")
+        self.assertEqual([m.id for m in self.missed()], [held.id], "one entry, still there")
+
+        self.assertEqual(self.svc._play_missed_ids([held.id]), 1)  # his Play all
         self.wait_for(lambda: self.line()["state"] == DONE, 5, self.line)
-        resend = self.speak("Held across his stop.")  # desk-speaker's copy after the stop lifts
-        self.assertEqual((resend.get("duplicate"), resend["line"]["state"]), (True, DONE))
+        again = self.speak("Held across his stop.")
+        self.assertEqual((again.get("duplicate"), again["line"]["state"]), (True, DONE))
         self.settle()
         self.assertEqual(self.played_count(), 1, "played exactly once")
         self.assertEqual(self.missed(), [], "off the missed list once heard")
@@ -391,7 +408,7 @@ class TestOnePlayAcrossStop(_Daemon):
         other = "2026-10-27-162557.391-desk"
         self.svc.dispatch_json({"action": "missed_add", "text": "Comments.", "line_id": other})
         [entry] = self.missed()
-        self.svc._resume_speech(play_set_aside=False)
+        self.svc._resume_speech()
         self.speak("Comments.", other)
         self.wait_for(lambda: self.line(other)["state"] == DONE, 5)
         self.assertEqual(self.missed(), [], "the copy on the list left when the line played")
