@@ -740,6 +740,10 @@ class NarratorService:
                         "queue_depth": self._tts_queue.qsize(),
                     }
 
+            # A line played from the missed list keeps the time it came, so
+            # its row in the player stays where it was (#m1030-1241-6e0a).
+            said_at = self._missed_queued_at(missed_id)
+
             cached_wav: Optional[Path] = None
             if source_hash and len(source_hash) == 64 and all(c in "0123456789abcdef" for c in source_hash):
                 try:
@@ -763,6 +767,7 @@ class NarratorService:
                     line_id=line_id,
                     line_text=text,
                     sender=sender,
+                    said_at=said_at,
                 )
                 cache_hit = True
             else:
@@ -778,6 +783,7 @@ class NarratorService:
                     origin_file=origin_file,
                     line_id=line_id,
                     sender=sender,
+                    said_at=said_at,
                 )
                 cache_hit = False
 
@@ -845,6 +851,7 @@ class NarratorService:
                 session_id=session_id,
                 missed_id=missed_id,
                 hold=hold,
+                said_at=self._missed_queued_at(missed_id),
             )
 
             if priority == Priority.EXPLICIT_MCP:
@@ -2324,6 +2331,19 @@ class NarratorService:
         )
         return len(stopped_lines)
 
+    def _missed_queued_at(self, missed_id: str) -> float:
+        """When the missed-list entry `missed_id` first came; 0 when unknown."""
+        missed = getattr(self, "_missed", None)
+        if missed is None or not missed_id:
+            return 0.0
+        try:
+            for m in missed.load():
+                if m.id == missed_id:
+                    return float(m.queued_at or 0.0)
+        except Exception as exc:  # noqa: BLE001
+            _log(f"missed list read error: {exc!r}")
+        return 0.0
+
     def _set_aside_by_stop(self, line_id: str) -> Optional[MissedLine]:
         """The missed-list entry his stop left for this line id, if it is
         still there unplayed; None otherwise. Never raises."""
@@ -2534,6 +2554,8 @@ class NarratorService:
                 speed=float(speed),
                 source_hash=getattr(item, "source_hash", None) if item is not None else None,
                 origin_file=getattr(item, "origin_file", None) if item is not None else None,
+                line_id=getattr(item, "line_id", None) if item is not None else None,
+                said_at=(getattr(item, "said_at", 0.0) or None) if item is not None else None,
             )
         except Exception as exc:  # noqa: BLE001
             _log(f"history export error: {exc!r}")

@@ -175,6 +175,16 @@ The Chrome extension under `chrome-extension/` is versioned independently
   HOME to a temporary directory at import.
 
 ### Fixed
+- **One spoken line, one row, whatever path it takes (ADR-028 amended,
+  #m1030-1241-6e0a).** At 12:39 a 10:55 line his stop had set aside was
+  played from the missed list: once heard, its history record was a new row
+  on top at 12:40:23 and its 10:55 row was gone, so it looked like a new
+  line. And the 0.7.1 dedupe by line id never held: the history did not write
+  the line's id into its sidecar. Now the sidecar keeps `line_id` and, for a
+  line heard later than it came, `said_at_epoch`; the row of a line played
+  from the missed list stays at the time it came and is the row selected; two
+  records with the same `line_id` or `origin_file` are one row; a missed copy
+  of a heard line is not a second row.
 - **A resume lifts his stop, and only that (ADR-024 amended,
   #m1030-1241-6e0a).** His stop was at 11:00; at 12:37 he turned speech back
   on and a 10:55 line the stop had set aside played by itself ("1 line(s)

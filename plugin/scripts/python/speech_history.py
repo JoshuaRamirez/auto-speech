@@ -361,6 +361,16 @@ class HistoryLine:
         except (TypeError, ValueError):
             return 0.0
 
+    @property
+    def said_at(self) -> float:
+        """When the line came: its `said_at_epoch` when it was heard later
+        than that (set aside, then played), else when it was spoken."""
+        try:
+            said = float(self.sidecar.get("said_at_epoch") or 0.0)
+        except (TypeError, ValueError):
+            said = 0.0
+        return said if said > 0 else self.spoken_at
+
     def to_dict(self) -> dict[str, Any]:
         return {**self.sidecar, "wav_path": str(self.wav), "sidecar_path": str(self.json)}
 
@@ -415,17 +425,24 @@ class SpeechHistory:
         word_timings: Optional[list[dict[str, Any]]] = None,
         spoken_at: Optional[float] = None,
         origin_file: Optional[str] = None,
+        line_id: Optional[str] = None,
+        said_at: Optional[float] = None,
     ) -> Optional[HistoryLine]:
         """Copy the played WAV into the history with its sidecar, then prune
         to `max_gb`. None when the history is off. `word_timings` from a
         synthesizer that gives them are kept as given; otherwise they are
         estimated and marked so. `origin_file` is the file the caller says
-        the line came from (desk-say's pending file), its name only."""
+        the line came from (desk-say's pending file), its name only.
+        `line_id` is the speak request's id (ADR-025), kept so the player
+        shows one row per spoken line; `said_at` is when the line came, when
+        it was heard later (set aside, then played from the missed list): its
+        row stays at that time (#m1030-1241-6e0a)."""
         settings = self._store.load()
         if not settings.enabled:
             return None
         src = Path(wav)
         when = float(spoken_at) if spoken_at is not None else self._clock()
+        speech_id = (line_id or "").strip() or None
         line_id = secrets.token_hex(4)
         local = datetime.fromtimestamp(when)
         # The name is in UTC so names sort in time order across a clock change
@@ -458,7 +475,10 @@ class SpeechHistory:
             "speed": float(speed),
             "source_hash": source_hash or None,
             "origin_file": clean_origin_file(origin_file) or None,
+            "line_id": speech_id,
         }
+        if said_at is not None and 0 < float(said_at) < when:
+            sidecar["said_at_epoch"] = round(float(said_at), 3)
 
         def go() -> HistoryLine:
             dst_wav = self._dir / f"{stem}.wav"
