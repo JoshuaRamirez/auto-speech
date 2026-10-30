@@ -1756,6 +1756,11 @@ class NarratorService:
         held_for: tuple[str, ...] = (),
         existing: Optional[MissedLine] = None,
     ) -> None:
+        if getattr(item, "history_id", "") if item is not None else "":
+            # A heard line played again from the control (play-item, play-all,
+            # play-from) is in the history already: not set aside as missed (ADR-027).
+            _log(f"replay not played ({reason}): {(text or '')[:50]!r} stays in the history, not on the missed list")
+            return
         missed = getattr(self, "_missed", None)
         line = self._missed_line(text, item, existing=existing)
         line_id = getattr(item, "line_id", "") if item is not None else ""
@@ -2071,7 +2076,8 @@ class NarratorService:
         if not self._is_stopped():
             return False
         self._set_aside(text, item, reason=REASON_STOPPED)
-        _log(f"missed: stopped, set aside: {(text or '')[:50]!r}")
+        if not getattr(item, "history_id", ""):
+            _log(f"missed: stopped, set aside: {(text or '')[:50]!r}")
         return True
 
     def _set_aside_queued(self, reason: str) -> int:

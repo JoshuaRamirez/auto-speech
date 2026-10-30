@@ -183,6 +183,24 @@ class TestOpen(_Base):
         self.assertRegex(first["at"], r"^\d\d:\d\d$")
         self.assertEqual(d.sync(), "none", "nothing more to send")
 
+    def test_every_item_carries_its_date_time_with_the_local_offset(self):
+        # Contract 1.5: the Date and Time columns read `time`; `at` stays the fallback.
+        from datetime import datetime
+
+        self.store.set_player(True)
+        a = self.export("Heard.")
+        self.missed.miss(MissedLine(id="m1", text="Missed.", queued_at=T0 + 3600), reason=REASON_LONGEST_WAIT)
+        d = self.driver()
+        d.playing("Now.", None)
+        rfc3339 = r"^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d[+-]\d\d:\d\d$"
+        items = {i["id"]: i for i in d.items()}
+        for item in items.values():
+            self.assertRegex(item["time"], rfc3339)
+            parsed = datetime.fromisoformat(item["time"])
+            self.assertEqual(parsed.strftime("%H:%M"), item["at"], "the same moment as `at`, in local time")
+        self.assertEqual(datetime.fromisoformat(items[a.id]["time"]).timestamp(), int(a.spoken_at))
+        self.assertEqual(datetime.fromisoformat(items["missed:m1"]["time"]).timestamp(), T0 + 3600)
+
     def test_never_opens_during_a_hold_and_opens_when_it_ends(self):
         self.store.set_player(True)
         holding = [True]
@@ -374,6 +392,32 @@ class TestEvents(_Base):
     def test_play_all_plays_each_in_the_order_given(self):
         self.ev(event="play-all", items=["missed:m1", "missed:m3", "missed:m2"])
         self.assertEqual(self.rec.calls, [("play_missed", ["m1"]), ("play_missed", ["m3"]), ("play_missed", ["m2"])])
+
+    def test_play_from_plays_every_line_given_oldest_first_and_logs_one_line(self):
+        # His 2026-10-30 08:47: "i want to play from a particular past time all
+        # the messages up to the latest" (contract 1.5, play-from).
+        logged: list[str] = []
+        self.d._log = logged.append
+        a = self.export("Oldest.")
+        b = self.export("Newer.")
+        self.ev(event="play-from", **{"from": "2026-10-30T08:00:00-07:00"},
+                items=[a.id, "missed:m1", b.id, "nope", 7])
+        self.assertEqual(self.rec.calls, [("replay", a.id), ("play_missed", ["m1"]), ("replay", b.id)],
+                         "in the order given, each once; unknown ids skipped")
+        self.assertEqual(logged, ["control: play-from 2026-10-30T08:00:00-07:00 (3 lines)"])
+
+    def test_play_from_never_restarts_the_line_playing_now(self):
+        a = self.export("Heard.")
+        self.d.playing("Playing now.", None)
+        self.d.sync()
+        now_id = self.d.items()[0]["id"]
+        self.ev(event="play-from", **{"from": "2026-10-30T08:00:00-07:00"}, items=[a.id, now_id])
+        self.assertEqual(self.rec.calls, [("replay", a.id)], "the line playing now plays on to its end")
+
+    def test_play_from_with_no_items_queues_nothing(self):
+        self.ev(event="play-from", **{"from": "2026-10-30T08:00:00-07:00"}, items="bad")
+        self.ev(event="play-from", **{"from": "2026-10-30T08:00:00-07:00"})
+        self.assertEqual(self.rec.calls, [])
 
     def test_another_panels_events_are_not_ours(self):
         self.d.handle_event({"id": "other", "event": "control", "action": "stop"})

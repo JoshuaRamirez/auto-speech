@@ -10,6 +10,15 @@ The Chrome extension under `chrome-extension/` is versioned independently
 ## [Unreleased]
 
 ### Added
+- **Play every line from a chosen time, in order (ADR-027).** His
+  2026-10-30 08:47: "I want to play from a particular past time all the
+  messages up to the latest." The speech control's list items carry `time`
+  (RFC 3339 with the local offset) for the UI Utility's Date and Time
+  columns (contract 1.5), and its `play-from` event plays every line it
+  names, oldest first, each once and to its end: heard lines from their WAV
+  (not exported again), missed lines through the missed list. The line
+  playing now plays on; the narrator's log says `control: play-from <from>
+  (<n> lines)`.
 - **One line id, one play (ADR-025).** A speak request takes `line_id`
   (MCP speak, `auto-speech speak --line-id`, `DaemonClient.speak`,
   `narrate_event`). A line already queued, playing, or done in the last ten
@@ -149,6 +158,10 @@ The Chrome extension under `chrome-extension/` is versioned independently
   HOME to a temporary directory at import.
 
 ### Fixed
+- **A replay stopped part way no longer lands on the missed list
+  (ADR-027).** His stop during a play-all or play-from set each queued
+  replay aside as a new missed line, although it was heard and in the
+  history; a replay is now dropped with a log line instead.
 - **One line, one play across his stop (ADR-026).** His 2026-10-27 16:27:
   "Why am I hearing duplication when you say things?" A missed-list entry now
   keeps its line's id (one entry per id) and its replay carries the id, the

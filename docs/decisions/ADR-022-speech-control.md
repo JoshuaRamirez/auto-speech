@@ -41,7 +41,8 @@ acts on what the person asks for.
   line's WAV over any other sound, without exporting it again
   (`QueueItem.history_id`), or plays a missed line through
   `missed_speech.play_ids`, which takes it off the list once heard.
-  play-all plays each id in order.
+  play-all plays each id in order; play-from (contract 1.5) plays every
+  line from a chosen time, oldest first (ADR-027).
 - **The per-line player panel** (ADR-021) no longer opens by default; it
   opens only when one is passed in. His "not the actual page" retires it
   from the daemon.
