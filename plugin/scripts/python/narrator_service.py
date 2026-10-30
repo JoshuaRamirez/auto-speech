@@ -871,6 +871,11 @@ class NarratorService:
                 "queue_depth": self._tts_queue.qsize(),
             }
 
+        elif action == "play_history":
+            # `auto-speech replay` (T38): a line from the speech history,
+            # played again the way the speech control's play-item plays it.
+            return self._play_history(payload)
+
         elif action == "interrupt":
             # playback_control stop, `auto-speech stop`, the web app's end:
             # his stop, which holds until a play or resume (ADR-024).
@@ -915,6 +920,7 @@ class NarratorService:
                 "stopped_since": getattr(self, "_stopped_since", None),
                 "queued": sum(int(v) for v in depths.values()) if isinstance(depths, dict) else 0,
                 "line_in_flight": self._line_in_flight(),
+                "replays_history": True,  # knows `play_history` (T38): a client asks before sending it
                 **({"line": self._line_ledger().answer(asked)} if asked else {}),
             }
 
@@ -2112,6 +2118,29 @@ class NarratorService:
         self._handle_p2_preemption(q_item)
         self._update_depth(self._tts_queue.qsize())
         self._last_event_ts = time.time()
+
+    def _play_history(self, payload: dict[str, Any]) -> dict[str, Any]:
+        """The socket's `play_history` (`auto-speech replay`, T38): the line
+        `line_id` names in the speech history, queued through the control's
+        own replay path (_replay_history_line), so it waits behind and obeys
+        the narrator like a play-item at the control."""
+        line_id = str(payload.get("line_id") or "").strip()
+        if not line_id:
+            return {"status": "error", "error_code": "INVALID_PAYLOAD", "message": "Missing line_id (a speech history line's id)"}
+        history = getattr(self, "_history", None)
+        try:
+            line = history.get(line_id) if history is not None else None
+        except Exception:  # noqa: BLE001 — an unreadable history is a miss
+            line = None
+        if line is None or not line.wav.is_file():
+            return {"status": "error", "error_code": "HISTORY_MISS", "message": f"No speech history line {line_id}"}
+        self._replay_history_line(line)
+        return {
+            "status": "queued",
+            "action": "play_history",
+            "line_id": line.id,
+            "queue_depth": self._tts_queue.qsize(),
+        }
 
     def _sink_seek(self, seconds: float) -> bool:
         seek = getattr(getattr(self, "_sink", None), "seek", None)

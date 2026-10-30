@@ -1,5 +1,5 @@
 ---
-description: Replay a previously-spoken message from the audio cache. Arg = Nth-most-recent (default 1).
+description: Play a line from the speech history again (the lines the speech player lists). Arg = Nth-most-recent (default 1).
 argument-hint: "[n]"
 allowed-tools: Bash
 ---
@@ -13,7 +13,7 @@ The user invoked `/replay $ARGUMENTS`. Parse the argument:
 - Else → stop and respond with a one-line error:
   "replay: argument must be a positive integer, got `<value>`". Do not proceed.
 
-## Step 1 — Play the cached entry
+## Step 1 — Play the history line
 
 Run this single Bash command, substituting `ORDINAL`:
 
@@ -23,18 +23,19 @@ PROJECT_ROOT="$(cat "$HOME/.config/auto-speech/root" 2>/dev/null || true)"
 "$PROJECT_ROOT/bin/auto-speech" replay --ordinal ORDINAL
 ```
 
-`/replay` does NOT consult the current session transcript. It only reads
-from the cache directory at `config/cache/`. This means it works in any
-Claude Code session, not just the one where the original `/speak` ran.
+`/replay` does NOT consult the current session transcript. It reads the
+speech history (the lines the speech player lists, newest first) and, with
+the narrator running, queues the line through it like the player's own play
+button. It works in any Claude Code session.
 
-If the command exits with code `2` ("no cache entries" or
-"only K entries; you asked for Nth"), stop and pass the stderr message
-to the user verbatim.
+If the command exits with code `2` (the speech history is off, empty, or
+holds fewer lines than asked), stop and pass the stderr message to the user
+verbatim.
 
 ## Step 2 — Report
 
 When the command returns:
-- Exit 0: respond with a single line: "replayed cached entry #ORDINAL".
+- Exit 0: respond with a single line: "replayed history line #ORDINAL".
 - Exit 2: respond with the stderr message verbatim.
 - Any other exit: respond with "replay failed: exit <code>" and include the
   stderr output.

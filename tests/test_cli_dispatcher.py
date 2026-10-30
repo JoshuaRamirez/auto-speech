@@ -15,6 +15,7 @@ import subprocess
 import sys
 import tempfile
 import unittest
+import wave
 from pathlib import Path
 from unittest import mock
 
@@ -29,10 +30,10 @@ os.environ.setdefault("AUTO_SPEECH_TMP_ROOT", tempfile.mkdtemp(prefix="auto-spee
 from state_paths import state_path  # noqa: E402
 
 import cli  # noqa: E402
-from cache_entry import CacheEntry  # noqa: E402
 from daemon_client import DaemonResponse, Priority  # noqa: E402
 from health_report import Check, HealthReport, Status  # noqa: E402
 from native_audio_sink import AudioSinkError  # noqa: E402
+from speech_history import SpeechHistory  # noqa: E402
 
 
 class BaseCliTestCase(unittest.TestCase):
@@ -320,38 +321,42 @@ class TestCliSpeak(BaseCliTestCase):
 
 
 class TestCliReplay(BaseCliTestCase):
-    """Tests for `auto-speech replay`."""
+    """Tests for `auto-speech replay`: the speech history's lines, newest
+    first (T38); tests/test_replay_from_history.py covers it in depth."""
+
+    def setUp(self) -> None:
+        super().setUp()
+        os.environ["AUTO_SPEECH_HISTORY_DIR"] = str(Path(self.tmpdir.name) / "history")
+        os.environ["AUTO_SPEECH_HISTORY_CONFIG"] = str(Path(self.tmpdir.name) / "history.toml")
+        self.history = SpeechHistory()
+        src = Path(self.tmpdir.name) / "src.wav"
+        with wave.open(str(src), "wb") as w:
+            w.setnchannels(1)
+            w.setsampwidth(2)
+            w.setframerate(16000)
+            w.writeframes(b"\x00\x00" * 160)
+        self.older = self.history.export(src, text="older", spoken_at=1_793_395_620.0)
+        self.newer = self.history.export(src, text="newer", spoken_at=1_793_395_680.0)
+
+    def queued_client(self) -> mock.MagicMock:
+        client = mock.MagicMock()
+        client.play_history.return_value = DaemonResponse(status="queued", action="play_history")
+        return client
 
     def test_replay_default_ordinal_one_success(self) -> None:
-        dummy_wav = Path("/tmp/dummy.wav")
-        entry = CacheEntry("a" * 64, "v1", 1.0, 10, 2.0, "2026-10-06T12:00:00Z", 5.0)
-        mock_client = mock.MagicMock()
-        mock_client.play_cache.return_value = DaemonResponse(status="ok", action="play_cache")
-
-        with (
-            mock.patch("cache_store.CacheStore.list_by_recency", return_value=[(dummy_wav, entry)]),
-            mock.patch("sys.stderr", io.StringIO()),
-        ):
-            rc = cli.main(["replay"], client=mock_client)
+        client = self.queued_client()
+        with mock.patch("sys.stderr", io.StringIO()):
+            rc = cli.main(["replay"], client=client)
         self.assertEqual(rc, 0)
-        mock_client.play_cache.assert_called_once_with("a" * 64)
+        client.play_history.assert_called_once_with(self.newer.id)
+        client.play_cache.assert_not_called()
 
     def test_replay_explicit_ordinal_success(self) -> None:
-        entry1 = CacheEntry("a" * 64, "v1", 1.0, 10, 2.0, "2026-10-06T12:00:00Z", 5.0)
-        entry2 = CacheEntry("b" * 64, "v2", 1.0, 10, 2.0, "2026-10-06T11:00:00Z", 5.0)
-        mock_client = mock.MagicMock()
-        mock_client.play_cache.return_value = DaemonResponse(status="ok", action="play_cache")
-
-        with (
-            mock.patch(
-                "cache_store.CacheStore.list_by_recency",
-                return_value=[(Path("/tmp/1.wav"), entry1), (Path("/tmp/2.wav"), entry2)],
-            ),
-            mock.patch("sys.stderr", io.StringIO()),
-        ):
-            rc = cli.main(["replay", "--ordinal", "2"], client=mock_client)
+        client = self.queued_client()
+        with mock.patch("sys.stderr", io.StringIO()):
+            rc = cli.main(["replay", "--ordinal", "2"], client=client)
         self.assertEqual(rc, 0)
-        mock_client.play_cache.assert_called_once_with("b" * 64)
+        client.play_history.assert_called_once_with(self.older.id)
 
     def test_replay_zero_or_negative_ordinal_exits_two(self) -> None:
         stderr = io.StringIO()
@@ -360,48 +365,34 @@ class TestCliReplay(BaseCliTestCase):
         self.assertEqual(rc, 2)
         self.assertIn("--ordinal must be >= 1", stderr.getvalue())
 
-    def test_replay_empty_cache_exits_two(self) -> None:
+    def test_replay_empty_history_exits_two(self) -> None:
+        os.environ["AUTO_SPEECH_HISTORY_DIR"] = str(Path(self.tmpdir.name) / "empty")
         stderr = io.StringIO()
-        with (
-            mock.patch("cache_store.CacheStore.list_by_recency", return_value=[]),
-            mock.patch("sys.stderr", stderr),
-        ):
-            rc = cli.main(["replay"])
+        with mock.patch("sys.stderr", stderr):
+            rc = cli.main(["replay"], sink=mock.MagicMock())
         self.assertEqual(rc, 2)
-        self.assertIn("no cache entries found", stderr.getvalue())
+        self.assertIn("speech history is empty", stderr.getvalue())
 
     def test_replay_ordinal_out_of_bounds_exits_two(self) -> None:
-        entry = CacheEntry("a" * 64, "v1", 1.0, 10, 2.0, "2026-10-06T12:00:00Z", 5.0)
         stderr = io.StringIO()
-        with (
-            mock.patch("cache_store.CacheStore.list_by_recency", return_value=[(Path("/tmp/1.wav"), entry)]),
-            mock.patch("sys.stderr", stderr),
-        ):
-            rc = cli.main(["replay", "--ordinal", "5"])
+        with mock.patch("sys.stderr", stderr):
+            rc = cli.main(["replay", "--ordinal", "5"], sink=mock.MagicMock())
         self.assertEqual(rc, 2)
-        self.assertIn("only 1 cache entries", stderr.getvalue())
+        self.assertIn("holds 2 lines", stderr.getvalue())
 
     def test_replay_audio_sink_error_exits_six(self) -> None:
-        entry = CacheEntry("a" * 64, "v1", 1.0, 10, 2.0, "2026-10-06T12:00:00Z", 5.0)
         mock_sink = mock.MagicMock()
         mock_sink.play.side_effect = AudioSinkError("mpv failure")
         stderr = io.StringIO()
-        with (
-            mock.patch("cache_store.CacheStore.list_by_recency", return_value=[(Path("/tmp/1.wav"), entry)]),
-            mock.patch("sys.stderr", stderr),
-        ):
+        with mock.patch("sys.stderr", stderr):
             rc = cli.main(["replay"], sink=mock_sink)
         self.assertEqual(rc, 6)
         self.assertIn("playback failed", stderr.getvalue())
 
     def test_replay_keyboard_interrupt_exits_130(self) -> None:
-        entry = CacheEntry("a" * 64, "v1", 1.0, 10, 2.0, "2026-10-06T12:00:00Z", 5.0)
         mock_sink = mock.MagicMock()
         mock_sink.play.side_effect = KeyboardInterrupt()
-        with (
-            mock.patch("cache_store.CacheStore.list_by_recency", return_value=[(Path("/tmp/1.wav"), entry)]),
-            mock.patch("sys.stderr", io.StringIO()),
-        ):
+        with mock.patch("sys.stderr", io.StringIO()):
             rc = cli.main(["replay"], sink=mock_sink)
         self.assertEqual(rc, 130)
         mock_sink.interrupt.assert_called_once()
@@ -411,13 +402,9 @@ class TestCliReplay(BaseCliTestCase):
         disabled_marker.parent.mkdir(parents=True, exist_ok=True)
         disabled_marker.touch()
 
-        entry = CacheEntry("a" * 64, "v1", 1.0, 10, 2.0, "2026-10-06T12:00:00Z", 5.0)
         mock_sink = mock.MagicMock()
         stderr = io.StringIO()
-        with (
-            mock.patch("cache_store.CacheStore.list_by_recency", return_value=[(Path("/tmp/1.wav"), entry)]),
-            mock.patch("sys.stderr", stderr),
-        ):
+        with mock.patch("sys.stderr", stderr):
             rc = cli.main(["replay"], sink=mock_sink)
         self.assertEqual(rc, 0)
         mock_sink.play.assert_not_called()

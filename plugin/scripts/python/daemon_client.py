@@ -33,6 +33,9 @@ class Priority(IntEnum):
     TOOL_NARRATION = 4
 
 
+NARRATOR_TOO_OLD = "NARRATOR_TOO_OLD"  # play_history: the running narrator does not know it yet (T38)
+
+
 @dataclass(frozen=True)
 class DaemonResponse:
     """Structured response from the AutoSpeech daemon."""
@@ -174,6 +177,25 @@ class DaemonClient:
         if not hold:
             payload["hold"] = False
         return self._send_request(payload)
+
+    def play_history(self, line_id: str) -> DaemonResponse:
+        """Plays a speech history line again by its id, queued as the speech
+        control's play-item queues it (`auto-speech replay`, T38).
+
+        A narrator older than `play_history` does not know the action, and
+        would take the request for words to speak once the connection
+        closes; so the narrator's status is asked first, and the request is
+        sent only when it says `replays_history`. Otherwise the answer is an
+        error with error_code NARRATOR_TOO_OLD and nothing is sent."""
+        st = self.status()
+        if not (isinstance(st.raw, dict) and st.raw.get("replays_history") is True):
+            return DaemonResponse(
+                status="error",
+                action="play_history",
+                error_code=NARRATOR_TOO_OLD,
+                message="the running narrator is older than replay from the speech history",
+            )
+        return self._send_request({"action": "play_history", "line_id": line_id})
 
     def interrupt(self, session_id: Optional[str] = None, source: Optional[str] = None) -> DaemonResponse:
         """Halts active audio playback immediately and clears preemptible items.

@@ -21,7 +21,7 @@ from typing import Any, Callable, Optional
 # "action" (the protocol key) or "command" (what a hand-typed probe tends to
 # use); either is a control request. Anything else that starts with "{" is
 # Wire 2 text and gets spoken, which is what happened on 2026-10-18 17:51.
-CONTROLS: tuple[str, ...] = ("speak", "play_cache", "interrupt", "resume", "missed_add", "status", "queue")
+CONTROLS: tuple[str, ...] = ("speak", "play_cache", "play_history", "interrupt", "resume", "missed_add", "status", "queue")
 CONTROL_KEYS: tuple[str, ...] = ("action", "command")
 
 
