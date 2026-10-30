@@ -102,6 +102,9 @@ def note(settings: HistorySettings, installed: Callable[[], bool] = utility_inst
     return "the UI Utility's speech control, with what was said listed below it"
 
 
+_PLAYS = ("play-item", "play-all", "play-from")  # the control's play events, which his stop cancels
+
+
 @dataclass
 class ControlActions:
     """What the daemon does for the control's events. Each returns quickly:
@@ -171,6 +174,7 @@ class ControlDriver:
         self._cond = threading.Condition()
         self._model = _Model()
         self._events: deque[dict[str, Any]] = deque()
+        self._stops = 0  # his stops so far: a run being queued gives up when it changes
         self._wake = False
         self._closed = False
         self._worker: threading.Thread | None = None
@@ -271,7 +275,28 @@ class ControlDriver:
             self.sync()
 
     def _on_event(self, evt: dict[str, Any]) -> None:
-        """On the client's reader thread: hand the event to the worker."""
+        """On the client's reader thread: a transport press (play, hold,
+        stop, skip) is a playback act done here and now, never waiting behind
+        a play-from being queued or a sync to the UI Utility (his 09:48:
+        "its just supposed to be a playback controller"). A stop also drops
+        the plays still waiting to be handled and cancels a run being queued.
+        Everything else goes to the worker. Nothing here sends a request: the
+        reply would come in on this very thread."""
+        with self._cond:
+            if self._closed:
+                return
+            transport = evt.get("id") == CONTROL_ID and evt.get("event") == "control"
+            if transport and evt.get("action") == "stop":
+                self._stops += 1
+                kept = [e for e in self._events if not (e.get("id") == CONTROL_ID and e.get("event") in _PLAYS)]
+                self._events.clear()
+                self._events.extend(kept)
+        if transport:
+            try:
+                self._control(str(evt.get("action") or ""))
+            except Exception as exc:  # noqa: BLE001 — the reader never dies on one press
+                self._say_once("transport", f"control: {evt.get('action')!r} failed: {exc!r}")
+            return
         with self._cond:
             if self._closed:
                 return
@@ -604,7 +629,12 @@ class ControlDriver:
         on the narrator's explicit band, first in, first out: none cuts
         another off. Unknown ids are skipped. Returns how many were queued."""
         queued = 0
+        with self._cond:
+            stops = self._stops
         for raw in ids:
+            with self._cond:
+                if self._stops != stops:
+                    break  # his stop came while this was being queued: none of the rest
             if not isinstance(raw, str) or not raw:
                 continue
             if raw.startswith(MISSED_PREFIX):
