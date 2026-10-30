@@ -1969,6 +1969,8 @@ class NarratorService:
             set_rate=self._set_rate,
             replay=self._replay_history_line,
             play_missed=self._play_missed_ids,
+            begin_run=self._begin_control_run,
+            end_run=self._end_control_run,
         )
 
     def _sink_verb(self, name: str) -> bool:
@@ -2000,10 +2002,32 @@ class NarratorService:
             line_text=line.text,
             history_id=line.id,
             hold=False,
+            control_run=getattr(self, "_control_run_open", 0),
         )
         self._handle_p2_preemption(q_item)
         self._update_depth(self._tts_queue.qsize())
         self._last_event_ts = time.time()
+
+    def _begin_control_run(self) -> int:
+        """A new play-from or play-all from the control: the replays still
+        waiting from an earlier run are taken out of the queue, so a second
+        press never stacks the day again behind the first (#m1030-0939-c4f9).
+        Only a run's own replays go: the line playing now plays to its end,
+        and a fresh line, a play-item and a missed line stay queued. Returns
+        how many were taken out."""
+        run = getattr(self, "_control_runs", 0) + 1
+        self._control_runs = run
+        self._control_run_open = run
+        arbiter = getattr(self, "_priority_arbiter", None)
+        if arbiter is None:
+            return 0
+        removed = arbiter.remove_where(lambda q: bool(q.control_run) and q.control_run != run and bool(q.history_id))
+        if removed:
+            self._update_depth(self._tts_queue.qsize())
+        return len(removed)
+
+    def _end_control_run(self) -> None:
+        self._control_run_open = 0
 
     def _play_missed_ids(self, ids: list[str]) -> int:
         """Missed lines played through missed_speech's play, which takes each

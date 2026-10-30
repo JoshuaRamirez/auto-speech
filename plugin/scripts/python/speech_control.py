@@ -118,6 +118,12 @@ class ControlActions:
     set_rate: Callable[[float], float] = lambda rate: rate  # returns the rate now in effect
     replay: Callable[[HistoryLine], None] = lambda line: None  # a heard line, queued to play again
     play_missed: Callable[[list[str]], int] = lambda ids: 0  # missed-list ids, in order; how many queued
+    # A new run of plays from the control (play-from, play-all) begins: the
+    # replays still waiting from an earlier run are taken out of the queue,
+    # and the replays queued until end_run belong to this one. Returns how
+    # many were taken out (ADR-027, #m1030-0939-c4f9).
+    begin_run: Callable[[], int] = lambda: 0
+    end_run: Callable[[], None] = lambda: None
     # Ends his stop (ADR-024) and queues the lines that arrived while stopped;
     # how many were queued, or -1 when speech was not stopped.
     unstop: Callable[[], int] = lambda: -1
@@ -533,7 +539,7 @@ class ControlDriver:
             self._play_items([evt.get("item")])
         elif kind == "play-all":
             ids = evt.get("items")
-            self._play_items(list(ids) if isinstance(ids, list) else [])
+            self._as_run(lambda: self._play_items(list(ids) if isinstance(ids, list) else []))
         elif kind == "play-from":
             self._play_from(evt.get("from"), evt.get("items"))
         elif kind == "closed":
@@ -650,11 +656,24 @@ class ControlDriver:
                     queued += 1
         return queued
 
+    def _as_run(self, play: Callable[[], int]) -> int:
+        """A play-from or play-all is a run: it replaces the replays still
+        waiting from an earlier run, never stacking a second copy behind them
+        (#m1030-0939-c4f9). The line playing now plays on to its end; a
+        play-item, a fresh line and a missed line are never taken out."""
+        replaced = int(self.actions.begin_run() or 0)
+        if replaced and self._log is not None:
+            self._log(f"control: replaced {replaced} queued replays")
+        try:
+            return play()
+        finally:
+            self.actions.end_run()
+
     def _play_from(self, since: Any, ids: Any) -> None:
         """Contract 1.5's play-from: every listed line at or after `since`,
         oldest first, as the control sends them (ADR-027). The line playing
         now is not restarted: it plays on to its end, and the rest follow.
         One line in the narrator's log says what was asked."""
-        queued = self._play_items(list(ids) if isinstance(ids, list) else [], restart_now=False)
+        queued = self._as_run(lambda: self._play_items(list(ids) if isinstance(ids, list) else [], restart_now=False))
         if self._log is not None:
             self._log(f"control: play-from {since} ({queued} lines)")
