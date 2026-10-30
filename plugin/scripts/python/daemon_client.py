@@ -175,12 +175,15 @@ class DaemonClient:
             payload["hold"] = False
         return self._send_request(payload)
 
-    def interrupt(self, session_id: Optional[str] = None) -> DaemonResponse:
-        """Halts active audio playback immediately and clears preemptible items."""
+    def interrupt(self, session_id: Optional[str] = None, source: Optional[str] = None) -> DaemonResponse:
+        """Halts active audio playback immediately and clears preemptible items.
+        `source` names the caller in the narrator's log."""
         payload: dict[str, Any] = {
             "action": "interrupt",
             "session_id": session_id,
         }
+        if source:
+            payload["source"] = source
         return self._send_request(payload)
 
     def resume(self) -> DaemonResponse:

@@ -398,7 +398,19 @@ def handle_seek(args: argparse.Namespace) -> int:
 
 
 def handle_stop(_args: argparse.Namespace) -> int:
-    if not _has_active_session():
+    # The narrator's stop first, playing or idle (#m1030-1421-30ba): a stop
+    # sent while nothing plays still holds the next lines (ADR-024). Before,
+    # an idle narrator meant "no active playback session" and no stop at all.
+    narrator_stopped = False
+    daemon_sock = _get_daemon_socket_path()
+    if daemon_sock.is_socket():
+        try:
+            client = DaemonClient(socket_path=daemon_sock)
+            narrator_stopped = client.interrupt(source="auto-speech stop").status == "ok"
+        except Exception:
+            pass
+
+    if not narrator_stopped and not _has_active_session():
         print(
             "control: no active playback session (unified daemon uses synchronous audio).",
             file=sys.stderr,
@@ -408,14 +420,6 @@ def handle_stop(_args: argparse.Namespace) -> int:
     if _is_mpv_socket_alive():
         try:
             MpvIpc.send(["stop"], MPV_SOCK_PATH)
-        except Exception:
-            pass
-
-    daemon_sock = _get_daemon_socket_path()
-    if daemon_sock.is_socket():
-        try:
-            client = DaemonClient(socket_path=daemon_sock)
-            client.interrupt()
         except Exception:
             pass
 
