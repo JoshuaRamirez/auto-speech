@@ -134,6 +134,25 @@ class TestServerAnswersCommandKey(unittest.TestCase):
         self.assertEqual(self.dispatcher.spoken, ['{"command":"dance"}'])
 
 
+class TestEveryHandledActionIsAControl(unittest.TestCase):
+    """2026-10-30 10:18: `auto-speech queue` sent {"action":"queue"}; the daemon
+    handled "queue" but the socket did not list it, so the line fell through
+    to Wire 2 and was spoken aloud. Every action dispatch_json handles must be
+    one the socket routes to it."""
+
+    def test_every_action_dispatch_json_handles_is_in_controls(self) -> None:
+        import re
+        source = (PLUGIN_ROOT / "narrator_service.py").read_text(encoding="utf-8")
+        start = source.index("def dispatch_json(")
+        end = source.index("\n    def ", start + 1)
+        handled = set(re.findall(r'action == "([a-z_]+)"', source[start:end]))
+        self.assertIn("speak", handled, "the reading of dispatch_json found its actions")
+        self.assertEqual(sorted(handled - set(CONTROLS)), [], "handled by the daemon but spoken by the socket")
+
+    def test_a_queue_request_is_answered_never_spoken(self) -> None:
+        self.assertIsNotNone(control_payload({"action": "queue"}))
+
+
 def main() -> int:
     suite = unittest.TestLoader().loadTestsFromModule(sys.modules[__name__])
     result = unittest.TextTestRunner(verbosity=1).run(suite)
