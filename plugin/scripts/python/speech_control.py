@@ -61,8 +61,12 @@ PLAYING = "playing"
 HELD = "held"
 
 # Model changes the worker sends, in this order.
-_SOURCE, _ITEMS, _NOW, _STATE = "source", "items", "now", "state"
-_ORDER = (_SOURCE, _ITEMS, _NOW, _STATE)
+# _NOW is the row playing: the now-row of a fresh line, or (contract 1.6) the
+# history or missed row a replay plays, sent again with its words.
+_SOURCE, _ITEMS, _NOW, _STATE, _QUEUE = "source", "items", "now", "state", "queue"
+_ORDER = (_SOURCE, _ITEMS, _NOW, _STATE, _QUEUE)
+QUEUE_DEBOUNCE_SECONDS = 0.25  # the queue tab is sent at most this often while it churns
+SEEK_CHOICES = (1, 5, 10)  # contract 1.6: skip-back and skip-forward with seconds
 
 ICON = Path(__file__).resolve().parents[3] / "chrome-extension" / "icons" / "icon128.png"
 
@@ -85,6 +89,34 @@ def _rfc3339(epoch: float) -> str | None:
         return datetime.fromtimestamp(int(epoch)).astimezone().isoformat(timespec="seconds")
     except (OverflowError, OSError, ValueError):
         return None
+
+
+rfc3339 = _rfc3339  # the narrator's queue tab stamps its rows the same way
+
+
+def _seek_seconds(value: Any) -> float | None:
+    """A skip's `seconds` (contract 1.6): a positive number, else None (the
+    skip as before 1.6: the line's start, or the next line)."""
+    if isinstance(value, (int, float)) and not isinstance(value, bool) and value > 0:
+        return float(value)
+    return None
+
+
+def _words(line: HistoryLine) -> list[dict[str, Any]]:
+    """The sidecar's word timings, in the player panel's `text.words` shape."""
+    timings = line.sidecar.get("word_timings")
+    words = timings.get("words") if isinstance(timings, dict) else None
+    return list(words) if isinstance(words, list) else []
+
+
+def _line_key(line: HistoryLine) -> str:
+    """One spoken line, however often its record was written: its speak id,
+    else the file it came from, else its own id."""
+    for key in ("line_id", "origin_file"):
+        value = line.sidecar.get(key)
+        if isinstance(value, str) and value:
+            return f"{key}:{value}"
+    return f"id:{line.id}"
 
 
 def _sender(line: HistoryLine) -> str | None:
@@ -127,6 +159,13 @@ class ControlActions:
     # Ends his stop (ADR-024) and queues the lines that arrived while stopped;
     # how many were queued, or -1 when speech was not stopped.
     unstop: Callable[[], int] = lambda: -1
+    # Contract 1.6: within the line playing, and the queue tab.
+    seek: Callable[[float], bool] = lambda seconds: False  # move by seconds, negative back
+    position: Callable[[], float | None] = lambda: None  # seconds into the line playing, from the player
+    queue_items: Callable[[], list[dict[str, Any]]] = lambda: []  # what waits, in play order
+    queue_clear: Callable[[], int] = lambda: 0
+    queue_remove: Callable[[list[str]], int] = lambda ids: 0
+    queue_move: Callable[[str, int], int | None] = lambda queue_id, to: None
 
 
 @dataclass
@@ -138,6 +177,9 @@ class _Model:
     paused: bool = False  # held by the person's hold, not by another app's sound
     now: dict[str, Any] | None = None
     pending: set[str] = field(default_factory=set)
+    words: list[dict[str, Any]] | None = None  # the words of the line playing
+    position: float = 0.0  # seconds into the line playing at `since`
+    since: float | None = None  # the clock when `position` was taken; None while not advancing
 
 
 class ControlDriver:
@@ -189,6 +231,8 @@ class ControlDriver:
         self._closed_by_user = False
         self._pieces: set[str] = set()  # what the UI Utility offered at hello
         self._settings_open = False
+        self._queue_offered = True  # False once this connection's UI Utility refused `queue` (before 1.6)
+        self._queue_sent_at: float | None = None
         self.settings = settings or SpeechSettings(
             SettingsPlaces(history=self._store, missed=self._missed), set_rate=self.actions.set_rate
         )
@@ -221,20 +265,62 @@ class ControlDriver:
             rate = 1.0
         self._change(rate=rate)
 
-    def playing(self, text: str, source: str | None) -> None:
-        """A line starts playing (after any hold): on top of the list, current."""
-        item_id = f"{NOW_PREFIX}{next(self._now_ids)}"
+    def playing(self, text: str, source: str | None, item_id: str | None = None,
+                words: list[dict[str, Any]] | None = None) -> None:
+        """A line starts playing (after any hold). A heard line played again
+        (`item_id` its history id) or a missed one (`missed:<id>`) is its own
+        row, made current: no new row (contract 1.6). A fresh line is a
+        now-row on top, with its sender. Either way the row is sent with the
+        line's words, and the position starts at 0."""
         at = time.time()
-        now = {"id": item_id, "text": text, "at": _hhmm(at), "time": _rfc3339(at), "clip": None}
-        if source:
-            now["source"] = source
+        if item_id and not item_id.startswith(NOW_PREFIX):
+            now = None
+            current = item_id
+            if words is None and not item_id.startswith(MISSED_PREFIX):
+                words = self._history_words(item_id)
+        else:
+            current = f"{NOW_PREFIX}{next(self._now_ids)}"
+            now = {"id": current, "text": text, "at": _hhmm(at), "time": _rfc3339(at), "clip": None}
+            if source:
+                now["source"] = source
         kinds = [_NOW, _STATE]
         with self._cond:
             self._closed_by_user = False  # a new line brings back a control he closed
             if source and source != self._model.source:
                 kinds.append(_SOURCE)
-        self._change(*kinds, state=PLAYING, current=item_id, now=now, paused=False,
-                     **({"source": source} if source else {}))
+        self._change(*kinds, state=PLAYING, current=current, now=now, paused=False, words=words or None,
+                     position=0.0, since=self._clock(), **({"source": source} if source else {}))
+
+    def _history_words(self, item_id: str) -> list[dict[str, Any]] | None:
+        try:
+            line = self._history.get(item_id)
+        except Exception:  # noqa: BLE001
+            return None
+        return _words(line) if line is not None else None
+
+    def queue_changed(self) -> None:
+        """The narrator's queue changed: the queue tab is sent again, at most
+        every QUEUE_DEBOUNCE_SECONDS. Only marks and wakes: never blocks."""
+        self._change(_QUEUE)
+
+    def _position(self) -> float | None:
+        """Seconds into the line playing: the player's own when it says,
+        else the control's clock since the line started, at the rate."""
+        with self._cond:
+            m = self._model
+            if m.current is None or m.state == IDLE:
+                return None
+            estimate = m.position + ((self._clock() - m.since) * m.rate if m.since is not None else 0.0)
+        told = self.actions.position()
+        return round(float(told if told is not None else estimate), 2)
+
+    def _freeze_position(self, **fields: Any) -> dict[str, Any]:
+        """The position now, held: the fields for a pause, or for a change of
+        rate or a seek before the clock runs again."""
+        with self._cond:
+            m = self._model
+            pos = m.position + ((self._clock() - m.since) * m.rate if m.since is not None else 0.0)
+        return {"position": pos, "since": None, **fields}
 
     def held(self) -> None:
         """Another app's sound (or a meeting) holds the next line."""
@@ -243,7 +329,7 @@ class ControlDriver:
     def ended(self, line: HistoryLine | None = None) -> None:
         """The line playing has ended: heard (and in the history as `line`),
         set aside, cut off or stopped. The list is sent again."""
-        self._change(_ITEMS, _STATE, state=IDLE, now=None, paused=False,
+        self._change(_ITEMS, _STATE, state=IDLE, now=None, paused=False, words=None, position=0.0, since=None,
                      current=line.id if line is not None else None)
 
     def list_changed(self) -> None:
@@ -267,7 +353,9 @@ class ControlDriver:
         while True:
             with self._cond:
                 while not self._wake and not self._closed:
-                    self._cond.wait()
+                    self._cond.wait(self._queue_wait())
+                    if not self._wake and self._queue_due():
+                        self._wake = True
                 if self._closed:
                     return
                 self._wake = False
@@ -299,9 +387,17 @@ class ControlDriver:
                 self._events.extend(kept)
         if transport:
             try:
-                self._control(str(evt.get("action") or ""))
+                self._control(str(evt.get("action") or ""), evt.get("seconds"))
             except Exception as exc:  # noqa: BLE001 — the reader never dies on one press
                 self._say_once("transport", f"control: {evt.get('action')!r} failed: {exc!r}")
+            return
+        if evt.get("id") == CONTROL_ID and evt.get("event") == "queue":
+            # The queue tab's edits are the narrator's queue, changed in place:
+            # quick, no request, so done here too (contract 1.6).
+            try:
+                self._queue_event(evt)
+            except Exception as exc:  # noqa: BLE001
+                self._say_once("queue event", f"control: queue {evt.get('action')!r} failed: {exc!r}")
             return
         with self._cond:
             if self._closed:
@@ -309,6 +405,18 @@ class ControlDriver:
             self._events.append(evt)
             self._wake = True
             self._cond.notify()
+
+    def _queue_wait(self) -> float | None:
+        """While a queue send is held back, how long the worker may sleep."""
+        if _QUEUE not in self._model.pending or self._queue_sent_at is None:
+            return None
+        return max(0.0, self._queue_sent_at + QUEUE_DEBOUNCE_SECONDS - self._clock()) + 0.001
+
+    def _queue_due(self) -> bool:
+        return _QUEUE in self._model.pending and self._debounce_over()
+
+    def _debounce_over(self) -> bool:
+        return self._queue_sent_at is None or self._clock() - self._queue_sent_at >= QUEUE_DEBOUNCE_SECONDS
 
     def _say_once(self, key: str, msg: str) -> None:
         if self._log is not None and key not in self._said:
@@ -329,6 +437,9 @@ class ControlDriver:
         with self._cond:
             pending = set(self._model.pending)
             self._model.pending.clear()
+            if _QUEUE in pending and not self._debounce_over():
+                pending.discard(_QUEUE)
+                self._model.pending.add(_QUEUE)  # sent when the debounce is over
         try:
             if self._client is None or not self._client.connected:
                 self._open = False  # the connection was lost: open again, with everything
@@ -357,12 +468,16 @@ class ControlDriver:
                     return "held"
                 self._request(self._open_request())
                 self._open = True
+                self._send_queue()
                 self._say_once("opened", "control: the UI Utility's speech control is open")
                 self._sync_settings()
                 return "opened"
             sent = False
             for kind in _ORDER:
                 if kind in pending:
+                    if kind == _QUEUE:
+                        sent = self._send_queue() or sent
+                        continue
                     request = self._update_request(kind)
                     if request is not None:
                         self._request(request)
@@ -375,6 +490,28 @@ class ControlDriver:
                 self._drop_client()
             self._say_once(f"error {exc.kind}", f"control: {exc}")
             return exc.kind
+
+    def _send_queue(self) -> bool:
+        """The queue tab (contract 1.6): what waits, in play order. A copy of
+        the UI Utility before 1.6 refuses the request: then it is not sent
+        again on this connection, and the control is left alone."""
+        self._queue_sent_at = self._clock()
+        if not self._queue_offered:
+            return False
+        try:
+            items = list(self.actions.queue_items())
+        except Exception as exc:  # noqa: BLE001
+            self._say_once("queue items", f"control: the queue could not be read: {exc!r}")
+            return False
+        try:
+            self._request({"cmd": "queue", "id": CONTROL_ID, "items": items})
+        except ContractError as exc:
+            if exc.kind != "refused":
+                raise
+            self._queue_offered = False
+            self._say_once("queue refused", f"control: this UI Utility has no queue tab (before contract 1.6): {exc}")
+            return False
+        return True
 
     def _request(self, obj: dict[str, Any]) -> dict[str, Any]:
         return self._greeted_client().request(obj)
@@ -445,6 +582,7 @@ class ControlDriver:
         pieces = reply.get("pieces") if isinstance(reply, dict) else None
         self._pieces = {str(p) for p in pieces} if isinstance(pieces, list) else set()
         self._settings_open = False
+        self._queue_offered = True
         self._client = client
         return client
 
@@ -459,7 +597,12 @@ class ControlDriver:
             lines = self._history.load(limit=max(1, self._store.load().keep))
         except Exception:  # noqa: BLE001 — an unreadable history shows as empty
             lines = []
-        for line in lines:
+        keys: set[str] = set()
+        for line in sorted(lines, key=lambda h: h.spoken_at, reverse=True):
+            key = _line_key(line)
+            if key in keys:
+                continue  # the same spoken line written twice: one row, the newest
+            keys.add(key)
             item = {"id": line.id, "text": line.text, "at": _hhmm(line.spoken_at), "time": _rfc3339(line.spoken_at),
                     "clip": str(line.wav)}
             name = _sender(line)
@@ -478,10 +621,24 @@ class ControlDriver:
                 item["source"] = name
             entries.append((m.queued_at, item))
         entries.sort(key=lambda e: e[0], reverse=True)
-        out = [item for _, item in entries]
         with self._cond:
             now = dict(self._model.now) if self._model.now else None
-        return ([now] if now else []) + out
+            current, words = self._model.current, self._model.words
+        out: list[dict[str, Any]] = []
+        seen: set[str] = set()
+        for _, item in entries:  # newest first: one row per id
+            if item["id"] in seen:
+                continue
+            seen.add(item["id"])
+            if words and item["id"] == current:
+                item["words"] = words
+            out.append(item)
+        if now is not None:
+            if words:
+                now["words"] = words
+            if now["id"] not in seen:
+                out.insert(0, now)
+        return out
 
     def _source_obj(self) -> dict[str, Any]:
         with self._cond:
@@ -501,6 +658,7 @@ class ControlDriver:
             "current": current,
             "state": state,
             "rate": rate,
+            **({"position": pos} if (pos := self._position()) is not None else {}),
             "rates": list(RATES) if rate in RATES else [rate, *RATES],
             "show": {"list": self._store.load().show_list},
         }
@@ -513,10 +671,22 @@ class ControlDriver:
         if kind == _NOW:
             with self._cond:
                 now = dict(self._model.now) if self._model.now else None
-            return {"cmd": "item", "id": CONTROL_ID, "item": now} if now else None
+                current, words = self._model.current, self._model.words
+            if now is not None:
+                if words:
+                    now["words"] = words
+                return {"cmd": "item", "id": CONTROL_ID, "item": now}
+            if current is None or not words:
+                return None
+            row = next((r for r in self.items() if r.get("id") == current), None)
+            return {"cmd": "item", "id": CONTROL_ID, "item": row} if row is not None else None
+        position = self._position()
         with self._cond:
             m = self._model
-            return {"cmd": "state", "id": CONTROL_ID, "state": m.state, "current": m.current, "rate": m.rate}
+            state = {"cmd": "state", "id": CONTROL_ID, "state": m.state, "current": m.current, "rate": m.rate}
+        if position is not None:
+            state["position"] = position
+        return state
 
     # -- the control's events -------------------------------------------------------
 
@@ -533,7 +703,12 @@ class ControlDriver:
             rate = evt.get("rate")
             if isinstance(rate, (int, float)) and not isinstance(rate, bool) and rate > 0:
                 rate = float(self.actions.set_rate(float(rate)))
-                self._change(_STATE, rate=rate)
+                with self._cond:
+                    running = self._model.state == PLAYING and not self._model.paused
+                frozen = self._freeze_position(rate=rate)
+                if running:
+                    frozen["since"] = self._clock()
+                self._change(_STATE, **frozen)
                 self._keep_rate(rate)
         elif kind == "play-item":
             self._play_items([evt.get("item")])
@@ -588,30 +763,71 @@ class ControlDriver:
         elif item == "player":
             self._change()  # the next sync opens or closes both pieces
 
-    def _control(self, action: str) -> None:
+    def _control(self, action: str, seconds: Any = None) -> None:
+        """A transport press: a playback act on the line playing or the
+        queue, never on the narrator process (his 09:48)."""
         with self._cond:
-            state, paused, now = self._model.state, self._model.paused, self._model.now
+            state, paused = self._model.state, self._model.paused
+        playing_now = state != IDLE
         if action == "play":
             if self.actions.unstop() > 0:
                 return  # the lines his stop set aside play, in order
             if state == HELD and paused:
                 if self.actions.resume():
-                    self._change(_STATE, state=PLAYING, paused=False)
+                    with self._cond:
+                        position = self._model.position
+                    self._change(_STATE, state=PLAYING, paused=False, position=position, since=self._clock())
             elif state == IDLE:
                 self._replay_near(0)
         elif action == "hold":
             if state == PLAYING and self.actions.pause():
-                self._change(_STATE, state=HELD, paused=True)
+                self._change(_STATE, **self._freeze_position(state=HELD, paused=True))
         elif action == "stop":
             self.actions.stop()
-            self._change(_ITEMS, _STATE, state=IDLE, now=None, paused=False)
-        elif action == "skip-back":
-            if now is not None:
-                self.actions.restart()
-            else:
-                self._replay_near(+1)
-        elif action == "skip-forward" and now is not None:
-            self.actions.skip()
+            self._change(_ITEMS, _STATE, state=IDLE, now=None, paused=False, words=None, position=0.0, since=None)
+        elif action == "start":  # 1.6: to the start of the line playing
+            if playing_now and self.actions.restart():
+                self._restart_clock(0.0)
+        elif action == "end":  # 1.6: to the line's end, so the next one plays
+            if playing_now:
+                self.actions.skip()
+        elif action in ("skip-back", "skip-forward"):
+            step = _seek_seconds(seconds)
+            if step is not None:  # 1.6: within the line playing
+                if playing_now:
+                    delta = -step if action == "skip-back" else step
+                    if self.actions.seek(delta):
+                        with self._cond:
+                            pos = self._model.position + (
+                                (self._clock() - self._model.since) * self._model.rate if self._model.since is not None else 0.0)
+                        self._restart_clock(max(0.0, pos + delta))
+            elif action == "skip-back":
+                if playing_now:
+                    if self.actions.restart():
+                        self._restart_clock(0.0)
+                else:
+                    self._replay_near(+1)
+            elif playing_now:
+                self.actions.skip()
+
+    def _restart_clock(self, position: float) -> None:
+        """The line playing is now at `position`; its clock runs on unless held."""
+        with self._cond:
+            running = self._model.state == PLAYING and not self._model.paused
+        self._change(_STATE, position=position, since=self._clock() if running else None)
+
+    def _queue_event(self, evt: dict[str, Any]) -> None:
+        action = evt.get("action")
+        if action == "clear":
+            self.actions.queue_clear()
+        elif action == "remove":
+            ids = evt.get("items")
+            self.actions.queue_remove([i for i in ids if isinstance(i, str)] if isinstance(ids, list) else [])
+        elif action == "move":
+            item, to = evt.get("item"), evt.get("to")
+            if isinstance(item, str) and isinstance(to, int) and not isinstance(to, bool) and to >= 0:
+                self.actions.queue_move(item, to)
+        self._change(_QUEUE)  # the tab shows what the queue is now, even when nothing changed
 
     def _replay_near(self, step: int) -> None:
         """Replay the current history line (step 0) or the one before it (+1);

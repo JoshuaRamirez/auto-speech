@@ -97,7 +97,12 @@ module that owns it. Release-by-release history is in
   play-item and play-all act on the daemon. Never opened during a hold
   (`speech_control.py`). Each item carries its `time` (RFC 3339) for the
   Date and Time columns, and play-from plays every line from a chosen time
-  to the latest, oldest first, each once and to its end (ADR-027).
+  to the latest, oldest first, each once and to its end (ADR-027). With
+  contract 1.6 (ADR-028): a replayed line selects its own row (no new row),
+  the row playing carries its `words` and the state its `position`, the
+  transport goes to the line's start or end or 1, 5 or 10 seconds within
+  it, and the queue tab lists what waits in play order and clears, removes
+  or moves it in place; `auto-speech queue` lists it in the terminal.
 - **Stop, drained restart, live sessions** (ADR-024): a stop holds every
   later line on the missed list until `auto-speech resume` or the control's
   play (`stopped` in status and `narrate status`, kept across a restart);

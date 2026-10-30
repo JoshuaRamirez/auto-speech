@@ -12,6 +12,7 @@ Provides:
 from __future__ import annotations
 
 import collections
+import itertools
 import logging
 import queue
 import threading
@@ -24,6 +25,13 @@ from typing import Any
 from config_constants import DEFAULT_SPEED, DEFAULT_VOICE_ID
 
 logger = logging.getLogger(__name__)
+
+
+_queue_ids = itertools.count(1)
+
+
+def _next_queue_id() -> str:
+    return f"q{next(_queue_ids)}"
 
 
 class Priority(IntEnum):
@@ -51,6 +59,7 @@ class QueueItem:
     origin_file: str = ""  # the file the caller says this line came from (desk-say), for the history sidecar (ADR-020)
     history_id: str = ""  # a history line played again from the speech control: not exported twice (ADR-022)
     line_id: str = ""  # the caller's id for this line: one id, one play (ADR-025)
+    queue_id: str = field(default_factory=_next_queue_id)  # stable while it waits: the control's queue tab names it (contract 1.6)
     control_run: int = 0  # the speech control's play-from/play-all run this replay belongs to; 0: none (ADR-027)
 
     def __post_init__(self) -> None:
@@ -75,11 +84,26 @@ class PriorityArbiter:
         self._active_item: QueueItem | None = None
         self._active_priority: int | None = None
         self._purge_callbacks: list[Callable[[int], None]] = []
+        self._change_callbacks: list[Callable[[], None]] = []
 
     def register_purge_callback(self, cb: Callable[[int], None]) -> None:
         """Register callback invoked whenever items are pruned or purged."""
         with self._lock:
             self._purge_callbacks.append(cb)
+
+    def register_change_callback(self, cb: Callable[[], None]) -> None:
+        """Called, outside the lock, whenever what waits changes: an item
+        queued, taken to play, removed, moved, shed or purged. It must not
+        block: the caller is whoever changed the queue."""
+        with self._lock:
+            self._change_callbacks.append(cb)
+
+    def _notify_changed(self) -> None:
+        for cb in list(self._change_callbacks):
+            try:
+                cb()
+            except Exception:  # one callback must not break the queue
+                logger.debug("change callback failed", exc_info=True)
 
     def _notify_purged(self, count: int) -> None:
         for cb in self._purge_callbacks:
@@ -87,6 +111,7 @@ class PriorityArbiter:
                 cb(count)
             except Exception:  # one callback must not break purge
                 logger.debug("purge callback failed", exc_info=True)
+        self._notify_changed()
 
     @property
     def active_priority(self) -> int | None:
@@ -147,6 +172,8 @@ class PriorityArbiter:
 
         if dropped_one:
             self._notify_purged(1)
+        else:
+            self._notify_changed()
 
         return q_item
 
@@ -207,6 +234,7 @@ class PriorityArbiter:
                 self._p4.appendleft(q_item)
 
             self._not_empty.notify()
+        self._notify_changed()
 
     def dequeue(
         self,
@@ -235,7 +263,8 @@ class PriorityArbiter:
 
             self._active_item = q_item
             self._active_priority = q_item.priority
-            return q_item.payload if (unwrap and isinstance(q_item, QueueItem)) else q_item
+        self._notify_changed()
+        return q_item.payload if (unwrap and isinstance(q_item, QueueItem)) else q_item
 
     def purge_lower_queues(self) -> int:
         """Purges P3 (Autoplay) and P4 (Tool Narration) queues strictly for P1 barge-in."""
@@ -269,6 +298,38 @@ class PriorityArbiter:
         if removed:
             self._notify_purged(len(removed))
         return removed
+
+    def waiting(self) -> list[QueueItem]:
+        """What waits, in the order it will play: P1, then P2, P3 and P4,
+        each first in, first out. The item in hand is not in it."""
+        with self._lock:
+            return [q for band in (self._p1, self._p2, self._p3, self._p4) for q in band
+                    if isinstance(q, QueueItem) and q.payload is not None]
+
+    def move(self, queue_id: str, to: int) -> int | None:
+        """Move the waiting item `queue_id` to index `to` of the play order.
+        An item stays in its own band: a line moved past its band's edge
+        stops at that edge, since a narration band is purged by a barge-in
+        and shed when full, and an explicit line moved there could be lost.
+        Returns its index in the play order after the move; None when it is
+        not waiting."""
+        with self._lock:
+            start = 0
+            for band in (self._p1, self._p2, self._p3, self._p4):
+                at = next((i for i, q in enumerate(band) if isinstance(q, QueueItem) and q.queue_id == queue_id), None)
+                if at is None:
+                    start += len(band)
+                    continue
+                item = band[at]
+                del band[at]
+                within = min(max(int(to) - start, 0), len(band))
+                band.insert(within, item)
+                moved = start + within
+                break
+            else:
+                return None
+        self._notify_changed()
+        return moved
 
     def clear(self) -> None:
         """Clears all priority bands."""

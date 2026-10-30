@@ -1558,7 +1558,7 @@ class _RecordingControl:
     def __init__(self) -> None:
         self.calls: list[tuple] = []
 
-    def playing(self, text, source) -> None:
+    def playing(self, text, source, item_id=None, words=None) -> None:
         self.calls.append(("playing", text, source))
 
     def held(self) -> None:

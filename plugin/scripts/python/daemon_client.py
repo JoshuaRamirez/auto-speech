@@ -212,6 +212,11 @@ class DaemonClient:
             payload["origin_file"] = origin_file
         return self._send_request(payload)
 
+    def queue(self) -> DaemonResponse:
+        """What waits to be played, in the order it will play: raw["items"],
+        each {"id", "text", "time", "source"} (the speech control's queue tab)."""
+        return self._send_request({"action": "queue"})
+
     def status(self, line_id: Optional[str] = None) -> DaemonResponse:
         """Retrieves daemon health, queue depths, and current playback state;
         with `line_id`, raw["line"] says where that line is (ADR-025)."""
