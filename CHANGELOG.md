@@ -169,6 +169,15 @@ The Chrome extension under `chrome-extension/` is versioned independently
   being queued, ends the line playing, and takes every waiting replay out
   (`stopped: cleared <n> queued replays`). Live lines waiting go on the
   missed list as before. The narrator process is never touched.
+- **A second "Play from" replaces the first run's waiting replays instead
+  of stacking the day again (ADR-027, #m1030-0939-c4f9).** His 2026-10-30
+  09:37 and 09:41 presses left 139 lines queued: the second press's 82
+  replays went behind the 57 still waiting. A play-from or play-all from the
+  speech control is now a run: a new run takes the replays still waiting
+  from an earlier run out of the queue, and the narrator's log says
+  `control: replaced <n> queued replays`. The line playing now plays to its
+  end; a fresh line, a single play-item and a missed line are never taken
+  out. A play-item still queues behind whatever is waiting.
 - **A replay stopped part way no longer lands on the missed list
   (ADR-027).** His stop during a play-all or play-from set each queued
   replay aside as a new missed line, although it was heard and in the

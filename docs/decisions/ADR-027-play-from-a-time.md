@@ -52,3 +52,26 @@ act that may replay lines; voice and rate unchanged.
   explicit line (desk-say), or until the run ends if it is narration.
 - Tests: `tests/test_play_from.py` (a live worker into a recording sink,
   silent) and `tests/test_speech_control.py` (the event and `time`).
+
+## Amendment, 2026-10-30: a new run replaces the old (#m1030-0939-c4f9)
+Seen live: he pressed Play from at 09:37:40 (82 lines) and again at 09:41:48
+while the first run played; the second appended 82 replays behind the 57
+still waiting (`queued: 139`).
+
+- **A play-from or a play-all is a run.** `ControlDriver._as_run` calls
+  `ControlActions.begin_run` before queueing and `end_run` after. The
+  narrator numbers the run, tags each history replay queued in it
+  (`QueueItem.control_run`), and takes every queued replay of an earlier run
+  out of the queue (`PriorityArbiter.remove_where`, the item in hand
+  untouched). One log line when any were taken: `control: replaced <n>
+  queued replays`.
+- **The line playing now plays to its end.** Explicit plays never cut one
+  another off (above); a new run does not either.
+- **Only a run's own replays go.** A fresh line from a desk, a single
+  play-item, a skip-back replay and a missed line (it goes through the
+  speak path, carries its line id and leaves the missed list only once
+  heard) are never taken out, so ADR-025/026's one play per line holds.
+- **play-item is not a run.** It is a click on one line: it queues behind
+  whatever is waiting, as before, and replaces nothing. Replacing a run with
+  a single click would drop the day he asked for; queueing it keeps both.
+- Tests: `tests/test_play_from.py`, `TestANewRunReplacesTheOld`.

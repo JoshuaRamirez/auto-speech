@@ -18,6 +18,7 @@ from __future__ import annotations
 import os
 import sys
 import tempfile
+import threading
 import time
 from pathlib import Path
 
@@ -35,7 +36,7 @@ from missed_speech import REASON_LONGEST_WAIT, MissedLine  # noqa: E402
 from priority_arbiter import QueueItem  # noqa: E402
 from speech_control import CONTROL_ID, MISSED_PREFIX, ControlDriver  # noqa: E402
 from speech_history import HistoryStore, SpeechHistory  # noqa: E402
-from test_line_id import _Daemon  # noqa: E402
+from test_line_id import _Daemon, _Sink  # noqa: E402
 
 FROM = "2026-10-30T08:00:00-07:00"
 
@@ -54,6 +55,9 @@ class _Live(_Daemon):
     def say(self, text: str, line_id: str) -> None:
         self.speak(text, line_id)
         self.wait_for(lambda: self.line(line_id)["state"] == DONE, 5, lambda: self.line(line_id))
+        # The history line is written just after the ledger says done: wait for it too.
+        heard = len(self.svc._history.load())
+        self.wait_for(lambda: any(h.text == text for h in self.svc._history.load()[max(0, heard - 1):]), 5)
 
     def driver(self, logged: list[str]) -> ControlDriver:
         return ControlDriver(
@@ -123,6 +127,95 @@ class TestPlayFrom(_Live):
         self.settle()
         self.assertEqual(len(self.sink.played), 1)
         self.assertEqual(len(self.svc._history.load()), 1)
+
+
+class _GatedSink(_Sink):
+    """A sink whose plays wait at a gate once it is shut: the line in hand
+    stays "playing" while the test queues more behind it."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.gate = threading.Event()
+        self.gate.set()
+
+    def play(self, wav_path, timeout=None, **kw) -> None:
+        super().play(wav_path, timeout, **kw)
+        self.gate.wait(10)
+
+
+class TestANewRunReplacesTheOld(_Live):
+    """His 2026-10-30 09:41: a second play-from while the first was still
+    playing stacked 82 more replays behind the 57 still waiting
+    (#m1030-0939-c4f9). A new run from the control (play-from or play-all)
+    replaces the replays still waiting from an earlier run; the line playing
+    now plays to its end; nothing that is not a run's replay is dropped."""
+
+    def service(self):
+        self.sink = _GatedSink()
+        return super().service()
+
+    def lines(self, tag: str, n: int = 4):
+        for k in range(1, n + 1):
+            self.say(f"Line {k}.", f"2026-10-30-0{tag}{k}.000-desk")
+        return self.svc._history.load()
+
+    def shut_on_first(self, d: ControlDriver, evt: dict) -> None:
+        """Shut the gate, start a run, and wait until its first line is in hand."""
+        self.sink.gate.clear()
+        before = len(self.sink.played)
+        d.handle_event(evt)
+        self.wait_for(lambda: len(self.sink.played) > before, 5)
+
+    def test_a_second_play_from_replaces_the_first_runs_waiting_replays(self):
+        a, b, c, e = self.lines("9000")
+        before = len(self.sink.played)
+        logged: list[str] = []
+        d = self.driver(logged)
+        self.shut_on_first(d, {"event": "play-from", "id": CONTROL_ID, "from": FROM,
+                               "items": [a.id, b.id, c.id, e.id]})
+        self.assertEqual(self.sink.played[before:], [a.wav], "the first run's first line is playing")
+        # Between the runs: a fresh line from a desk, and a single play-item.
+        self.speak("Fresh from a desk.", "2026-10-30-094000.000-desk")
+        d.handle_event({"event": "play-item", "id": CONTROL_ID, "item": b.id})
+        self.wait_for(lambda: self.svc._tts_queue.qsize() == 5, 5, lambda: self.svc._tts_queue.qsize())
+
+        d.handle_event({"event": "play-from", "id": CONTROL_ID, "from": FROM, "items": [c.id, e.id]})
+        self.assertEqual(self.svc._tts_queue.qsize(), 4, "fresh line, play-item, and the new run's two")
+        self.sink.gate.set()
+        self.wait_for(lambda: len(self.sink.played) >= before + 5, 5)
+        self.settle()
+
+        played = self.sink.played[before:]
+        self.assertEqual(len(played), 5, played)
+        self.assertEqual(played[0], a.wav, "the line playing at the second press played to its end")
+        self.assertNotIn(played[1], [h.wav for h in (a, b, c, e)], "the fresh line, synthesized, once")
+        self.assertEqual(played[2:], [b.wav, c.wav, e.wav], "the play-item, then the new run, in order")
+        self.assertEqual(logged, [
+            f"control: play-from {FROM} (4 lines)",
+            "control: replaced 3 queued replays",
+            f"control: play-from {FROM} (2 lines)",
+        ])
+        self.assertEqual(self.line("2026-10-30-094000.000-desk")["state"], DONE)
+        texts = [h.text for h in self.svc._history.load()]
+        self.assertEqual(texts.count("Fresh from a desk."), 1, "the fresh line heard and kept once")
+
+    def test_play_all_and_play_from_replace_each_other(self):
+        a, b, c, e = self.lines("9100")
+        before = len(self.sink.played)
+        logged: list[str] = []
+        d = self.driver(logged)
+        self.shut_on_first(d, {"event": "play-all", "id": CONTROL_ID, "items": [a.id, b.id, c.id, e.id]})
+        d.handle_event({"event": "play-from", "id": CONTROL_ID, "from": FROM, "items": [b.id]})
+        d.handle_event({"event": "play-all", "id": CONTROL_ID, "items": [e.id]})
+        self.sink.gate.set()
+        self.wait_for(lambda: len(self.sink.played) >= before + 2, 5)
+        self.settle()
+        self.assertEqual(self.sink.played[before:], [a.wav, e.wav])
+        self.assertEqual(logged, [
+            "control: replaced 3 queued replays",
+            f"control: play-from {FROM} (1 lines)",
+            "control: replaced 1 queued replays",
+        ])
 
 
 if __name__ == "__main__":

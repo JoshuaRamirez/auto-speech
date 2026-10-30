@@ -51,6 +51,7 @@ class QueueItem:
     origin_file: str = ""  # the file the caller says this line came from (desk-say), for the history sidecar (ADR-020)
     history_id: str = ""  # a history line played again from the speech control: not exported twice (ADR-022)
     line_id: str = ""  # the caller's id for this line: one id, one play (ADR-025)
+    control_run: int = 0  # the speech control's play-from/play-all run this replay belongs to; 0: none (ADR-027)
 
     def __post_init__(self) -> None:
         if self.enqueued_at is None:
