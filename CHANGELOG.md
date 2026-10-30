@@ -175,6 +175,20 @@ The Chrome extension under `chrome-extension/` is versioned independently
   HOME to a temporary directory at import.
 
 ### Fixed
+- **`auto-speech replay` plays from the speech history, not the old cache
+  (T38).** At 14:28 on 2026-10-30, `auto-speech replay --ordinal 1` played a
+  clip made on 2026-10-19 instead of the line spoken a minute earlier: it
+  took the newest entry of the old content-addressed cache
+  (`config/cache/<hash>/full.wav`), not the speech history the speech player
+  lists. It now plays the Nth most recent history line (1 = newest). With the
+  narrator running it goes through the narrator's new `play_history` socket
+  action, the speech control's own play-item path, so it queues behind and
+  obeys the narrator like a play at the player; with no narrator it plays
+  here. A history that is off, empty or shorter than asked exits 2 with a
+  plain message and never falls back to the cache. A narrator older than
+  `play_history` is asked its status first and never sent the action (it
+  would speak the request aloud); replay says to run `auto-speech narrate
+  restart`. Test: `tests/test_replay_from_history.py`.
 - **`auto-speech stop` stops an idle narrator too (#m1030-1421-30ba).** With
   nothing playing, it printed "no active playback session", exited 2 and
   never sent the narrator its interrupt, so the next line played. It now

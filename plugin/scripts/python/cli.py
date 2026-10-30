@@ -19,8 +19,7 @@ from autoplay_config import load_config as load_autoplay_config
 from autoplay_enrollment import SessionEnrollment, format_status as format_enrollment_status
 from autoplay_gate import AutoplayGate
 from autoplay_scope import SoloScope, format_status as format_scope_status
-from cache_store import CacheStore
-from daemon_client import DaemonClient, Priority
+from daemon_client import NARRATOR_TOO_OLD, DaemonClient, Priority
 from doctor import Doctor
 from mpv_ipc import MpvIpc, MpvIpcError
 from native_audio_sink import AudioSinkError, NativeAudioSink
@@ -29,7 +28,7 @@ from self_update import needs_sync
 from missed_speech import run_action as run_missed_action
 from sound_yield import run_action as run_sound_yield_action
 from speaker import run_action as run_speaker_action
-from speech_history import run_action as run_history_action
+from speech_history import SpeechHistory, run_action as run_history_action
 from speak import send_speech_request
 
 EXIT_OK = 0
@@ -37,6 +36,7 @@ EXIT_FAILURE = 1
 EXIT_NO_SESSION = 2
 EXIT_INVALID_INPUT = 2
 EXIT_NO_CACHE_ENTRY = 2
+EXIT_NO_HISTORY_LINE = 2  # replay: the speech history is off, empty, or shorter than asked
 EXIT_IPC_FAIL = 3
 EXIT_BAD_ARG = 4
 EXIT_PLAYBACK_FAIL = 6
@@ -215,30 +215,42 @@ def handle_replay(
     client: Any | None = None,
     sink: Any | None = None,
 ) -> int:
+    """Plays the Nth most recent line of the speech history again (1 = the
+    newest): the lines the speech player lists, never the old
+    content-addressed cache (T38). With the narrator running, the line goes
+    through it as the speech control's play-item does (`play_history`), so it
+    queues behind and obeys the narrator; with no narrator, it plays here."""
     if args.ordinal < 1:
         print(f"replay: --ordinal must be >= 1, got {args.ordinal}", file=sys.stderr)
         return EXIT_INVALID_INPUT
 
-    store = CacheStore(_default_cache_root())
-    entries = store.list_by_recency()
-    if not entries:
+    history = SpeechHistory()
+    if not history.settings().enabled:
         print(
-            "replay: no cache entries found. Run /speak at least once first.",
+            "replay: the speech history is off, so the lines spoken are not kept to replay. "
+            "Turn it on with `auto-speech history on`.",
             file=sys.stderr,
         )
-        return EXIT_NO_CACHE_ENTRY
-    if args.ordinal > len(entries):
+        return EXIT_NO_HISTORY_LINE
+    lines = list(reversed(history.load(limit=args.ordinal)))  # newest first
+    if not lines:
+        print("replay: the speech history is empty; nothing has been spoken yet.", file=sys.stderr)
+        return EXIT_NO_HISTORY_LINE
+    if args.ordinal > len(lines):
         print(
-            f"replay: only {len(entries)} cache entries; you asked for #{args.ordinal}",
+            f"replay: the speech history holds {len(lines)} line{'s' if len(lines) != 1 else ''}; "
+            f"you asked for #{args.ordinal}",
             file=sys.stderr,
         )
-        return EXIT_NO_CACHE_ENTRY
+        return EXIT_NO_HISTORY_LINE
 
-    wav_path, entry = entries[args.ordinal - 1]
+    line = lines[args.ordinal - 1]
+    if not line.wav.is_file():
+        print(f"replay: history line {line.id} has no audio file ({line.wav})", file=sys.stderr)
+        return EXIT_NO_HISTORY_LINE
     print(
-        f"[replay] ordinal={args.ordinal}  voice={entry.voice_id}  "
-        f"dur={entry.duration_seconds:.1f}s  created={entry.created_at}  "
-        f"path={wav_path}",
+        f"[replay] ordinal={args.ordinal}  line={line.id}  spoken={line.spoken_at:.0f}  "
+        f"text={line.text[:60]!r}  path={line.wav}",
         file=sys.stderr,
     )
 
@@ -251,46 +263,55 @@ def handle_replay(
         return EXIT_OK
 
     if sink is not None:
-        try:
-            sink.play(wav_path)
-            return EXIT_OK
-        except AudioSinkError as exc:
-            print(f"replay: playback failed: {exc}", file=sys.stderr)
-            return EXIT_PLAYBACK_FAIL
-        except KeyboardInterrupt:
-            sink.interrupt()
-            return EXIT_INTERRUPTED
+        return _replay_on_sink(sink, line.wav)
 
     if client is not None:
-        try:
-            resp = client.play_cache(entry.source_hash)
-            if resp.status in ("ok", "queued"):
-                return EXIT_OK
-            return EXIT_FAILURE
-        except KeyboardInterrupt:
-            return EXIT_INTERRUPTED
-        except Exception as exc:
-            print(f"replay: playback failed: {exc}", file=sys.stderr)
-            return EXIT_PLAYBACK_FAIL
+        return _replay_through_narrator(client, line.id)
 
     daemon_sock = _get_daemon_socket_path()
     if daemon_sock.is_socket():
-        try:
-            c = DaemonClient(socket_path=daemon_sock)
-            resp = c.play_cache(entry.source_hash)
-            if resp.status in ("ok", "queued"):
-                return EXIT_OK
-        except Exception:
-            pass
+        c = DaemonClient(socket_path=daemon_sock)
+        if c.is_alive():
+            return _replay_through_narrator(c, line.id)
+        # A stale socket file: no narrator answers, so none to queue behind.
 
+    return _replay_on_sink(NativeAudioSink(), line.wav)
+
+
+def _replay_through_narrator(client: Any, line_id: str) -> int:
+    """A history line, queued by the narrator as the control's play-item.
+    A failure is reported, never followed by a play here: the narrator may
+    have queued it already."""
     try:
-        s = NativeAudioSink()
-        s.play(wav_path)
+        resp = client.play_history(line_id)
+    except KeyboardInterrupt:
+        return EXIT_INTERRUPTED
+    except Exception as exc:  # noqa: BLE001
+        print(f"replay: playback failed: {exc}", file=sys.stderr)
+        return EXIT_PLAYBACK_FAIL
+    if resp.status in ("ok", "queued"):
+        return EXIT_OK
+    message = getattr(resp, "message", "") or ""
+    if getattr(resp, "error_code", None) == NARRATOR_TOO_OLD:
+        print(
+            "replay: the running narrator is older than replay from the speech history; "
+            "restart it with `auto-speech narrate restart` and try again.",
+            file=sys.stderr,
+        )
+    else:
+        print(f"replay: the narrator did not queue line {line_id}: {message or resp.status}", file=sys.stderr)
+    return EXIT_FAILURE
+
+
+def _replay_on_sink(sink: Any, wav: Path) -> int:
+    try:
+        sink.play(wav)
         return EXIT_OK
     except AudioSinkError as exc:
         print(f"replay: playback failed: {exc}", file=sys.stderr)
         return EXIT_PLAYBACK_FAIL
     except KeyboardInterrupt:
+        sink.interrupt()
         return EXIT_INTERRUPTED
 
 
@@ -1152,7 +1173,9 @@ def build_parser() -> argparse.ArgumentParser:
     )
 
     # 2. replay
-    p_replay = subparsers.add_parser("replay", help="Replay recent cached speech.")
+    p_replay = subparsers.add_parser(
+        "replay", help="Play a recent line from the speech history again (the lines the speech player lists)."
+    )
     p_replay.add_argument(
         "--ordinal",
         type=int,
