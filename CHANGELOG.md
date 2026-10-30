@@ -192,6 +192,16 @@ The Chrome extension under `chrome-extension/` is versioned independently
   being queued, ends the line playing, and takes every waiting replay out
   (`stopped: cleared <n> queued replays`). Live lines waiting go on the
   missed list as before. The narrator process is never touched.
+  The 09:47 press itself was most likely lost before it left the UI
+  Utility's window (T32, #m1030-1008-fac1): the process record shows the
+  replays playing on uncut, and the narrator logged no stop and no failed
+  request. Since 0.6.0 the control is a normal window in a menu-bar app,
+  and on macOS a first click on an inactive app's window activates it
+  without reaching a SwiftUI button. The fix is the UI Utility's; here,
+  `tests/test_stop_over_the_wire.py` proves the narrator's half end to end
+  over a real socket (it fails on a2308e3, before #16), and
+  `tests/test_live_lines_survive.py` that live lines waiting behind replays
+  play on the play after his stop (T27).
 - **A second "Play from" replaces the first run's waiting replays instead
   of stacking the day again (ADR-027, #m1030-0939-c4f9).** His 2026-10-30
   09:37 and 09:41 presses left 139 lines queued: the second press's 82
