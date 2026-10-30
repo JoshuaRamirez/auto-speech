@@ -73,8 +73,8 @@ from narrator_summarizer import Summarizer, load_summarizer
 from sound_yield import ABORTED, DEFAULT_MAX_WAIT_SECONDS, REASON_MEETING as HOLD_REASON_MEETING, SoundYieldGate
 from priority_arbiter import Priority, PriorityArbiter, QueueItem, QueueProxyFacade
 from speaker import Announcer, Plan
-from speech_history import SpeechHistory, clean_origin_file
-from speech_control import ControlActions, ControlDriver
+from speech_history import SpeechHistory, clean_origin_file, estimate_word_timings
+from speech_control import MISSED_PREFIX, ControlActions, ControlDriver, rfc3339
 from speech_player import PlayerLauncher
 from unix_ipc_server import _DaemonSocketServer, control_payload
 from speech_priority import (
@@ -318,6 +318,7 @@ class NarratorService:
         arbiter = getattr(self, "_priority_arbiter", None)
         if arbiter is None:
             arbiter = PriorityArbiter(maxsize=max_q)
+            arbiter.register_change_callback(self._queue_changed)
             self._priority_arbiter = arbiter
         proxy = QueueProxyFacade(arbiter, maxsize=max_q)
         self.__dict__["_queue_proxy"] = proxy
@@ -356,6 +357,7 @@ class NarratorService:
         # _enqueue_phase for the drop-oldest backpressure policy.
         self._max_queue = int(self._config.get("max_queue_depth", 32))
         self._priority_arbiter = PriorityArbiter(maxsize=self._max_queue)
+        self._priority_arbiter.register_change_callback(self._queue_changed)
         self.__dict__["_queue_proxy"] = QueueProxyFacade(self._priority_arbiter, maxsize=self._max_queue)
         self._dropped_phases = 0
         self._state_lock = threading.Lock()
@@ -808,6 +810,9 @@ class NarratorService:
 
         elif action == "missed_add":
             return self._missed_add(payload)
+
+        elif action == "queue":
+            return {"status": "ok", "action": "queue", "items": self._queue_view(), "playing": self._line_in_flight()}
 
         elif action == "status":
             asked = clean_line_id(payload.get("line_id"))
@@ -1839,7 +1844,20 @@ class NarratorService:
         def on_start() -> None:
             if item is not None and getattr(item, "line_id", ""):
                 self._line_ledger().playing(item.line_id)
-            self._control_call("playing", text, self._sender_name(sid))
+            # A heard line played again is its own row in the control (no new
+            # row); a missed line playing is its missed row; a fresh line is
+            # a now-row with its sender and its words, estimated from the
+            # clip as the history does (contract 1.6).
+            replayed = getattr(item, "history_id", "") if item is not None else ""
+            missed_id = getattr(item, "missed_id", "") if item is not None else ""
+            if replayed:
+                self._control_call("playing", text, None, replayed)
+            elif missed_id:
+                self._control_call("playing", text, self._sender_name(sid), MISSED_PREFIX + missed_id,
+                                   estimate_word_timings(text, _wav_duration_seconds(Path(path))))
+            else:
+                self._control_call("playing", text, self._sender_name(sid), None,
+                                   estimate_word_timings(text, _wav_duration_seconds(Path(path))))
 
         heard = False
         try:
@@ -1971,6 +1989,12 @@ class NarratorService:
             play_missed=self._play_missed_ids,
             begin_run=self._begin_control_run,
             end_run=self._end_control_run,
+            seek=lambda seconds: self._sink_seek(seconds),
+            position=self._sink_position,
+            queue_items=self._queue_view,
+            queue_clear=self._queue_clear,
+            queue_remove=self._queue_remove,
+            queue_move=self._queue_move,
         )
 
     def _sink_verb(self, name: str) -> bool:
@@ -2007,6 +2031,115 @@ class NarratorService:
         self._handle_p2_preemption(q_item)
         self._update_depth(self._tts_queue.qsize())
         self._last_event_ts = time.time()
+
+    def _sink_seek(self, seconds: float) -> bool:
+        seek = getattr(getattr(self, "_sink", None), "seek", None)
+        if seek is None:
+            return False
+        try:
+            return bool(seek(float(seconds)))
+        except Exception as exc:  # noqa: BLE001
+            _log(f"control: sink seek error: {exc!r}")
+            return False
+
+    def _sink_position(self) -> Optional[float]:
+        position = getattr(getattr(self, "_sink", None), "position", None)
+        if position is None:
+            return None
+        try:
+            value = position()
+        except Exception:  # noqa: BLE001
+            return None
+        return float(value) if isinstance(value, (int, float)) and not isinstance(value, bool) else None
+
+    # -- the queue tab (contract 1.6, his 09:55) -----------------------------------
+
+    def _queue_changed(self) -> None:
+        """The arbiter's change hook: tell the control. Never blocks: the
+        control only marks its queue to be sent and wakes its worker."""
+        self._control_call("queue_changed")
+
+    def _queue_item_text(self, q: QueueItem) -> str:
+        if q.line_text:
+            return q.line_text
+        payload = q.payload
+        if isinstance(payload, str) and not payload.endswith(".wav"):
+            return payload
+        if isinstance(payload, Path) or isinstance(payload, str):
+            return Path(payload).name
+        return "narration, still to be summarised"
+
+    def _queue_item_source(self, q: QueueItem) -> Optional[str]:
+        if q.history_id:
+            names = self.__dict__.setdefault("_replay_senders", {})
+            if q.history_id not in names:
+                name = None
+                history = getattr(self, "_history", None)
+                try:
+                    line = history.get(q.history_id) if history is not None else None
+                    sender = line.sidecar.get("sender") if line is not None else None
+                    name = sender.get("name") if isinstance(sender, dict) else None
+                except Exception:  # noqa: BLE001
+                    name = None
+                names[q.history_id] = name
+            return names[q.history_id]
+        return self._sender_name(q.session_id)
+
+    def _queue_view(self) -> list[dict[str, Any]]:
+        """What waits, in the order it will play, as the control's queue tab
+        lists it: the arbiter's own bands, never a copy kept beside them."""
+        arbiter = getattr(self, "_priority_arbiter", None)
+        if arbiter is None:
+            return []
+        out: list[dict[str, Any]] = []
+        for q in arbiter.waiting():
+            row: dict[str, Any] = {"id": q.queue_id, "text": self._queue_item_text(q)}
+            stamp = rfc3339(float(q.enqueued_at or q.timestamp or 0.0))
+            if stamp:
+                row["time"] = stamp
+            source = self._queue_item_source(q)
+            if source:
+                row["source"] = source
+            out.append(row)
+        return out
+
+    def _queue_taken(self, removed: list[QueueItem], reason: str) -> None:
+        """Lines he took out of the queue: not played, not on the missed list
+        (he chose it). The ledger lets the same line id be sent again."""
+        for q in removed:
+            if q.line_id:
+                self._line_ledger().dropped(q.line_id, reason)
+        self._update_depth(self._tts_queue.qsize())
+
+    def _queue_clear(self) -> int:
+        arbiter = getattr(self, "_priority_arbiter", None)
+        if arbiter is None:
+            return 0
+        removed = arbiter.remove_where(lambda q: q.payload is not None)
+        self._queue_taken(removed, "cleared")
+        _log(f"queue: cleared {len(removed)}")
+        return len(removed)
+
+    def _queue_remove(self, ids: list[str]) -> int:
+        arbiter = getattr(self, "_priority_arbiter", None)
+        wanted = {i for i in ids if isinstance(i, str) and i}
+        if arbiter is None or not wanted:
+            return 0
+        removed = arbiter.remove_where(lambda q: q.queue_id in wanted and q.payload is not None)
+        self._queue_taken(removed, "removed")
+        _log(f"queue: removed {len(removed)} ({', '.join(q.queue_id for q in removed) or 'none waiting'})")
+        return len(removed)
+
+    def _queue_move(self, queue_id: str, to: int) -> Optional[int]:
+        arbiter = getattr(self, "_priority_arbiter", None)
+        if arbiter is None:
+            return None
+        moved = arbiter.move(queue_id, to)
+        if moved is None:
+            _log(f"queue: moved nothing ({queue_id} is not waiting)")
+        else:
+            _log(f"queue: moved {queue_id} to {moved}" + (f" (asked {to}; a line stays in its band)" if moved != to else ""))
+        return moved
 
     def _begin_control_run(self) -> int:
         """A new play-from or play-all from the control: the replays still

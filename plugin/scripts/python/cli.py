@@ -838,6 +838,41 @@ def handle_missed_add(args: argparse.Namespace, client: Any | None = None) -> in
     return EXIT_OK
 
 
+def handle_queue(args: argparse.Namespace, client: Any | None = None) -> int:
+    """`auto-speech queue`: the lines waiting to be played, in the order they
+    will play, as the speech control's queue tab shows them. A read: it never
+    starts the narrator."""
+    if client is None:
+        client = DaemonClient()
+        if not client.socket_path.is_socket():
+            print("queue: the narrator is not running; nothing waits")
+            return EXIT_OK
+    try:
+        resp = client.queue()
+    except Exception as exc:  # noqa: BLE001
+        print(f"queue: the narrator did not answer: {exc}", file=sys.stderr)
+        return EXIT_FAILURE
+    if resp.status != "ok":
+        print(resp.message or f"queue: {resp.error_code}", file=sys.stderr)
+        return EXIT_FAILURE
+    items = (resp.raw or {}).get("items") or []
+    if getattr(args, "json", False):
+        print(json.dumps(items, indent=2))
+        return EXIT_OK
+    if not items:
+        print("queue: nothing waits")
+        return EXIT_OK
+    print(f"queue: {len(items)} line{'s' if len(items) != 1 else ''} waiting, in the order they will play")
+    for n, item in enumerate(items, 1):
+        stamp = str(item.get("time") or "")[11:19] or "--:--:--"
+        source = item.get("source") or "-"
+        text = " ".join(str(item.get("text") or "").split())
+        if len(text) > 90:
+            text = text[:89] + "…"
+        print(f"{n:>4}. {stamp}  {source}  {text}  [{item.get('id')}]")
+    return EXIT_OK
+
+
 def handle_missed(args: argparse.Namespace, client: Any | None = None, missed: Any | None = None) -> int:
     """`auto-speech missed [list | play | clear | add] [--play | --clear]`: the
     lines held or set aside (same verbs as the MCP tool `missed`)."""
@@ -1294,6 +1329,12 @@ def build_parser() -> argparse.ArgumentParser:
     md_mode.add_argument("--play", action="store_true", help="Replay the missed lines, oldest first, over any other sound.")
     md_mode.add_argument("--clear", action="store_true", help="Forget every line on the missed list.")
 
+    p_q = subparsers.add_parser(
+        "queue",
+        help="The lines waiting to be played, in the order they will play (the speech control's queue tab).",
+    )
+    p_q.add_argument("--json", action="store_true", help="The waiting lines as JSON.")
+
     p_sp = subparsers.add_parser(
         "speaker",
         help="Name the desk ('Master Desk here,') only when the speaker changes or after a quiet gap.",
@@ -1411,6 +1452,8 @@ def main(
             return handle_yield(args)
         elif args.subcommand == "missed":
             return handle_missed(args, client=client)
+        elif args.subcommand == "queue":
+            return handle_queue(args, client=client)
         elif args.subcommand == "speaker":
             return handle_speaker(args)
         elif args.subcommand == "history":

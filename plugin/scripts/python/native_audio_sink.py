@@ -591,6 +591,25 @@ class NativeAudioSink:
         """The line now playing, from its start."""
         return self._mpv_command(["seek", 0, "absolute"])
 
+    def seek(self, seconds: float) -> bool:
+        """Move within the line now playing by `seconds` (negative: back);
+        mpv stops at the clip's ends (contract 1.6's skip with seconds)."""
+        return self._mpv_command(["seek", float(seconds), "relative"])
+
+    def position(self) -> float | None:
+        """Seconds into the line now playing; None when nothing plays or mpv
+        does not say."""
+        with self._state_lock:
+            path, proc = self._ipc_path, self._proc
+        if path is None or proc is None or proc.poll() is not None:
+            return None
+        try:
+            reply = MpvIpc.send(["get_property", "time-pos"], path, timeout=self._PROGRESS_READ_TIMEOUT)
+        except MpvIpcError:
+            return None
+        data = reply.get("data") if reply.get("error") == "success" else None
+        return float(data) if isinstance(data, (int, float)) and not isinstance(data, bool) else None
+
     def skip(self) -> bool:
         """End the line now playing (never a held one: that is interrupt's)."""
         if not self.is_playing:

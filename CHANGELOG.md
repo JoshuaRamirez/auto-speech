@@ -10,6 +10,23 @@ The Chrome extension under `chrome-extension/` is versioned independently
 ## [Unreleased]
 
 ### Added
+- **The speech control's 10-30 round, caller side of UI Utility contract
+  1.6 (ADR-028).** His 09:39 to 09:55 asks. A replayed line selects its own
+  row instead of adding one (no now-row; `current` is the history line's
+  id), and the list holds one row per spoken line. Every row names its
+  sender. The row playing carries its `words` (the history's word timings,
+  or the estimate for a fresh line), and `state` carries `position` in
+  seconds (from the player, else the control's clock at the rate) on start,
+  pause, resume, seek and rate change. Transport `start` restarts the line,
+  `end` skips to the next, and `skip-back`/`skip-forward` with `seconds`
+  (1, 5, 10) seek within the line. His 09:55: "I also want to see somehow
+  what is queued to be played, and I want to be able to manipulate the
+  queue, clear it, modify it." The control gets `queue` (what waits, in
+  play order, sent at most every 0.25 s) and its `clear`, `remove` and
+  `move` events act on the narrator's queue in place (`queue: cleared <n>`,
+  `queue: removed …`, `queue: moved …` in the log); cleared and removed
+  lines are not put on the missed list. `auto-speech queue [--json]` lists
+  what waits.
 - **Play every line from a chosen time, in order (ADR-027).** His
   2026-10-30 08:47: "I want to play from a particular past time all the
   messages up to the latest." The speech control's list items carry `time`
