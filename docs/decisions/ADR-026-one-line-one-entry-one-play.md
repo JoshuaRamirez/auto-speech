@@ -1,6 +1,7 @@
 # ADR-026: one line, one missed-list entry, one play, across his stop
 
-Status: accepted, 2026-10-27 (#m1027-1628-c253, passed on as #m1027-1628-7cf5)
+Status: accepted, 2026-10-27 (#m1027-1628-c253, passed on as #m1027-1628-7cf5).
+Amended 2026-10-30 (#m1030-1241-6e0a): his resume no longer replays what his stop set aside (ADR-024's amendment).
 
 ## Context
 His 2026-10-27 16:27: "Why am I hearing duplication when you say things?"
@@ -51,9 +52,10 @@ The record (the narrator's log, the history sidecars, desk-speaker's `said.jsonl
    when it lets go of it (stale, skipped). A line the narrator set aside
    itself (its ledger record names a `missed_id`) is the narrator's, and
    desk-speaker never resends it. Why desk-speaker's side: it plays the line
-   when the stop lifts however it lifts (the narrator replays set-aside lines
-   only on a plain resume), it skips a line gone stale instead of playing it
-   late, and the stop stays visible on the desk.
+   when the stop lifts however it lifts (~~the narrator replays set-aside lines
+   only on a plain resume~~; since 2026-10-30 no resume replays them: they
+   wait on the missed list for his play), it skips a line gone stale instead
+   of playing it late, and the stop stays visible on the desk.
 7. **A narrator starting up stops an orphaned player of its own**: the pid
    in `auto-speech-mpv.pid`, only when it is mpv with auto-speech's own flags
    and its parent is pid 1. A player another live process owns is never
@@ -69,3 +71,6 @@ ordered, and his 2026-10-15 rule puts hard checks last.
   it. It is not replayed by any path. He can replay it from the history.
 - While a stop holds, a desk line waits in desk-speaker's pending folder and
   is not listed in the control's missed list. It plays when he resumes.
+- (2026-10-30, #m1030-1241-6e0a) A line the narrator set aside for his stop
+  plays only on his Play all, Play from or play-item: never on a resume, and
+  a caller's resend of it while it is on the list is kept there, not queued.

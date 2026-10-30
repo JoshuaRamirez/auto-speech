@@ -143,14 +143,23 @@ class TestStop(_Base):
         self.assertEqual([m.text for m in lines], ["Part 3.", "Part 4.", "Part 5."], "unplayed, in order")
         self.assertEqual({(m.status, m.reason) for m in lines}, {(MISSED, REASON_STOPPED)})
 
-    def test_resume_ends_the_stop_and_queues_the_set_aside_lines_in_order(self):
+    def test_resume_lifts_the_stop_only_and_the_set_aside_lines_stay_on_the_missed_list(self):
+        # #m1030-1241-6e0a replaces "resume queues the set-aside lines": at 12:37
+        # his speech came back on and a 10:55 line his 11:00 stop had set aside
+        # played by itself. Now a resume lifts the stop; only lines that come
+        # after it play; the rest wait for his Play from or Play all.
         self.svc.dispatch_json({"action": "interrupt"})
         self.svc._speak("Part 3.", item=_item("Part 3."))
         self.svc._speak("Part 4.", item=_item("Part 4."))
         reply = self.svc.dispatch_json({"action": "resume"})
-        self.assertEqual((reply["was_stopped"], reply["queued"]), (True, 2))
+        self.assertEqual((reply["was_stopped"], reply["queued"], reply["set_aside"]), (True, 0, 2))
         self.assertFalse(self.svc.dispatch_json({"action": "status"})["stopped"])
-        self.assertEqual(self.queued_texts(), ["Part 3.", "Part 4."])
+        self.assertEqual(self.queued_texts(), [], "nothing set aside is queued by the resume")
+        lines = self.svc._missed.load()
+        self.assertEqual([m.text for m in lines], ["Part 3.", "Part 4."], "still on the missed list, in order")
+        self.assertEqual({(m.status, m.reason) for m in lines}, {(MISSED, REASON_STOPPED)})
+        self.svc.dispatch_json({"action": "speak", "text": "After the resume.", "priority": 2})
+        self.assertEqual(self.queued_texts(), ["After the resume."], "a line after the resume plays")
         again = self.svc.dispatch_json({"action": "resume"})
         self.assertEqual((again["was_stopped"], again["queued"]), (False, 0), "not stopped: nothing to do")
 
@@ -181,8 +190,10 @@ class TestStop(_Base):
         actions.stop()
         self.assertTrue(self.svc._is_stopped())
         self.svc._speak("Part 3.", item=_item("Part 3."))
-        self.assertEqual(actions.unstop(), 1)
+        self.assertEqual(actions.unstop(), 1, "one line his stop left on the missed list")
         self.assertFalse(self.svc._is_stopped())
+        self.assertEqual(self.queued_texts(), [], "the play glyph lifts the stop; Part 3 is not queued")
+        self.assertEqual([m.text for m in self.svc._missed.load()], ["Part 3."])
         self.assertEqual(actions.unstop(), -1)
 
     def test_narrate_status_shows_the_stopped_state(self):
@@ -225,11 +236,16 @@ class TestControlPlayAfterStop(unittest.TestCase):
         self.addCleanup(d.close)
         return d
 
-    def test_play_after_a_stop_plays_what_the_stop_set_aside(self):
-        d = self.driver(unstop=lambda: (self.calls.append(("unstop",)), 2)[1])
-        d.sync()
-        d.handle_event({"event": "control", "id": CONTROL_ID, "action": "play"})
-        self.assertEqual(self.calls, [("unstop",)], "the set-aside lines play; no replay of the newest")
+    def test_play_after_a_stop_lifts_it_and_plays_nothing_by_itself(self):
+        # #m1030-1241-6e0a: the play glyph after a stop lifts it, as a resume
+        # does; the set-aside lines stay on the missed list, and no heard line
+        # is replayed in their place.
+        for left in (2, 0):
+            self.calls = []
+            d = self.driver(unstop=lambda left=left: (self.calls.append(("unstop",)), left)[1])
+            d.sync()
+            d.handle_event({"event": "control", "id": CONTROL_ID, "action": "play"})
+            self.assertEqual(self.calls, [("unstop",)], f"{left} set aside: the stop lifts, nothing replays")
 
     def test_play_with_no_stop_is_as_before(self):
         d = self.driver(unstop=lambda: -1)

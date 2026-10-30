@@ -56,6 +56,7 @@ from missed_speech import (
     REASON_STALE,
     REASON_STOPPED,
     REASON_TIMEOUT,
+    MISSED,
     MissedLine,
     MissedList,
     new_id,
@@ -714,6 +715,15 @@ class NarratorService:
             origin_file = clean_origin_file(payload.get("origin_file"))
             sender = _clean_sender(payload.get("sender"))
             line_id = clean_line_id(payload.get("line_id")) or self._line_ledger().for_missed(missed_id)
+            if line_id and not missed_id and priority != Priority.USER_INTERRUPT:
+                kept = self._set_aside_by_stop(line_id)
+                if kept is not None:
+                    # A resend of a line his stop set aside: it stays on the
+                    # missed list for his Play from or Play all, and does not
+                    # play by itself after the stop lifts (#m1030-1241-6e0a).
+                    _log(f"speak: line {line_id} is on the missed list from his stop; kept there, not queued")
+                    return {"status": "ok", "action": "speak", "duplicate": True, "set_aside": True,
+                            "line_id": line_id, "missed_id": kept.id, "queue_depth": self._tts_queue.qsize()}
             if line_id and priority != Priority.USER_INTERRUPT:
                 seen = self._line_ledger().admit(line_id, text)
                 if seen is not None:
@@ -862,8 +872,14 @@ class NarratorService:
             return {"status": "ok", "action": "interrupt", "stopped": True}
 
         elif action == "resume":
-            queued = self._resume_speech()
-            return {"status": "ok", "action": "resume", "was_stopped": queued >= 0, "queued": max(queued, 0)}
+            # A lift only unless the caller asks (#m1030-1241-6e0a): desk-speaker
+            # sends {"play_set_aside": false, "source": "desk-speak on"}.
+            replay = payload.get("play_set_aside") is True
+            source = str(payload.get("source") or payload.get("caller") or "").strip()[:80]
+            n = self._resume_speech(by=f"a socket resume ({source})" if source else "a socket resume",
+                                    play_set_aside=replay)
+            return {"status": "ok", "action": "resume", "was_stopped": n >= 0,
+                    "queued": max(n, 0) if replay else 0, "set_aside": 0 if replay else max(n, 0)}
 
         elif action == "missed_add":
             return self._missed_add(payload)
@@ -2039,7 +2055,7 @@ class NarratorService:
             pause=lambda: self._sink_verb("pause"),
             resume=lambda: self._sink_verb("resume"),
             stop=lambda: self._stop_speech(by="the speech control's stop"),
-            unstop=self._resume_speech,
+            unstop=lambda: self._resume_speech(by="the speech control's play"),
             restart=lambda: self._sink_verb("restart"),
             skip=lambda: self._sink_verb("skip"),
             set_rate=self._set_rate,
@@ -2077,7 +2093,7 @@ class NarratorService:
         """A heard line, played again from its WAV over any other sound (he
         asked); it is not exported to the history a second time. A play
         ends his stop."""
-        self._resume_speech(play_set_aside=False)
+        self._resume_speech(by="a play")
         q_item = QueueItem(
             priority=Priority.EXPLICIT_MCP,
             payload=str(line.wav),
@@ -2225,7 +2241,7 @@ class NarratorService:
         off the list once heard. A play ends his stop."""
         from missed_speech import play_ids
 
-        self._resume_speech(play_set_aside=False)
+        self._resume_speech(by="a play")
         try:
             return play_ids(ids, missed=self._missed, client=_InProcessClient(self))
         except ConnectionError as exc:
@@ -2275,28 +2291,52 @@ class NarratorService:
                 self._update_depth(self._tts_queue.qsize())
                 _log(f"stopped: cleared {len(cleared)} queued replays (heard lines, still in the history)")
 
-    def _resume_speech(self, *, play_set_aside: bool = True) -> int:
-        """Ends his stop. With play_set_aside, the lines that arrived while
-        stopped are queued again, in order. Returns how many were queued;
-        -1 when speech was not stopped."""
+    def _resume_speech(self, *, by: str = "", play_set_aside: bool = False) -> int:
+        """Ends his stop. By default only that: from now on new lines play. A
+        line the stop cut or set aside, and every line that arrived while
+        stopped, stays on the missed list for his Play from or Play all; none
+        plays by itself (#m1030-1241-6e0a: at 12:37 his speech came back on
+        and a 10:55 line set aside by his 11:00 stop played on its own). Only
+        a caller that asks with play_set_aside gets the stop's lines queued
+        again, in order. Returns how many lines his stop left on the missed
+        list (or queued, with play_set_aside); -1 when speech was not stopped."""
         since = getattr(self, "_stopped_since", None)
         if since is None:
             return -1
         self._stopped_since = None
         _write_stopped(None)
-        if not play_set_aside:
-            _log("resumed: his stop ended by a play")
-            return 0
         missed = getattr(self, "_missed", None)
-        ids: list[str] = []
+        stopped_lines: list[MissedLine] = []
         if missed is not None:
             try:
-                ids = [m.id for m in missed.load() if m.reason == REASON_STOPPED and (m.missed_at or 0.0) >= since]
+                stopped_lines = [m for m in missed.load() if m.reason == REASON_STOPPED and m.status == MISSED]
             except Exception as exc:  # noqa: BLE001
                 _log(f"missed list read error: {exc!r}")
-        queued = self._play_missed_ids(ids) if ids else 0
-        _log(f"resumed: his stop ended; {queued} line(s) that arrived while stopped queued again")
-        return queued
+        who = f" by {by}" if by else ""
+        if play_set_aside:
+            ids = [m.id for m in stopped_lines if (m.missed_at or 0.0) >= since]
+            queued = self._play_missed_ids(ids) if ids else 0
+            _log(f"resumed: his stop ended{who}; {queued} line(s) set aside while stopped queued again, as asked")
+            return queued
+        _log(
+            f"resumed: his stop ended{who}; new lines play; {len(stopped_lines)} line(s) his stop set aside"
+            " stay on the missed list for Play from or Play all"
+        )
+        return len(stopped_lines)
+
+    def _set_aside_by_stop(self, line_id: str) -> Optional[MissedLine]:
+        """The missed-list entry his stop left for this line id, if it is
+        still there unplayed; None otherwise. Never raises."""
+        missed = getattr(self, "_missed", None)
+        if missed is None or not line_id:
+            return None
+        try:
+            for m in missed.load():
+                if m.line_id == line_id and m.reason == REASON_STOPPED and m.status == MISSED:
+                    return m
+        except Exception as exc:  # noqa: BLE001
+            _log(f"missed list read error: {exc!r}")
+        return None
 
     def _set_aside_if_stopped(self, text: str, item: Optional[QueueItem]) -> bool:
         if not self._is_stopped():

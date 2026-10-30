@@ -156,6 +156,7 @@ CHEAP=(
     test_ipc_command_key.py
     test_say_hang.py
     test_tests_never_touch_live_state.py
+    test_resume_lifts_only.py
 )
 
 # Bash-script tests for shell helpers.

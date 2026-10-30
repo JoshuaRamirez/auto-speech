@@ -1052,15 +1052,17 @@ class McpServer:
                 )
 
             if action == "resume":
-                # His stop (ADR-024) ends here too; the lines it set aside play.
+                # His stop (ADR-024) ends here too, and only that: the lines it
+                # set aside stay on the missed list (#m1030-1241-6e0a).
                 try:
                     raw = (self._client or DaemonClient(max_retries=0)).resume().raw or {}
                 except Exception:  # noqa: BLE001
                     raw = {}
                 if isinstance(raw, dict) and raw.get("was_stopped") is True:
-                    n = int(raw.get("queued") or 0)
+                    n = int(raw.get("set_aside") or 0)
                     return _ok(req_id, _tool_result(
-                        f"Speech resumed after a stop; {n} line{'s' if n != 1 else ''} that arrived meanwhile queued again."
+                        f"Speech resumed after a stop; new lines play. {n} line{'s' if n != 1 else ''} the stop set aside"
+                        f" stay{'s' if n == 1 else ''} on the missed list for Play all or Play from."
                     ))
 
             if not self._is_mpv_socket_alive():

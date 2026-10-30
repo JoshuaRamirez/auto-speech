@@ -156,8 +156,9 @@ class ControlActions:
     # many were taken out (ADR-027, #m1030-0939-c4f9).
     begin_run: Callable[[], int] = lambda: 0
     end_run: Callable[[], None] = lambda: None
-    # Ends his stop (ADR-024) and queues the lines that arrived while stopped;
-    # how many were queued, or -1 when speech was not stopped.
+    # Ends his stop (ADR-024), and only that: what it set aside stays on the
+    # missed list (#m1030-1241-6e0a). How many lines it left there, or -1
+    # when speech was not stopped.
     unstop: Callable[[], int] = lambda: -1
     # Contract 1.6: within the line playing, and the queue tab.
     seek: Callable[[float], bool] = lambda seconds: False  # move by seconds, negative back
@@ -772,8 +773,10 @@ class ControlDriver:
             state, paused = self._model.state, self._model.paused
         playing_now = state != IDLE
         if action == "play":
-            if self.actions.unstop() > 0:
-                return  # the lines his stop set aside play, in order
+            if self.actions.unstop() >= 0:
+                # His stop lifts, and only that: what it set aside stays on
+                # the missed list for Play from or Play all (#m1030-1241-6e0a).
+                return
             if state == HELD and paused:
                 if self.actions.resume():
                     with self._cond:

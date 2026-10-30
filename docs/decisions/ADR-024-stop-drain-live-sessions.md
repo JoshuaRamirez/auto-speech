@@ -1,6 +1,7 @@
 # ADR-024: a stop stops, a restart drains first, only live sessions are heard
 
-Status: accepted, 2026-10-21 (#m1021-2343-74ba, card 82)
+Status: accepted, 2026-10-21 (#m1021-2343-74ba, card 82). Amended 2026-10-30: a
+resume lifts the stop only (#m1030-1241-6e0a, below).
 
 ## Context
 His 2026-10-21 23:38: "you just interrupted yourself during the 10 m thing.
@@ -28,8 +29,9 @@ in order, so the control lists it unplayed. It is checked before synthesis
 (`_play_item`).
 
 - **What ends it**: `auto-speech resume` and playback_control resume (the
-  daemon's new `resume` action), and the control's play glyph. Each queues
-  the lines the stop set aside, in order. A play-item or play-all on the
+  daemon's new `resume` action), and the control's play glyph. ~~Each queues
+  the lines the stop set aside, in order.~~ Since 2026-10-30 each lifts the
+  stop and nothing more (amendment below). A play-item or play-all on the
   control ends it too, and plays only what he picked.
 - **What is not a stop**: the UserPromptSubmit barge-in when he types. It
   still interrupts and purges as before, without stopping.
@@ -94,3 +96,43 @@ not the explicit band the replays wait in.
 - **The process stays.** A stop ends the line playing (the player, mpv) and
   never signals, stops or restarts the narrator.
 - Tests: `tests/test_stop_is_playback.py`.
+
+## Amendment, 2026-10-30: a resume lifts the stop, and only that (#m1030-1241-6e0a)
+His stop was at 11:00. At 12:37 he turned speech back on, and at 12:39 the
+narrator logged "resumed: his stop ended; 1 line(s) that arrived while
+stopped queued again": a 10:55 Master Desk line, set aside by the 11:00 stop,
+played by itself. The Desk's rule: on resume, play only lines queued after
+the resume; anything set aside before it stays on the missed list for his
+Play from or Play all.
+
+- `_resume_speech` lifts the stop flag (and its file) and queues nothing. It
+  returns how many lines his stop left on the missed list, -1 when speech
+  was not stopped. The socket's `resume` replies `was_stopped`, `queued: 0`
+  and `set_aside: N`; `auto-speech resume` and playback_control resume say
+  the lines stay on the missed list for Play all or Play from. The socket's
+  `resume` takes `play_set_aside` (default false: lift only; true queues the
+  stop's lines again, in order, the one way to ask for that) and `source`,
+  which the "resumed" log line names. desk-speaker (Desk-Core 0b09707) sends
+  exactly `{"action": "resume", "play_set_aside": false, "source": "desk-speak on"}`
+  (or "desk-speaker resume"); `tests/test_resume_lifts_only.py` sends that
+  payload over a real socket.
+- The control's play glyph while stopped lifts the stop and returns: no
+  set-aside line plays, and no heard line is replayed in their place.
+- A caller's resend of a line still on the missed list as `stopped` (same
+  line id, no `missed_id`) is answered `duplicate`, `set_aside` with the
+  entry's id, and not queued: it stays there for his play.
+- His Play all, Play from or a play-item of a missed row plays it, under its
+  line id, once (ADR-026).
+
+Tests that asserted the old replay-on-resume and now assert the lift:
+`test_stop_and_drain.TestStop.test_resume_lifts_the_stop_only_and_the_set_aside_lines_stay_on_the_missed_list`
+(was `..._queues_the_set_aside_lines_in_order`),
+`test_the_controls_stop_and_play_glyphs_are_the_stop_and_the_resume`,
+`TestControlPlayAfterStop.test_play_after_a_stop_lifts_it_and_plays_nothing_by_itself`
+(was `..._plays_what_the_stop_set_aside`),
+`test_line_id.TestOnePlayAcrossStop.test_a_line_queued_while_stopped_stays_set_aside_on_resume_and_plays_once_on_his_play`
+(was `..._plays_once_on_resume_and_a_resend_is_refused`),
+`test_line_id.TestSlowSynthesis.test_a_line_dropped_by_a_stop_is_reported_dropped_and_admitted_again`
+(his play, not the resume, plays it), and
+`test_live_lines_survive...stays_on_the_list_and_plays_on_his_play_all`
+(was `..._plays_on_the_play_after_his_stop`).

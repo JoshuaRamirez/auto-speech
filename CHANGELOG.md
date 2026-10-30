@@ -175,6 +175,18 @@ The Chrome extension under `chrome-extension/` is versioned independently
   HOME to a temporary directory at import.
 
 ### Fixed
+- **A resume lifts his stop, and only that (ADR-024 amended,
+  #m1030-1241-6e0a).** His stop was at 11:00; at 12:37 he turned speech back
+  on and a 10:55 line the stop had set aside played by itself ("1 line(s)
+  that arrived while stopped queued again"). Now `auto-speech resume`,
+  playback_control resume, the socket's `resume` (so desk-speaker's
+  `desk-speak on`) and the control's play glyph lift the stop and queue
+  nothing: only lines that come after the resume play. What the stop cut or
+  set aside stays on the missed list for his Play all or Play from; a
+  caller's resend of such a line is kept there, not queued. The socket's
+  `resume` takes `play_set_aside` (default false; true queues the stop's lines
+  again) and logs its `source`, as desk-speaker sends them. The reply carries
+  `set_aside: N`, and the CLI and MCP say the lines stay on the missed list.
 - **No test writes to his live speech store (#m1030-1241-6e0a).** On
   2026-10-30 at 11:02 and 11:03 tests/e2e/test_tier5_adversarial_lifecycle.py,
   run by hand with a private `AUTO_SPEECH_TMP_ROOT` but no
