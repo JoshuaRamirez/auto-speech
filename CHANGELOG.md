@@ -188,9 +188,13 @@ The Chrome extension under `chrome-extension/` is versioned independently
   sender and session with it, so the queue view, the playing row and the
   history name the desk even after its session's note is gone. The control's
   missed row shows the recorded sender, else the session's desk, else the
-  caller's label. A line with no session and no named sender stays unnamed:
-  never guessed. A speaker that answers with anything but a name is not
-  written as a sender.
+  caller's label. A session the desk notes no longer name (its desk
+  restarted on a new session, as the Master Desk's 10-29 session had, so
+  an entry set aside under it showed no sender) is named by what the
+  history recorded for it (the newest 2000 sidecars, read at most every
+  5 minutes on a miss). A line with no session and no named sender stays
+  unnamed: never guessed. A speaker that answers with anything but a name
+  is not written as a sender.
 - **`auto-speech queue` is answered, never spoken (#m1030-1008-fac1).** On
   2026-10-30 at 10:18 the new `queue` request reached the socket, which did not
   list `queue` among its controls, so `{"action": "queue"}` fell through to the

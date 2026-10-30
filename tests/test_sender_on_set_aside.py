@@ -147,6 +147,29 @@ class TestTheReplayKeepsTheSender(_Named):
         self.assertEqual((kw["session_id"], kw["sender"]), (DESK_SESSION, "Master Desk"))
 
 
+class TestAnEndedSessionIsNamedFromTheHistory(_Named):
+    """10-30: entry a046e614 (set aside 10-29 under the Master Desk's session
+    24d3f660…) showed no sender: the desk had since restarted on a new
+    session, so its note no longer named the old one. The history recorded
+    that session as "Master Desk" 789 times: that record names it."""
+
+    def test_a_session_the_notes_no_longer_name_is_named_by_its_history(self):
+        self.speak_from_desk("A line heard earlier.", "heard-1")
+        self.names.clear()  # the desk restarted: its note names a new session
+        self.svc.__dict__.pop("_recorded_senders", None)
+        self.svc.__dict__.pop("_recorded_senders_at", None)
+        old = MissedLine(id="e3", text="Set aside yesterday.", queued_at=1.0, session_id=DESK_SESSION, line_id="L3")
+        self.svc._missed.miss(old, reason=REASON_STOPPED)
+        self.assertEqual(self.missed_row("e3").get("source"), "Master Desk")
+        self.assertIsNone(self.svc._sender_name("never-heard-session"), "a session nothing recorded: no name")
+
+    def speak_from_desk(self, text: str, line_id: str) -> None:
+        self.svc.dispatch_json({"action": "speak", "text": text, "priority": 2, "line_id": line_id,
+                                "session_id": DESK_SESSION})
+        self.wait_for(lambda: self.line(line_id)["state"] == DONE, 5, lambda: self.line(line_id))
+        self.wait_for(lambda: self.svc._history.load(), 5)
+
+
 class TestTheCliAndClientCarryTheSession(unittest.TestCase):
     def test_missed_add_session_id_reaches_the_daemon(self):
         client = MagicMock()

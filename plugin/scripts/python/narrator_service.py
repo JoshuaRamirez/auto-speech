@@ -273,6 +273,10 @@ def _replay_flags(payload: dict) -> tuple[str, bool]:
     return missed_id, (hold if isinstance(hold, bool) else True)
 
 
+RECORDED_SENDER_LINES = 2000  # history sidecars read to name a session the desk notes no longer name
+RECORDED_SENDER_REFRESH_S = 300.0
+
+
 def _clean_sender(raw: Any) -> str:
     """A sender name from a request: one line of text, at most 80 chars; "" otherwise."""
     if not isinstance(raw, str):
@@ -2378,9 +2382,33 @@ class NarratorService:
         try:
             name = speaker.name_for(session_id)
         except Exception:  # noqa: BLE001
-            return None
+            name = None
         # Only a name: it is written on the missed list and in the history.
-        return name if isinstance(name, str) and name else None
+        if isinstance(name, str) and name:
+            return name
+        return self._recorded_sender(session_id)
+
+    def _recorded_sender(self, session_id: str) -> Optional[str]:
+        """The name the history recorded for a session the desk notes no
+        longer name (its desk restarted on a new session, #m1030-1058-d1ad):
+        a record, not a guess. The newest RECORDED_SENDER_LINES sidecars are
+        read at most once every RECORDED_SENDER_REFRESH_S, on a miss."""
+        history = getattr(self, "_history", None)
+        if history is None:
+            return None
+        names: dict[str, str] = self.__dict__.setdefault("_recorded_senders", {})
+        now = time.time()
+        if session_id not in names and now - self.__dict__.get("_recorded_senders_at", 0.0) >= RECORDED_SENDER_REFRESH_S:
+            self._recorded_senders_at = now
+            try:
+                lines = history.load(limit=RECORDED_SENDER_LINES)
+            except Exception:  # noqa: BLE001
+                lines = []
+            for line in lines:
+                sender = getattr(line, "sidecar", {}).get("sender")
+                if isinstance(sender, dict) and sender.get("session_id") and isinstance(sender.get("name"), str) and sender["name"]:
+                    names[str(sender["session_id"])] = sender["name"]
+        return names.get(session_id)
 
     def _item_sender(self, item: Any, session_id: Optional[str] = None) -> Optional[str]:
         """The desk that sent a line: the sender recorded with it (a missed
