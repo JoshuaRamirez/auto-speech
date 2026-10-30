@@ -19,8 +19,9 @@ from autoplay_config import load_config as load_autoplay_config
 from autoplay_enrollment import SessionEnrollment, format_status as format_enrollment_status
 from autoplay_gate import AutoplayGate
 from autoplay_scope import SoloScope, format_status as format_scope_status
-from daemon_client import NARRATOR_TOO_OLD, DaemonClient, Priority
+from daemon_client import DaemonClient, Priority
 from doctor import Doctor
+from history_replay import pick_history_line, replay_through_narrator
 from mpv_ipc import MpvIpc, MpvIpcError
 from native_audio_sink import AudioSinkError, NativeAudioSink
 from narrator_config import load_config as load_narrator_config
@@ -28,7 +29,7 @@ from self_update import needs_sync
 from missed_speech import run_action as run_missed_action
 from sound_yield import run_action as run_sound_yield_action
 from speaker import run_action as run_speaker_action
-from speech_history import SpeechHistory, run_action as run_history_action
+from speech_history import run_action as run_history_action
 from speak import send_speech_request
 
 EXIT_OK = 0
@@ -224,30 +225,11 @@ def handle_replay(
         print(f"replay: --ordinal must be >= 1, got {args.ordinal}", file=sys.stderr)
         return EXIT_INVALID_INPUT
 
-    history = SpeechHistory()
-    if not history.settings().enabled:
-        print(
-            "replay: the speech history is off, so the lines spoken are not kept to replay. "
-            "Turn it on with `auto-speech history on`.",
-            file=sys.stderr,
-        )
+    pick = pick_history_line(args.ordinal)
+    if pick.line is None:
+        print(f"replay: {pick.refusal}", file=sys.stderr)
         return EXIT_NO_HISTORY_LINE
-    lines = list(reversed(history.load(limit=args.ordinal)))  # newest first
-    if not lines:
-        print("replay: the speech history is empty; nothing has been spoken yet.", file=sys.stderr)
-        return EXIT_NO_HISTORY_LINE
-    if args.ordinal > len(lines):
-        print(
-            f"replay: the speech history holds {len(lines)} line{'s' if len(lines) != 1 else ''}; "
-            f"you asked for #{args.ordinal}",
-            file=sys.stderr,
-        )
-        return EXIT_NO_HISTORY_LINE
-
-    line = lines[args.ordinal - 1]
-    if not line.wav.is_file():
-        print(f"replay: history line {line.id} has no audio file ({line.wav})", file=sys.stderr)
-        return EXIT_NO_HISTORY_LINE
+    line = pick.line
     print(
         f"[replay] ordinal={args.ordinal}  line={line.id}  spoken={line.spoken_at:.0f}  "
         f"text={line.text[:60]!r}  path={line.wav}",
@@ -279,27 +261,19 @@ def handle_replay(
 
 
 def _replay_through_narrator(client: Any, line_id: str) -> int:
-    """A history line, queued by the narrator as the control's play-item.
-    A failure is reported, never followed by a play here: the narrator may
-    have queued it already."""
+    """A history line, queued by the narrator as the control's play-item
+    (history_replay, shared with the MCP tool). A failure is reported, never
+    followed by a play here: the narrator may have queued it already."""
     try:
-        resp = client.play_history(line_id)
+        result = replay_through_narrator(client, line_id)
     except KeyboardInterrupt:
         return EXIT_INTERRUPTED
     except Exception as exc:  # noqa: BLE001
         print(f"replay: playback failed: {exc}", file=sys.stderr)
         return EXIT_PLAYBACK_FAIL
-    if resp.status in ("ok", "queued"):
+    if result.queued:
         return EXIT_OK
-    message = getattr(resp, "message", "") or ""
-    if getattr(resp, "error_code", None) == NARRATOR_TOO_OLD:
-        print(
-            "replay: the running narrator is older than replay from the speech history; "
-            "restart it with `auto-speech narrate restart` and try again.",
-            file=sys.stderr,
-        )
-    else:
-        print(f"replay: the narrator did not queue line {line_id}: {message or resp.status}", file=sys.stderr)
+    print(f"replay: {result.message}", file=sys.stderr)
     return EXIT_FAILURE
 
 

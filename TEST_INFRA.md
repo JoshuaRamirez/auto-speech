@@ -102,7 +102,7 @@ The E2E test suite adheres to the 4-tier testing hierarchy:
 - `test_tier2_r2_stale_socket_file_cleanup_on_startup`: Pre-existing stale socket files from prior ungraceful terminations are cleaned up and rebound on daemon start.
 
 #### R3 Boundaries
-- `test_tier2_r3_surviving_callers_importable`: Surviving modules (`autoplay_worker.py`, `say_worker.py`, `web_server.py`, `replay.py`, `control.py`) import cleanly.
+- `test_tier2_r3_surviving_callers_importable`: Surviving modules (`autoplay_worker.py`, `say_worker.py`, `web_server.py`, `control.py`) import cleanly.
 - `test_tier2_r3_absence_of_session_dir_tmp_directory`: System functions completely without `/tmp/auto-speech/` session directory.
 - `test_tier2_r3_test_runner_clean_of_deleted_tests`: `tests/run_all.sh` does not reference deleted test files.
 - `test_tier2_r3_markdown_and_commands_clean`: Slash command definitions (`auto-speech-speak.md`) do not invoke deleted scripts.

@@ -41,7 +41,6 @@ from autoplay_config import _resolve_prompt, load_config as load_autoplay_config
 from autoplay_enrollment import SessionEnrollment, format_status as format_enrollment_status
 from autoplay_gate import AutoplayGate
 from autoplay_scope import SoloScope, format_status as format_scope_status
-from cache_store import CacheStore
 from claude_cli_rewriter import (
     ClaudeCliRewriter,
     load_default_template,
@@ -49,6 +48,7 @@ from claude_cli_rewriter import (
 from config_constants import DEFAULT_SPEED, DEFAULT_VOICE_ID
 from daemon_client import DaemonClient, Priority
 from doctor import Doctor
+from history_replay import pick_history_line, replay_through_narrator
 from message_selector import MessageSelector
 from mpv_ipc import MpvIpc
 from missed_speech import ACTIONS as MISSED_ACTIONS, run_action as run_missed_action
@@ -72,10 +72,6 @@ PARSE_ERROR = -32700
 INVALID_REQUEST = -32600
 METHOD_NOT_FOUND = -32601
 INVALID_PARAMS = -32602
-
-
-def _default_cache_root() -> Path:
-    return _PROJECT_ROOT / "config" / "cache"
 
 
 SPEAK_TOOL = {
@@ -204,7 +200,7 @@ PLAYBACK_CONTROL_TOOL = {
     "title": "Manage audio playback transport and replay",
     "description": (
         "Controls audio playback: pause, resume, stop (halt and purge queue), "
-        "restart, seek, or replay recent cached audio."
+        "restart, seek, or replay a recent line from the speech history."
     ),
     "inputSchema": {
         "type": "object",
@@ -221,7 +217,7 @@ PLAYBACK_CONTROL_TOOL = {
             "ordinal": {
                 "type": "integer",
                 "default": 1,
-                "description": "Recency index for replay (1 = most recent cached speech).",
+                "description": "Recency index for replay (1 = the newest line of the speech history).",
             },
         },
         "required": ["action"],
@@ -524,7 +520,6 @@ class McpServer:
         mpv_pid: Path | None = None,
         mpv_pid_path: Path | None = None,
         mpv_ipc_sender=None,
-        cache_store: CacheStore | None = None,
         enrollment: SessionEnrollment | None = None,
         scope: SoloScope | None = None,
         doctor: Doctor | None = None,
@@ -569,7 +564,6 @@ class McpServer:
         )
 
         self._mpv_ipc_send = mpv_ipc_sender or MpvIpc.send
-        self._cache_store = cache_store
         self._enrollment = enrollment or SessionEnrollment(home=self._home)
         self._scope = scope or SoloScope(home=self._home)
         self._doctor = doctor
@@ -1181,39 +1175,32 @@ class McpServer:
                     ),
                 )
 
-            store = self._cache_store or CacheStore(_default_cache_root())
-            entries = store.list_by_recency()
-            if not entries or ordinal > len(entries):
-                return _ok(
-                    req_id,
-                    _tool_result(
-                        f"No cached audio available for replay (ordinal={ordinal}).",
-                        is_error=True,
-                    ),
-                )
+            # The speech history's Nth most recent line, as `auto-speech replay`
+            # picks it (history_replay, T40): never the old cache.
+            pick = pick_history_line(ordinal, self._speech_history)
+            if pick.line is None:
+                return _ok(req_id, _tool_result(f"Nothing to replay: {pick.refusal}", is_error=True))
+            line = pick.line
 
-            _wav_path, entry = entries[ordinal - 1]
+            # Through the narrator, queued as the speech control's play-item:
+            # it waits behind and obeys the narrator (his stop, holds). The
+            # client starts a narrator that is not running, as speak does; a
+            # failure is reported, never followed by a play in this process.
             client = self._client or DaemonClient()
             try:
-                resp = client.play_cache(entry.source_hash, session_id=self._own_session_id())
-                if resp.status not in ("ok", "queued"):
-                    return _ok(
-                        req_id,
-                        _tool_result(
-                            f"Replay request rejected by daemon: {resp.message}",
-                            is_error=True,
-                        ),
-                    )
-            except Exception as exc:
+                result = replay_through_narrator(client, line.id)
+            except Exception as exc:  # noqa: BLE001
                 return _ok(
                     req_id,
                     _tool_result(f"Could not connect to daemon for replay: {exc}", is_error=True),
                 )
+            if not result.queued:
+                return _ok(req_id, _tool_result(f"Replay not queued: {result.message}", is_error=True))
 
             return _ok(
                 req_id,
                 _tool_result(
-                    f"Replaying cached audio (ordinal={ordinal}, voice={entry.voice_id}, duration={entry.duration_seconds:.1f}s)."
+                    f"Replaying speech history line #{ordinal} (line {line.id}): {line.text[:80]!r}."
                 ),
             )
 

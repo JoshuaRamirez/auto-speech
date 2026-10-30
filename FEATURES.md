@@ -68,8 +68,10 @@ module that owns it. Release-by-release history is in
   app does or does not hold.
 - **Transport**: pause, resume, restart, seek (`+N`, `-N`, `N`, `end`), stop
   (`control.py`, CLI, MCP `playback_control`).
-- **Replay cache**: content-addressed WAVs keyed by source hash; replay the
-  n-th most recent (`cache_store.py`, `replay.py`, ADR-007, ADR-008).
+- **Replay**: play the n-th most recent line of the speech history again,
+  queued through the narrator (`history_replay.py`, `cli.py` `replay`, MCP
+  `playback_control` `replay`). The content-addressed cache of WAVs keyed by
+  source hash (`cache_store.py`, ADR-007, ADR-008) only saves re-synthesis.
 
 ## Speech history
 - **Every line played, kept as a WAV and a sidecar** (ADR-020): after the

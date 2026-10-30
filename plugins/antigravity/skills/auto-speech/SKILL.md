@@ -1,6 +1,6 @@
 ---
 name: auto-speech
-description: Speak text aloud on macOS using native Apple neural voice synthesis, replay cached audio, control playback, manage autoplay/narration, and run diagnostics via the unified auto-speech CLI or MCP server.
+description: Speak text aloud on macOS using native Apple neural voice synthesis, replay recent lines from the speech history, control playback, manage autoplay/narration, and run diagnostics via the unified auto-speech CLI or MCP server.
 ---
 
 # Auto-Speech Skill
@@ -25,13 +25,13 @@ Auto-speech provides two equivalent interfaces for humans and AI agents:
   ```
 - **Replay recent speech**:
   ```bash
-  auto-speech replay       # Replay most recent cached turn
-  auto-speech replay 2     # Replay 2nd most recent cached turn
+  auto-speech replay              # Replay the newest line of the speech history
+  auto-speech replay --ordinal 2  # Replay the line before it
   ```
 
 ### MCP Tools
 - `speak(text="...")`: Queues arbitrary text aloud verbatim (Priority 2).
-- `playback_control(action="replay", target="1")`: Replays cached audio by ordinal.
+- `playback_control(action="replay", ordinal=1)`: Replays a line of the speech history by ordinal (1 = newest).
 
 ---
 

@@ -189,6 +189,20 @@ The Chrome extension under `chrome-extension/` is versioned independently
   `play_history` is asked its status first and never sent the action (it
   would speak the request aloud); replay says to run `auto-speech narrate
   restart`. Test: `tests/test_replay_from_history.py`.
+- **The MCP tool's replay plays from the speech history too; the old
+  `replay.py` is retired (T40).** `playback_control` with action `replay`
+  still took the newest entry of the old cache and sent it through
+  `play_cache`, so it played the same stale clip T38 fixed in the CLI. It
+  now picks the Nth most recent history line and asks the narrator's
+  `play_history` for it through the same code the CLI uses (the new
+  `history_replay.py`): an off, empty or short history, a narrator older
+  than `play_history`, or a narrator that does not queue it is a tool error
+  with a plain message, never a fall back to the cache. The tool goes through
+  the narrator only (starting it if it is not running, as its speak does)
+  and never plays in the MCP server itself. The old `replay.py` and
+  `plugin/scripts/shell/run_replay.sh`, the cache replay behind the first
+  `/replay`, are removed: nothing called them since the command moved to
+  `bin/auto-speech replay`. Test: `tests/test_mcp_replay_from_history.py`.
 - **`auto-speech stop` stops an idle narrator too (#m1030-1421-30ba).** With
   nothing playing, it printed "no active playback session", exited 2 and
   never sent the narrator its interrupt, so the next line played. It now
