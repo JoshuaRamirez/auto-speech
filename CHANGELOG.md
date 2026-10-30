@@ -175,6 +175,13 @@ The Chrome extension under `chrome-extension/` is versioned independently
   HOME to a temporary directory at import.
 
 ### Fixed
+- **`auto-speech stop` stops an idle narrator too (#m1030-1421-30ba).** With
+  nothing playing, it printed "no active playback session", exited 2 and
+  never sent the narrator its interrupt, so the next line played. It now
+  sends the interrupt first, named `auto-speech stop` in the narrator's log,
+  and exits 0 with `stopped`; the stop holds until a play or resume
+  (ADR-024). It still exits 2 when neither the narrator nor a player is
+  running. Test: `tests/test_stop_when_idle.py`.
 - **One spoken line, one row, whatever path it takes (ADR-028 amended,
   #m1030-1241-6e0a).** At 12:39 a 10:55 line his stop had set aside was
   played from the missed list: once heard, its history record was a new row
