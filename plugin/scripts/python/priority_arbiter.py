@@ -253,6 +253,22 @@ class PriorityArbiter:
         """Alias for purge_lower_queues."""
         return self.purge_lower_queues()
 
+    def remove_where(self, match: Callable[[QueueItem], bool]) -> list[QueueItem]:
+        """Takes every queued item `match` accepts out of its band, the rest
+        keeping their order; the item in hand is not touched. Not counted as
+        dropped: the caller replaced them. Returns what was taken out."""
+        removed: list[QueueItem] = []
+        with self._lock:
+            for band in (self._p1, self._p2, self._p3, self._p4):
+                kept = [q for q in band if not (isinstance(q, QueueItem) and match(q))]
+                if len(kept) != len(band):
+                    removed.extend(q for q in band if isinstance(q, QueueItem) and match(q))
+                    band.clear()
+                    band.extend(kept)
+        if removed:
+            self._notify_purged(len(removed))
+        return removed
+
     def clear(self) -> None:
         """Clears all priority bands."""
         with self._lock:

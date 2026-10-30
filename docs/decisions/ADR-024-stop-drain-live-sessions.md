@@ -67,3 +67,30 @@ today, or yesterday when that time is still ahead.
   missed list in order, not be lost).
 - The cut briefing's parts can be put back with `missed add` and played
   from the control.
+
+## Amendment, 2026-10-30: the control's stop is a playback act (#m1030-0948)
+His 2026-10-30 09:48: "the stop button in the speech app kills the server.
+its just supposed to be a playback controller, not the server controller".
+At 09:47 a play-from run had about 130 replays waiting. The narrator's log
+has neither "stopped by the speech control's stop" nor "P1 User Barge-in"
+between 09:41:48 and the restart at 09:51:19: his press never reached the
+stop. And a stop that did reach it cleared only the narration bands (P3/P4),
+not the explicit band the replays wait in.
+
+- **Transport presses are handled on the event thread, at once.** play,
+  hold, stop and skip from the control (`ControlDriver._on_event`) no longer
+  wait in line behind a play-from being queued or a sync to the UI Utility;
+  none sends a request, so none can wait on its own reply. Settings, rate
+  and play events still go to the control's worker.
+- **A stop cancels plays.** Play events still waiting to be handled are
+  dropped, and a play-from or play-all being queued queues none of the rest.
+- **A stop clears every waiting replay.** `_stop_speech` takes every queued
+  replay of a heard line out of the queue at once
+  (`PriorityArbiter.remove_where`), logging `stopped: cleared <n> queued
+  replays`. They are in the history already.
+- **Live lines already waiting** are not dropped: the worker sets each aside
+  on the missed list as `stopped` straight away (it does no synthesis while
+  stopped), and they play on his play, in order, as above.
+- **The process stays.** A stop ends the line playing (the player, mpv) and
+  never signals, stops or restarts the narrator.
+- Tests: `tests/test_stop_is_playback.py`.

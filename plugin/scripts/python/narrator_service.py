@@ -2048,6 +2048,17 @@ class NarratorService:
             _write_stopped(self._stopped_since, by=by)
             _log("stopped" + (f" by {by}" if by else "") + ": nothing plays until a play or resume; lines that arrive go on the missed list")
         self._handle_p1_interrupt()
+        # The barge-in clears only the narration bands. Replays of heard lines
+        # (play-item, play-all, play-from) wait in the explicit band: his stop
+        # takes them all out now; they are in the history already. A live line
+        # still waiting is set aside on the missed list as `stopped` by the
+        # worker, as ADR-024 says, and plays on his play.
+        arbiter = getattr(self, "_priority_arbiter", None)
+        if arbiter is not None:
+            cleared = arbiter.remove_where(lambda q: bool(q.history_id))
+            if cleared:
+                self._update_depth(self._tts_queue.qsize())
+                _log(f"stopped: cleared {len(cleared)} queued replays (heard lines, still in the history)")
 
     def _resume_speech(self, *, play_set_aside: bool = True) -> int:
         """Ends his stop. With play_set_aside, the lines that arrived while

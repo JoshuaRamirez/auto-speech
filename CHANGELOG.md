@@ -158,6 +158,17 @@ The Chrome extension under `chrome-extension/` is versioned independently
   HOME to a temporary directory at import.
 
 ### Fixed
+- **The speech control's stop is a playback act, and it stops a play-from
+  run (ADR-024, #m1030-0948).** His 2026-10-30 09:48: "the stop button in
+  the speech app kills the server. its just supposed to be a playback
+  controller, not the server controller". With a play-from run waiting, his
+  stop never reached the narrator, and a stop that did would not have
+  cleared the waiting replays. Now the control's transport presses (play,
+  hold, stop, skip) are handled at once on the event thread, never behind a
+  play-from or a sync; a stop drops the plays not yet handled, cancels a run
+  being queued, ends the line playing, and takes every waiting replay out
+  (`stopped: cleared <n> queued replays`). Live lines waiting go on the
+  missed list as before. The narrator process is never touched.
 - **A replay stopped part way no longer lands on the missed list
   (ADR-027).** His stop during a play-all or play-from set each queued
   replay aside as a new missed line, although it was heard and in the

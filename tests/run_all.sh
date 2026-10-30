@@ -154,6 +154,7 @@ CHEAP=(
     test_stop_and_drain.py
     test_line_id.py
     test_play_from.py
+    test_stop_is_playback.py
     test_ui_utility_client.py
     test_speak_client.py
     test_cli_dispatcher.py
