@@ -156,6 +156,8 @@ CHEAP=(
     test_play_from.py
     test_stop_is_playback.py
     test_control_round_1030.py
+    test_stop_over_the_wire.py
+    test_live_lines_survive.py
     test_ui_utility_client.py
     test_speak_client.py
     test_cli_dispatcher.py
