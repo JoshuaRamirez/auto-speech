@@ -273,6 +273,14 @@ def _replay_flags(payload: dict) -> tuple[str, bool]:
     return missed_id, (hold if isinstance(hold, bool) else True)
 
 
+def _clean_sender(raw: Any) -> str:
+    """A sender name from a request: one line of text, at most 80 chars; "" otherwise."""
+    if not isinstance(raw, str):
+        return ""
+    name = " ".join(raw.split())
+    return name[:80]
+
+
 class _InProcessClient:
     """missed_speech's client, answered by this daemon in process: the
     control's play-item on a missed line queues it as `missed --play` does."""
@@ -282,11 +290,11 @@ class _InProcessClient:
 
     def speak(self, text: str, *, priority: int, source_hash: str | None = None, voice_id: str | None = None,
               speed: float = DEFAULT_SPEED, missed_id: str = "", hold: bool = True, line_id: str = "",
-              session_id: str | None = None, origin_file: str | None = None) -> dict[str, Any]:
+              session_id: str | None = None, origin_file: str | None = None, sender: str | None = None) -> dict[str, Any]:
         return self._service.dispatch_json({
             "action": "speak", "text": text, "priority": int(priority), "source_hash": source_hash,
             "voice_id": voice_id, "speed": speed, "missed_id": missed_id, "hold": hold,
-            "line_id": line_id, "session_id": session_id, "origin_file": origin_file,
+            "line_id": line_id, "session_id": session_id, "origin_file": origin_file, "sender": sender,
         })
 
     def play_cache(self, source_hash: str, *, priority: int, missed_id: str = "", hold: bool = True) -> dict[str, Any]:
@@ -658,6 +666,7 @@ class NarratorService:
             speed = float(payload.get("speed", DEFAULT_SPEED))
             missed_id, hold = _replay_flags(payload)
             origin_file = clean_origin_file(payload.get("origin_file"))
+            sender = _clean_sender(payload.get("sender"))
             line_id = clean_line_id(payload.get("line_id")) or self._line_ledger().for_missed(missed_id)
             if line_id and priority != Priority.USER_INTERRUPT:
                 seen = self._line_ledger().admit(line_id, text)
@@ -697,6 +706,7 @@ class NarratorService:
                     origin_file=origin_file,
                     line_id=line_id,
                     line_text=text,
+                    sender=sender,
                 )
                 cache_hit = True
             else:
@@ -711,6 +721,7 @@ class NarratorService:
                     hold=hold,
                     origin_file=origin_file,
                     line_id=line_id,
+                    sender=sender,
                 )
                 cache_hit = False
 
@@ -1733,6 +1744,7 @@ class NarratorService:
             speed=float(item.speed),
             line_id=getattr(item, "line_id", "") or "",
             origin_file=getattr(item, "origin_file", "") or None,
+            sender=self._item_sender(item),
         )
 
     def _forget_missed(self, line_id: str, missed_id: str = "") -> None:
@@ -1853,10 +1865,10 @@ class NarratorService:
             if replayed:
                 self._control_call("playing", text, None, replayed)
             elif missed_id:
-                self._control_call("playing", text, self._sender_name(sid), MISSED_PREFIX + missed_id,
+                self._control_call("playing", text, self._item_sender(item, sid), MISSED_PREFIX + missed_id,
                                    estimate_word_timings(text, _wav_duration_seconds(Path(path))))
             else:
-                self._control_call("playing", text, self._sender_name(sid), None,
+                self._control_call("playing", text, self._item_sender(item, sid), None,
                                    estimate_word_timings(text, _wav_duration_seconds(Path(path))))
 
         heard = False
@@ -2083,7 +2095,7 @@ class NarratorService:
                     name = None
                 names[q.history_id] = name
             return names[q.history_id]
-        return self._sender_name(q.session_id)
+        return self._item_sender(q)
 
     def _queue_view(self) -> list[dict[str, Any]]:
         """What waits, in the order it will play, as the control's queue tab
@@ -2295,6 +2307,10 @@ class NarratorService:
         if not text:
             return {"status": "error", "error_code": "INVALID_PAYLOAD", "message": "missed add: text is required"}
         source = str(payload.get("source") or "").strip() or None
+        # Who sent it, from the line itself: the sender the caller names, else
+        # its session's desk, resolved now as the history does (#m1030-1058-d1ad).
+        session_id = str(payload.get("session_id") or "").strip()[:128] or None
+        sender = _clean_sender(payload.get("sender")) or self._sender_name(session_id) or None
         at = payload.get("at")
         try:
             queued_at = float(at) if at is not None else time.time()
@@ -2319,7 +2335,7 @@ class NarratorService:
                 return {"status": "ok", "action": "missed_add", "id": held.id, "line_id": speech_id, "duplicate": True}
             stored = missed.miss(
                 MissedLine(id=entry_id, text=text, queued_at=queued_at, source=source,
-                           line_id=speech_id, origin_file=origin_file),
+                           line_id=speech_id, origin_file=origin_file, session_id=session_id, sender=sender),
                 reason=REASON_ADDED,
             )
         except Exception as exc:  # noqa: BLE001
@@ -2360,9 +2376,19 @@ class NarratorService:
         if speaker is None or not session_id:
             return None
         try:
-            return speaker.name_for(session_id)
+            name = speaker.name_for(session_id)
         except Exception:  # noqa: BLE001
             return None
+        # Only a name: it is written on the missed list and in the history.
+        return name if isinstance(name, str) and name else None
+
+    def _item_sender(self, item: Any, session_id: Optional[str] = None) -> Optional[str]:
+        """The desk that sent a line: the sender recorded with it (a missed
+        line played again keeps the name it was set aside under), else its
+        session's desk name. None when neither is known: never guessed."""
+        recorded = getattr(item, "sender", "") if item is not None else ""
+        sid = session_id or (getattr(item, "session_id", None) if item is not None else None)
+        return recorded or self._sender_name(sid)
 
     def _heard(self, path: Path, item: Optional[QueueItem], *, text: str, session_id: Optional[str] = None) -> None:
         """The line was heard: export it to the history, then hand it to the
@@ -2392,7 +2418,7 @@ class NarratorService:
                 path,
                 text=text,
                 session_id=sid,
-                sender=self._sender_name(sid),
+                sender=self._item_sender(item, sid),
                 priority=int(priority) if priority is not None else None,
                 voice_id=str(voice_id),
                 speed=float(speed),

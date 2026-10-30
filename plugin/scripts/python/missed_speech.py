@@ -86,6 +86,11 @@ class MissedLine:
     source: Optional[str] = None  # who said it, when a caller named it (`missed add --source`)
     line_id: str = ""  # the speak request's line id (ADR-025/026): one entry per id, and its replay carries it
     origin_file: Optional[str] = None  # the file the line came from (desk-say's), for the history sidecar
+    # The desk that sent it, recorded from the line itself when it was set
+    # aside or added (its session's name, as the history records it), so its
+    # row, its replay and its history name it even once the session is gone.
+    # None when the line came with no session and no named sender: never guessed.
+    sender: Optional[str] = None
 
     def to_dict(self) -> dict[str, Any]:
         d = asdict(self)
@@ -112,6 +117,7 @@ class MissedLine:
             source=str(d["source"]) if d.get("source") else None,
             line_id=str(d.get("line_id") or ""),
             origin_file=str(d["origin_file"]) if d.get("origin_file") else None,
+            sender=str(d["sender"]) if d.get("sender") else None,
         )
 
     @property
@@ -270,6 +276,7 @@ class MissedList:
                             queued_at=min(existing.queued_at, line.queued_at) if existing.queued_at else line.queued_at,
                             source=line.source or existing.source,
                             session_id=line.session_id or existing.session_id,
+                            sender=line.sender or existing.sender,
                             origin_file=line.origin_file or existing.origin_file,
                         )
                         lines[i] = stored
@@ -469,7 +476,7 @@ def _send(lines: list[MissedLine], *, missed: MissedList, client: Any, sent: lis
             # The line's own id, sender and file go with it (ADR-026): the
             # narrator plays one id once, and its history names the sender.
             same_line = {k: v for k, v in (("line_id", m.line_id), ("session_id", m.session_id),
-                                           ("origin_file", m.origin_file)) if v}
+                                           ("origin_file", m.origin_file), ("sender", m.sender)) if v}
             client.speak(
                 m.text,
                 priority=Priority.EXPLICIT_MCP,

@@ -121,6 +121,7 @@ class DaemonClient:
         hold: bool = True,
         origin_file: Optional[str] = None,
         line_id: Optional[str] = None,
+        sender: Optional[str] = None,
     ) -> DaemonResponse:
         """Submits speech request to daemon priority queue (defaults mirror config_constants.py).
 
@@ -147,6 +148,8 @@ class DaemonClient:
             payload["hold"] = False
         if origin_file:
             payload["origin_file"] = origin_file
+        if sender:
+            payload["sender"] = sender  # the desk named on a missed line played again
         payload["line_id"] = line_id or f"client-{uuid.uuid4().hex[:16]}"
         return self._send_request(payload)
 
@@ -193,6 +196,8 @@ class DaemonClient:
         line_id: Optional[str] = None,
         speech_line_id: Optional[str] = None,
         origin_file: Optional[str] = None,
+        session_id: Optional[str] = None,
+        sender: Optional[str] = None,
     ) -> DaemonResponse:
         """Puts a line held or cut elsewhere on the missed list, through the daemon.
         `line_id` is the missed-list entry's id (historic name); `speech_line_id`
@@ -210,6 +215,10 @@ class DaemonClient:
             payload["line_id"] = speech_line_id
         if origin_file:
             payload["origin_file"] = origin_file
+        if session_id:
+            payload["session_id"] = session_id  # the session that wrote the line: the narrator names its desk
+        if sender:
+            payload["sender"] = sender
         return self._send_request(payload)
 
     def queue(self) -> DaemonResponse:

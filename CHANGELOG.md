@@ -175,6 +175,22 @@ The Chrome extension under `chrome-extension/` is versioned independently
   HOME to a temporary directory at import.
 
 ### Fixed
+- **A line on the missed list keeps its sender (#m1030-1058-d1ad).** On
+  2026-10-30 at 10:57 the queue listed desk lines with no sender beside
+  others from the same desk named "Master Desk". desk-speaker had handed
+  them over with `missed add --source "desk-say <file>"` and no session, so
+  when his Play replayed them the queued line had no session: the queue, the
+  history and the spoken "Master Desk here" prefix could not name the desk,
+  and the control's missed row showed the caller's label. A missed entry now
+  records `sender`, its desk's name taken from the line's own session when
+  it is set aside or added (as the history names a sender); `missed add`
+  takes `--session-id` (and a `sender` over the socket); a replay carries the
+  sender and session with it, so the queue view, the playing row and the
+  history name the desk even after its session's note is gone. The control's
+  missed row shows the recorded sender, else the session's desk, else the
+  caller's label. A line with no session and no named sender stays unnamed:
+  never guessed. A speaker that answers with anything but a name is not
+  written as a sender.
 - **`auto-speech queue` is answered, never spoken (#m1030-1008-fac1).** On
   2026-10-30 at 10:18 the new `queue` request reached the socket, which did not
   list `queue` among its controls, so `{"action": "queue"}` fell through to the

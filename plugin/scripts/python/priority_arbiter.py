@@ -60,6 +60,7 @@ class QueueItem:
     history_id: str = ""  # a history line played again from the speech control: not exported twice (ADR-022)
     line_id: str = ""  # the caller's id for this line: one id, one play (ADR-025)
     queue_id: str = field(default_factory=_next_queue_id)  # stable while it waits: the control's queue tab names it (contract 1.6)
+    sender: str = ""  # the desk that sent it, as recorded on its missed entry: a replay keeps its name (#m1030-1058-d1ad)
     control_run: int = 0  # the speech control's play-from/play-all run this replay belongs to; 0: none (ADR-027)
 
     def __post_init__(self) -> None:
