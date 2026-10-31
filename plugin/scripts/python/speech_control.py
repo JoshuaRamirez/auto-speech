@@ -5,10 +5,12 @@ daemon.
 His 2026-10-21 20:07-20:09: "i want the same thing that shows up like in
 the screenshot" / "in a mac native" / "and i wanted a transcript"
 (#m1021-2008-7850). Behind `[history] player` (`auto-speech history
-player-on`): at daemon start, and whenever the setting is on, one control
-is open (panel control, id auto-speech). Never opened while a hold stands
-(a meeting, or another app's sound): nothing pops up during a meeting.
-Nothing while the UI Utility is not installed.
+player-on`): one control (panel control, id auto-speech) opens when a line
+starts playing, never at daemon start (his 2026-10-31 12:53: "why is my
+speech app opening on its own over and over"). A control he closed stays
+closed, across restarts, until he reopens it (CLOSED_MARK). Never opened
+while a hold stands (a meeting, or another app's sound): nothing pops up
+during a meeting. Nothing while the UI Utility is not installed.
 
 The control plays nothing. The daemon plays, tells the control its state
 and its list, and acts on what the person asks for (ControlActions). The
@@ -33,6 +35,8 @@ from __future__ import annotations
 
 import contextlib
 import itertools
+import json
+import os
 import threading
 import time
 from collections import deque
@@ -47,6 +51,7 @@ from missed_speech import MissedLine, MissedList
 from speech_history import HistoryLine, HistorySettings, HistoryStore, SpeechHistory
 from speech_player import CONNECT_RETRY_SECONDS, LAUNCH_WAIT_SECONDS, utility_installed
 from speech_settings import SETTINGS, SETTINGS_ID, SOURCE_NAME, SettingError, SettingsPlaces, SpeechSettings
+from state_paths import state_path
 from ui_utility_client import CONTROL, ContractError, UiUtilityClient
 
 CONTROL_ID = "auto-speech"
@@ -69,6 +74,47 @@ QUEUE_DEBOUNCE_SECONDS = 0.25  # the queue tab is sent at most this often while 
 SEEK_CHOICES = (1, 5, 10)  # contract 1.6: skip-back and skip-forward with seconds
 
 ICON = Path(__file__).resolve().parents[3] / "chrome-extension" / "icons" / "icon128.png"
+
+# His "closed it" mark, kept on disk so a restart of the daemon keeps it
+# (#m1031-1313-9a54). Only his own reopening clears it: the settings
+# piece's player switch turned on, or `history player-on` (CLI or MCP).
+CLOSED_MARK_NAME = "auto-speech-control-closed.json"
+
+
+def closed_mark_path() -> Path:
+    return state_path(CLOSED_MARK_NAME)
+
+
+def read_closed_mark(path: Path | None = None) -> bool:
+    """True while his "closed it" mark stands."""
+    try:
+        data = json.loads((path or closed_mark_path()).read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return False
+    return isinstance(data, dict) and data.get("closed") is True
+
+
+def write_closed_mark(closed: bool, path: Path | None = None, by: str = "user") -> None:
+    """Set (closed) or clear his mark. Atomic: a temp file, then a rename."""
+    path = path or closed_mark_path()
+    if not closed:
+        path.unlink(missing_ok=True)
+        return
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = path.with_name(path.name + ".tmp")
+    tmp.write_text(json.dumps({"closed": True, "by": by, "since": time.time()}) + "\n", encoding="utf-8")
+    os.replace(tmp, path)
+
+
+def reopened_by_him(path: Path | None = None) -> bool:
+    """He reopened the control (`history player-on`): his mark is cleared,
+    and the next line that plays opens it. Returns whether a mark stood."""
+    stood = read_closed_mark(path)
+    try:
+        write_closed_mark(False, path)
+    except OSError:
+        return False
+    return stood
 
 
 def _hhmm(epoch: float) -> str | None:
@@ -213,6 +259,7 @@ class ControlDriver:
         icon: Path | None = ICON,
         start_worker: bool = True,
         settings: SpeechSettings | None = None,
+        closed_mark: Path | None = None,
     ) -> None:
         self._store = store or HistoryStore()
         self._history = history or SpeechHistory(store=self._store)
@@ -240,7 +287,10 @@ class ControlDriver:
         self._worker: threading.Thread | None = None
         self._client: Any = None
         self._open = False
-        self._closed_by_user = False
+        # His "closed it" mark, from disk: it outlives this process.
+        self._closed_mark = closed_mark if closed_mark is not None else closed_mark_path()
+        self._closed_by_user = read_closed_mark(self._closed_mark)
+        self._want_open = False  # a line started playing: the next sync opens the control
         self._pieces: set[str] = set()  # what the UI Utility offered at hello
         self._settings_open = False
         self._queue_offered = True  # False once this connection's UI Utility refused `queue` (before 1.6)
@@ -265,8 +315,9 @@ class ControlDriver:
             self._cond.notify()
 
     def start(self) -> None:
-        """At daemon start: the kept rate goes to the sink, and the control
-        opens when the setting is on."""
+        """At daemon start: the kept rate goes to the sink and the model.
+        Nothing opens and nothing is sent: the control opens when a line
+        starts playing (his 2026-10-31 12:53, #m1031-1313-9a54)."""
         try:
             rate = self._store.load().rate
             if rate != 1.0:
@@ -275,7 +326,8 @@ class ControlDriver:
         except Exception as exc:  # noqa: BLE001 — a rate that cannot apply leaves 1
             self._say_once("rate", f"control: the kept rate did not apply: {exc!r}")
             rate = 1.0
-        self._change(rate=rate)
+        with self._cond:
+            self._model.rate = rate  # the open, when a line plays, carries it
 
     def playing(self, text: str, source: str | None, item_id: str | None = None,
                 words: list[dict[str, Any]] | None = None) -> None:
@@ -283,7 +335,9 @@ class ControlDriver:
         (`item_id` its history id) or a missed one (`missed:<id>`) is its own
         row, made current: no new row (contract 1.6). A fresh line is a
         now-row on top, with its sender. Either way the row is sent with the
-        line's words, and the position starts at 0."""
+        line's words, and the position starts at 0. This is the one place
+        the control is asked to open, and only while his "closed it" mark
+        does not stand: a line never clears his mark."""
         at = time.time()
         if item_id and not item_id.startswith(NOW_PREFIX):
             now = None
@@ -296,8 +350,11 @@ class ControlDriver:
             if source:
                 now["source"] = source
         kinds = [_NOW, _STATE]
+        closed = read_closed_mark(self._closed_mark)  # the file is the truth: player-on clears it from outside
         with self._cond:
-            self._closed_by_user = False  # a new line brings back a control he closed
+            self._closed_by_user = closed
+            if not closed:
+                self._want_open = True
             if source and source != self._model.source:
                 kinds.append(_SOURCE)
         self._change(*kinds, state=PLAYING, current=current, now=now, paused=False, words=words or None,
@@ -341,6 +398,8 @@ class ControlDriver:
     def ended(self, line: HistoryLine | None = None) -> None:
         """The line playing has ended: heard (and in the history as `line`),
         set aside, cut off or stopped. The list is sent again."""
+        with self._cond:
+            self._want_open = False  # an open that failed is not tried again for a line that is over
         self._change(_ITEMS, _STATE, state=IDLE, now=None, paused=False, words=None, position=0.0, since=None,
                      current=line.id if line is not None else None)
 
@@ -442,9 +501,12 @@ class ControlDriver:
             return True
 
     def sync(self) -> str:
-        """Bring the control up to the model: open it when the setting is on
-        and nothing holds; close it when the setting is off. Returns what it
-        did: off | held | not installed | closed by him | opened | sent | none."""
+        """Bring the control up to the model: open it when a line has started
+        playing, the setting is on, his "closed it" mark does not stand and
+        nothing holds; close it when the setting is off. Nothing else opens
+        it, and nothing launches the UI Utility but an open. Returns what it
+        did: off | held | not installed | closed by him | no line | opened |
+        sent | none."""
         settings: HistorySettings = self._store.load()
         with self._cond:
             pending = set(self._model.pending)
@@ -465,12 +527,14 @@ class ControlDriver:
                     self._settings_open = False
                 return "off"
             if not self._open:
+                closed = read_closed_mark(self._closed_mark)  # player-on may have cleared it from outside
                 with self._cond:
-                    closed_by_user = self._closed_by_user
-                if closed_by_user:
+                    self._closed_by_user = closed
+                    closed_by_user, want_open = closed, self._want_open
+                if closed_by_user or not want_open:
                     if self._client is not None and self._client.connected:
                         self._sync_settings()  # never a launch for this alone
-                    return "closed by him"
+                    return "closed by him" if closed_by_user else "no line"
                 if not self._installed():
                     self._say_once("not installed", "control: on, but the UI Utility is not installed; nothing opens")
                     return "not installed"
@@ -480,6 +544,8 @@ class ControlDriver:
                     return "held"
                 self._request(self._open_request())
                 self._open = True
+                with self._cond:
+                    self._want_open = False
                 self._send_queue()
                 self._say_once("opened", "control: the UI Utility's speech control is open")
                 self._sync_settings()
@@ -737,8 +803,17 @@ class ControlDriver:
             self._play_from(evt.get("from"), evt.get("items"))
         elif kind == "closed":
             self._open = False
-            with self._cond:
-                self._closed_by_user = evt.get("by") == "user"
+            if evt.get("by") == "user":
+                # His "closed it", kept on disk: no line and no restart opens
+                # it again until he reopens it. A close that is not his
+                # leaves his mark as it was.
+                with self._cond:
+                    self._closed_by_user = True
+                    self._want_open = False
+                try:
+                    write_closed_mark(True, self._closed_mark)
+                except OSError as exc:
+                    self._say_once("closed mark", f"control: his close was not kept on disk: {exc!r}")
 
     def _keep_rate(self, rate: float) -> None:
         """A rate set at the control is kept for the next start, and shown in
@@ -779,7 +854,21 @@ class ControlDriver:
         elif item in ("keep", "clear_missed"):
             self._change(_ITEMS)
         elif item == "player":
+            if applied.get("player") is True:
+                self.reopen()  # his switch turned on: his own reopening
             self._change()  # the next sync opens or closes both pieces
+
+    def reopen(self) -> None:
+        """He reopened the control himself (the settings piece's player
+        switch turned on): his mark is cleared and the next sync opens the
+        control. Never called for a line playing or a daemon start."""
+        with self._cond:
+            self._closed_by_user = False
+            self._want_open = True
+        try:
+            write_closed_mark(False, self._closed_mark)
+        except OSError as exc:
+            self._say_once("closed mark clear", f"control: his reopening was not kept on disk: {exc!r}")
 
     def _control(self, action: str, seconds: Any = None) -> None:
         """A transport press: a playback act on the line playing or the

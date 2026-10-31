@@ -16,11 +16,12 @@ acts on what the person asks for.
 `speech_control.ControlDriver` drives one control (panel `control`, id
 `auto-speech`) behind the existing `[history] player` setting.
 
-- **When it opens.** At daemon start, and whenever the setting is on and
-  the control is not open: never while a hold stands (a meeting, or
-  another app's sound), never when the UI Utility is not installed. A
-  control he closes stays closed until the next line plays. Turning the
-  setting off closes it.
+- **When it opens.** When a line starts playing and the setting is on
+  (amended 2026-10-31, see below; it used to open at daemon start too):
+  never while a hold stands (a meeting, or another app's sound), never
+  when the UI Utility is not installed. A control he closes stays closed,
+  across daemon restarts, until he reopens it himself. Turning the setting
+  off closes it.
 - **What it shows.** The source is the speaker of the line playing (the
   desk's name; auto-speech's icon). The list, newest first: the line
   playing now (a provisional `now-<n>` item until the history names it),
@@ -62,3 +63,28 @@ list, the history) live here.
 - Invariants: I-22.1 never opened during a hold; I-22.2 every item id is
   unique and the list is newest first; I-22.3 a replayed history line is
   never exported twice; I-22.4 an event never blocks the client's reader.
+
+## Amendment, 2026-10-31: opens only when a line plays; his close is kept (#m1031-1313-9a54)
+His 2026-10-31 12:53: "why is my speech app opening on its own over and
+over", and 13:09: "yes fix the speech thing". The narrator idles out after
+600 s and launchd starts it again; each start's `start()` woke the worker,
+which opened the control, and any line cleared his "closed it" mark, which
+lived only in memory and was lost on every restart.
+
+- `start()` applies the kept rate to the sink and the model only; it wakes
+  nothing and sends nothing. `playing()` is the one call that asks for an
+  open. A sync with no line asked for opens nothing and launches nothing
+  (`no line`); updates go only to a control already open. A connection
+  lost while idle is opened again with the next line, not on its own.
+- His close (`closed` with `by: "user"`) is kept in
+  `$AUTO_SPEECH_TMP_ROOT/auto-speech-control-closed.json` (default /tmp),
+  read at construction and at each sync, so a restart keeps it. While it
+  stands, no line opens the control. A close that is not his leaves it as
+  it was.
+- Only his own reopening clears it: `auto-speech history player-on` (CLI,
+  or the MCP tool `history(action="player-on")`), after which the next
+  line opens the control; or the settings piece's Speech control switch
+  turned on, which opens it at the next sync. A line playing never clears
+  it. The contract has no "opened by him" event, so there is no third way.
+- Invariant I-22.5: the control is opened only for a line playing or his
+  own reopening, never by a daemon start.

@@ -175,6 +175,20 @@ The Chrome extension under `chrome-extension/` is versioned independently
   HOME to a temporary directory at import.
 
 ### Fixed
+- **The speech control opens only when a line plays, and a control he
+  closed stays closed across restarts (ADR-022 amendment,
+  #m1031-1313-9a54).** His 2026-10-31 12:53: "why is my speech app opening
+  on its own over and over". The narrator idles out after 600 s and launchd
+  starts it again, and each start opened the UI Utility's speech control;
+  any line that played also cleared his "closed it" mark, which was kept
+  only in memory and lost on every restart. Now the daemon's start applies
+  the kept rate and opens nothing; the first line that plays opens the
+  control. His close is kept in `auto-speech-control-closed.json` in the
+  state dir, and while it stands no line opens the control. Only his own
+  reopening clears it: `auto-speech history player-on` (or the MCP tool's
+  `player-on`), after which the next line opens it, or the settings piece's
+  Speech control switch turned on. Tests: `tests/test_speech_control.py`
+  (`TestOpensOnlyWhenALinePlays`), `tests/test_speech_history.py`.
 - **`auto-speech replay` plays from the speech history, not the old cache
   (T38).** At 14:28 on 2026-10-30, `auto-speech replay --ordinal 1` played a
   clip made on 2026-10-19 instead of the line spoken a minute earlier: it

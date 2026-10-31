@@ -99,6 +99,9 @@ class _Base(unittest.TestCase):
         self.rec = Recorder()
         self.drivers: list[ControlDriver] = []
         self.launches = 0
+        # His "closed it" mark in this test's own folder: kept across drivers
+        # (a restart), never across tests.
+        self.closed_mark = self.root / "control-closed.json"
 
     def tearDown(self) -> None:
         for d in self.drivers:
@@ -123,6 +126,7 @@ class _Base(unittest.TestCase):
             launch=self.no_launch,
             icon=None,
             start_worker=start_worker,
+            closed_mark=self.closed_mark,
             settings=SpeechSettings(SettingsPlaces(
                 mute_marker=self.root / "auto-speech.disabled",
                 autoplay_path=self.root / "autoplay.toml",
@@ -159,7 +163,9 @@ class TestOpen(_Base):
         self.assertEqual(d.sync(), "off")
         self.assertEqual(self.standin.connections, 0)
 
-    def test_at_start_it_opens_one_control_with_the_history_newest_first_and_missed_lines_unplayed(self):
+    def test_a_line_opens_one_control_with_the_history_newest_first_and_missed_lines_unplayed(self):
+        # Was "at start it opens": the control now opens when a line plays,
+        # never at daemon start (his 2026-10-31 12:53, #m1031-1313-9a54).
         self.store.set_player(True)
         a = self.export("First line.", sender="Master Desk")
         b = self.export("Second line.")
@@ -167,16 +173,20 @@ class TestOpen(_Base):
                          reason=REASON_LONGEST_WAIT)
         d = self.driver(names=lambda sid: None)
         d.start()
+        self.assertEqual(d.sync(), "no line", "the daemon's start opens nothing")
+        self.assertEqual(self.standin.connections, 0)
+        d.playing("Now.", None)
         self.assertEqual(d.sync(), "opened")
         self.assertEqual(self.requests("hello")[0]["cmd"], "hello")
         [req] = self.requests("open")
-        self.assertEqual((req["panel"], req["id"], req["state"], req["current"]), ("control", CONTROL_ID, "idle", None))
+        now_id = req["items"][0]["id"]
+        self.assertEqual((req["panel"], req["id"], req["state"], req["current"]), ("control", CONTROL_ID, "playing", now_id))
         self.assertEqual(req["source"], {"name": "auto-speech", "icon": None})
         self.assertEqual(req["rate"], 1.0)
         self.assertEqual(req["rates"], sc.RATES)
         ids = [i["id"] for i in req["items"]]
-        self.assertEqual(ids, ["missed:m1", b.id, a.id], "newest first; the missed line is the newest")
-        m, second, first = req["items"]
+        self.assertEqual(ids, [now_id, "missed:m1", b.id, a.id], "the line playing on top; newest first")
+        m, second, first = req["items"][1:]
         self.assertEqual((m["unplayed"], m["clip"], m["text"]), (True, None, "Held behind Spotify."))
         self.assertEqual(first["source"], "Master Desk")
         self.assertEqual(first["clip"], str(a.wav))
@@ -207,10 +217,11 @@ class TestOpen(_Base):
         holding = [True]
         d = self.driver(holding=lambda: holding[0])
         d.held()
-        self.assertEqual(d.sync(), "held")
+        self.assertEqual(d.sync(), "no line", "a hold with no line playing opens nothing")
+        d.playing("Now it plays.", "Master Desk")
+        self.assertEqual(d.sync(), "held", "never opened while a hold stands")
         self.assertEqual(self.standin.connections, 0)
         holding[0] = False
-        d.playing("Now it plays.", "Master Desk")
         self.assertEqual(d.sync(), "opened")
         [req] = self.requests("open")
         self.assertEqual((req["state"], req["items"][0]["text"], req["current"]), ("playing", "Now it plays.", req["items"][0]["id"]))
@@ -219,12 +230,14 @@ class TestOpen(_Base):
     def test_not_installed_opens_nothing(self):
         self.store.set_player(True)
         d = self.driver(installed=lambda: False)
+        d.playing("A line.", None)
         self.assertEqual(d.sync(), "not installed")
         self.assertEqual(self.standin.connections, 0)
 
     def test_turning_the_setting_off_closes_the_control(self):
         self.store.set_player(True)
         d = self.driver()
+        d.playing("A line.", None)
         self.assertEqual(d.sync(), "opened")
         self.store.set_player(False)
         self.assertEqual(d.sync(), "off")
@@ -234,6 +247,7 @@ class TestOpen(_Base):
         self.standin.script = lambda r: {"ok": True, "contract": 1, "pieces": ["player"]} if r.get("cmd") == "hello" else {"ok": True}
         self.store.set_player(True)
         d = self.driver()
+        d.playing("A line.", None)
         self.assertEqual(d.sync(), "wrong contract")
         self.assertEqual(self.requests("open"), [])
 
@@ -251,9 +265,10 @@ class TestOpen(_Base):
             self.export(f"Line {n}.")
         d = self.driver(names=lambda sid: None)
         d.start()
+        d.playing("Now.", None)
         self.assertEqual(d.sync(), "opened")
         [req] = self.requests("open")
-        items = req["items"]
+        items = req["items"][1:]  # after the line playing now
         unplayed = [i["id"] for i in items if i.get("unplayed")]
         self.assertEqual(unplayed, ["missed:h1", "missed:m2", "missed:m1", "missed:m0"])
         self.assertEqual(len(items), sc.MAX_ITEMS + 4, "the history capped at MAX_ITEMS, every unplayed line kept")
@@ -265,6 +280,7 @@ class TestKeepCurrent(_Base):
         super().setUp()
         self.store.set_player(True)
         self.d = self.driver()
+        self.d.reopen()  # he opened it: these tests start with the control open
         self.assertEqual(self.d.sync(), "opened")
 
     def test_a_line_goes_on_top_playing_then_the_list_and_idle_when_heard(self):
@@ -334,6 +350,7 @@ class TestEvents(_Base):
         super().setUp()
         self.store.set_player(True)
         self.d = self.driver()
+        self.d.reopen()  # he opened it: these tests start with the control open
         self.d.sync()
 
     def ev(self, **kw):
@@ -424,19 +441,116 @@ class TestEvents(_Base):
         self.d.handle_event({"id": "other", "event": "control", "action": "stop"})
         self.assertEqual(self.rec.calls, [])
 
-    def test_closed_by_him_stays_closed_until_the_next_line(self):
+    def test_closed_by_him_stays_closed_when_the_next_line_plays(self):
+        # Was "until the next line": a line no longer clears his mark; only
+        # his own reopening does (#m1031-1313-9a54).
         self.ev(event="closed", by="user")
         self.d.list_changed()
         self.assertEqual(self.d.sync(), "closed by him")
         self.d.playing("Next line.", None)
-        self.assertEqual(self.d.sync(), "opened")
+        self.assertEqual(self.d.sync(), "closed by him")
+        self.assertEqual(len(self.requests("open")), 1, "only the open from setUp")
 
     def test_events_from_the_utility_are_acted_on_by_the_worker(self):
         d = self.driver(start_worker=True)
         d.start()
+        d.playing("A line.", None)  # a line opens this driver's control
         self.wait(lambda: len(self.requests("open")) >= 2)
         self.standin.send_event({"event": "control", "id": CONTROL_ID, "action": "stop"})
         self.wait(lambda: ("stop",) in self.rec.calls)
+
+
+class TestOpensOnlyWhenALinePlays(_Base):
+    """His 2026-10-31 12:53: "why is my speech app opening on its own over
+    and over" (#m1031-1313-9a54). The daemon idles out after 600 s and
+    launchd starts it again; each start opened the control. Now a line that
+    starts playing is the only thing that opens it, and his "closed it" mark
+    is kept on disk across restarts until he reopens it himself."""
+
+    def setUp(self) -> None:
+        super().setUp()
+        self.store.set_player(True)
+
+    def test_the_daemons_start_opens_nothing_and_sends_nothing(self):
+        self.store.set_rate(1.5)
+        d = self.driver(start_worker=True)
+        d.start()  # the worker is not started for this: no wake, no connection
+        d.list_changed()
+        d.queue_changed()
+        d.held()
+        time.sleep(0.3)
+        self.assertEqual(self.standin.connections, 0, "no connection, no launch, nothing opened")
+        self.assertEqual(self.launches, 0)
+        self.assertIn(("set_rate", 1.5), self.rec.calls, "the kept rate still goes to the sink")
+        self.assertEqual(d.sync(), "no line")
+        self.assertEqual(self.requests("open"), [])
+
+    def test_the_first_line_that_plays_opens_it_with_the_kept_rate(self):
+        self.store.set_rate(1.5)
+        d = self.driver()
+        d.start()
+        self.assertEqual(d.sync(), "no line")
+        d.playing("First line.", "Master Desk")
+        self.assertEqual(d.sync(), "opened")
+        [req] = self.requests("open")
+        self.assertEqual((req["state"], req["rate"], req["items"][0]["text"]), ("playing", 1.5, "First line."))
+        d.ended(None)
+        self.assertEqual(d.sync(), "sent", "a sync after the open goes to the open control")
+        self.assertEqual(len(self.requests("open")), 1)
+
+    def test_his_closed_mark_keeps_a_playing_line_from_opening_it(self):
+        d = self.driver()
+        d.playing("One.", None)
+        self.assertEqual(d.sync(), "opened")
+        d.handle_event({"id": CONTROL_ID, "event": "closed", "by": "user"})
+        self.assertTrue(sc.read_closed_mark(self.closed_mark), "his close is kept on disk")
+        for text in ("Two.", "Three."):
+            d.playing(text, None)
+            self.assertEqual(d.sync(), "closed by him")
+        self.assertEqual(len(self.requests("open")), 1)
+        self.assertTrue(sc.read_closed_mark(self.closed_mark), "a line playing never clears his mark")
+
+    def test_his_mark_survives_a_restart(self):
+        d = self.driver()
+        d.playing("One.", None)
+        d.sync()
+        d.handle_event({"id": CONTROL_ID, "event": "closed", "by": "user"})
+        d.close()
+        again = self.driver()  # the daemon started again by launchd, over the same state file
+        again.start()
+        again.playing("After the restart.", None)
+        self.assertEqual(again.sync(), "closed by him")
+        self.assertEqual(len(self.requests("open")), 1)
+
+    def test_his_switch_turned_on_reopens_it_and_clears_the_mark(self):
+        from speech_settings import SETTINGS_ID
+
+        sc.write_closed_mark(True, self.closed_mark)
+        d = self.driver()
+        d.playing("One.", None)
+        self.assertEqual(d.sync(), "closed by him")
+        d.handle_event({"id": SETTINGS_ID, "event": "setting", "item": "player", "value": True, "by": "user"})
+        self.assertFalse(sc.read_closed_mark(self.closed_mark))
+        self.assertEqual(d.sync(), "opened")
+
+    def test_history_player_on_clears_the_mark_for_the_next_line(self):
+        sc.write_closed_mark(True, self.closed_mark)
+        d = self.driver()
+        self.assertTrue(sc.reopened_by_him(self.closed_mark), "a mark stood")
+        self.assertFalse(sc.read_closed_mark(self.closed_mark))
+        self.assertEqual(d.sync(), "no line", "player-on clears the mark; the next line opens it")
+        d.playing("Next.", None)
+        self.assertEqual(d.sync(), "opened")
+        self.assertFalse(sc.reopened_by_him(self.closed_mark), "no mark: nothing to clear")
+
+    def test_a_close_that_is_not_his_leaves_no_mark(self):
+        d = self.driver()
+        d.playing("One.", None)
+        d.sync()
+        d.handle_event({"id": CONTROL_ID, "event": "closed", "by": "utility"})
+        self.assertFalse(sc.read_closed_mark(self.closed_mark))
+        d.playing("Two.", None)
+        self.assertEqual(d.sync(), "opened")
 
 
 class TestSinkVerbs(unittest.TestCase):

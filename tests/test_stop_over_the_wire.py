@@ -77,7 +77,8 @@ class TestStopOverTheWire(unittest.TestCase):
         self.addCleanup(self.driver.close)
 
     def test_a_stop_pressed_while_the_control_waits_on_the_ui_utility_reaches_the_narrator_at_once(self):
-        self.driver.start()  # the worker opens the control
+        self.driver.start()
+        self.driver.playing("A line.", None)  # a line plays: the worker opens the control
         self.assertTrue(self.standin.wait_for("open", 1, timeout=3), "the control is open")
         self.driver.list_changed()  # a line ended: the worker sends the list, and the stand-in sits on it
         self.assertTrue(self.items_held.wait(3), "the worker is waiting on the UI Utility's reply")
