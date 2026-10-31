@@ -1566,6 +1566,9 @@ class McpServer:
             )
         except Exception as exc:  # noqa: BLE001
             return _ok(req_id, _tool_result(f"history failed: {exc}", is_error=True))
+        if action == "player-on" and result.ok:
+            # His own reopening: a control he closed comes back with the next line.
+            speech_control.reopened_by_him()
         return _ok(req_id, _tool_result(result.text, is_error=not result.ok))
 
     def _call_doctor(self, req_id: Any, args: dict) -> dict:

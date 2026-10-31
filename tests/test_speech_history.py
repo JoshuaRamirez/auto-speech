@@ -642,6 +642,28 @@ class TestCli(_Tmp):
             rc = cli.handle_history(argparse.Namespace(history_action="keep", count=0), store=self.store, history=self.history)
         self.assertNotEqual(rc, 0)
 
+    def test_player_on_is_his_reopening_and_clears_his_closed_mark(self):
+        # #m1031-1313-9a54: a control he closed stays closed across restarts
+        # until he reopens it; `history player-on` is his reopening.
+        import argparse
+        import contextlib
+        import io
+
+        import cli
+        import speech_control
+
+        speech_control.write_closed_mark(True)  # the private state dir (tests/isolation.py)
+        self.addCleanup(speech_control.write_closed_mark, False)
+        with contextlib.redirect_stdout(io.StringIO()):
+            rc = cli.handle_history(argparse.Namespace(history_action="player-off"), store=self.store, history=self.history)
+        self.assertEqual(rc, 0)
+        self.assertTrue(speech_control.read_closed_mark(), "player-off leaves his mark")
+        with contextlib.redirect_stdout(io.StringIO()):
+            rc = cli.handle_history(argparse.Namespace(history_action="player-on"), store=self.store, history=self.history)
+        self.assertEqual(rc, 0)
+        self.assertTrue(self.store.load().player)
+        self.assertFalse(speech_control.read_closed_mark(), "player-on clears it")
+
     def test_parser_knows_the_verbs(self):
         import cli
 

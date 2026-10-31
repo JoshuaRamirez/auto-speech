@@ -93,6 +93,7 @@ class _Base(unittest.TestCase):
         self.store.set_player(True)
         d = self.driver()
         d.start()
+        d.playing("A line.", None)  # the control opens when a line plays, never at start (#m1031-1313-9a54)
         self.assertEqual(d.sync(), "opened")
         return d
 
@@ -228,6 +229,8 @@ class TestRateKept(_Base):
         self.rates.clear()
         restarted.start()
         self.assertEqual(self.rates, [1.75], "the new daemon's sink gets the kept rate")
+        self.assertEqual(restarted.sync(), "no line", "the new daemon's start opens nothing")
+        restarted.playing("After the restart.", None)
         restarted.sync()
         self.assertEqual(self.requests("open", CONTROL_ID)[-1]["rate"], 1.75)
 
@@ -259,6 +262,8 @@ class TestPlayerOff(_Base):
         while d._client is not None and d._client.connected and deadline:  # the reader sees the close
             deadline -= 1
             time.sleep(0.01)
+        self.assertEqual(d.sync(), "no line", "a lost connection is not opened again on its own")
+        d.playing("After the drop.", None)
         self.assertEqual(d.sync(), "opened")
         self.assertEqual(len(self.requests("open", SETTINGS_ID)), 2)
 

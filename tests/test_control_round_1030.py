@@ -270,6 +270,7 @@ class TestWire(unittest.TestCase):
         s = self.stand_in()
         line = self.heard()
         d = self.driver()
+        d.reopen()  # he opened it (a line no longer needs to play for these tests)
         self.assertEqual(d.sync(), "opened")
         [q] = [r for r in s.requests if r.get("cmd") == "queue"]
         self.assertEqual(q, {"v": 1, "req": q["req"], "cmd": "queue", "id": CONTROL_ID, "items": self.queue})
@@ -304,6 +305,7 @@ class TestWire(unittest.TestCase):
     def test_a_queue_change_is_sent_once_per_debounce(self):
         s = self.stand_in()
         d = self.driver()
+        d.reopen()  # he opened it: the queue tab goes to an open control
         d.sync()
         for _ in range(5):
             d.queue_changed()
@@ -321,6 +323,7 @@ class TestWire(unittest.TestCase):
 
         s = self.stand_in(old)
         d = self.driver()
+        d.reopen()  # he opened it
         self.assertEqual(d.sync(), "opened")
         self.clock.t += 1
         d.queue_changed()

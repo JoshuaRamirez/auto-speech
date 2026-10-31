@@ -786,6 +786,9 @@ def handle_history(args: argparse.Namespace, store: Any | None = None, history: 
     if not result.ok:
         print(result.text, file=sys.stderr)
         return EXIT_INVALID_INPUT
+    if action == "player-on":
+        # His own reopening: a control he closed comes back with the next line.
+        speech_control.reopened_by_him()
     print(result.text)
     return EXIT_OK
 
