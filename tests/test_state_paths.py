@@ -23,7 +23,9 @@ MODULES = [
     "narrator_service",
     "daemon_client",
     "speak",
-    "replay",
+    # replay.py was removed in #26 (T40); history_replay is the module that
+    # replaced it. Importing the retired name exits this subprocess.
+    "history_replay",
     "cli",
     "mcp_server",
     "native_audio_sink",
