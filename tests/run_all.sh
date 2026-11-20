@@ -158,6 +158,7 @@ CHEAP=(
     test_tests_never_touch_live_state.py
     test_resume_lifts_only.py
     test_one_line_one_row.py
+    test_edge_padding.py
 )
 
 # Bash-script tests for shell helpers.

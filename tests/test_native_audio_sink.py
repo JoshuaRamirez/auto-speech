@@ -107,6 +107,7 @@ class TestNativeAudioSink(unittest.TestCase):
                         "--keep-open=no",
                         "--idle=no",
                         "--input-media-keys=no",
+                        "--af=lavfi=[adelay=delays=300:all=1,apad=pad_dur=0.5]",   # quiet before and after the clip (edge_padding.py)
                         str(wav_path),
                     ],
                 )
