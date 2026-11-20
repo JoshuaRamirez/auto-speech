@@ -175,6 +175,24 @@ The Chrome extension under `chrome-extension/` is versioned independently
   HOME to a temporary directory at import.
 
 ### Fixed
+- **A line is no longer clipped at its start or end by the output device.**
+  His 2026-11-20 11:56: "autospeech stuff gets cutoff at the end and maybe
+  the start, look into that". What a listener met: the first sound of a
+  line's first word and the last syllable of its last word could be missing
+  on his headphones. Measured that day: the last 300 clips in his speech
+  history are whole, but speech starts at 0 ms (median) and ends about
+  55 ms before the file does; every line opens the output afresh, and mpv
+  closes it within tens of milliseconds of the last sample reaching the
+  device the Mac sees (a Sennheiser BTD 700 USB Bluetooth adapter: 7 ms of
+  latency reported, the radio hop behind it unseen). Nothing in the tool
+  stopped a line early (58 plays logged, no interrupt, preemption or
+  stall). mpv now plays 300 ms of silence before each clip and 500 ms after
+  it (`edge_padding.py`: one `adelay`/`apad` filter on mpv's command line;
+  `AUTO_SPEECH_LEAD_IN_MS`, `AUTO_SPEECH_TAIL_MS`, 0 turns one off). The
+  clip on disk, the history and the word timings are untouched; the
+  position the speech control reads is still the clip's own. Each line
+  takes 0.8 s longer. Not measurable from the Mac: what the adapter and
+  headphones do with the audio; only his ear confirms the fix.
 - **The speech control opens only when a line plays, and a control he
   closed stays closed across restarts (ADR-022 amendment,
   #m1031-1313-9a54).** His 2026-10-31 12:53: "why is my speech app opening

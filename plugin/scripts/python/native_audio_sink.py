@@ -243,12 +243,14 @@ class NativeAudioSink:
             sound_yield: The gate consulted before every playback. None means
                 the default gate (DEFAULT_SOUND_YIELD_FACTORY); False means
                 no gate at all (never hold).
-            padding: The quiet mpv plays after each clip so the device does
-                not swallow its end (edge_padding.py). None reads
-                AUTO_SPEECH_TAIL_MS; unset means the default.
+            padding: The quiet mpv plays before and after each clip so the
+                device does not swallow its start or end (edge_padding.py).
+                None reads AUTO_SPEECH_LEAD_IN_MS and AUTO_SPEECH_TAIL_MS;
+                unset means the defaults.
         """
         self._padding = padding if padding is not None else EdgePadding.from_env()
         self._clip_seconds: float | None = None
+        self._play_speed: float = 1.0
         self._custom_mpv_path = str(mpv_path) if mpv_path is not None else None
         self._audio_output = (
             (audio_output.strip() or None) if audio_output is not None else audio_output_from_env()
@@ -450,6 +452,7 @@ class NativeAudioSink:
                 self._interrupted = False
                 self._ipc_path = self._new_ipc_path()
                 self._clip_seconds = _clip_seconds(path)
+                self._play_speed = self._speed   # the rate the padding was scaled by (mpv_argv below)
                 proc = subprocess.Popen(
                     boosted_argv(self.mpv_argv(mpv_bin, wav_path)),
                     stdout=subprocess.DEVNULL,
@@ -632,8 +635,8 @@ class NativeAudioSink:
         data = reply.get("data") if reply.get("error") == "success" else None
         if not isinstance(data, (int, float)) or isinstance(data, bool):
             return None
-        # mpv counts on through the quiet after the clip; the line's own position does not.
-        return self._padding.clip_position(float(data), self._clip_seconds)
+        # mpv counts the quiet before the clip and on through the quiet after it; the line's own position does not.
+        return self._padding.clip_position(float(data), self._clip_seconds, self._play_speed)
 
     def skip(self) -> bool:
         """End the line now playing (never a held one: that is interrupt's)."""

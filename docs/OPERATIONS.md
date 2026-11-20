@@ -193,6 +193,10 @@ nice above 0 there means its spawner was niced: `narrator_service_start.sh` avoi
 `launchctl submit` (label `dev.auto-speech.narrator`) whenever the script itself runs niced. `say` and mpv run under
 `taskpolicy -t 0 -l 0`; `AUTO_SPEECH_QOS_BOOST=0` turns the wrap off.
 
+Every clip is played with 300 ms of silence before it and 500 ms after it, added by mpv as it plays, so an output
+device that wakes slowly or is closed early (a Bluetooth adapter) does not swallow the first or last syllable.
+`AUTO_SPEECH_LEAD_IN_MS` and `AUTO_SPEECH_TAIL_MS` set the lengths in the narrator's environment; 0 turns one off.
+
 A play is watched by mpv's position over IPC and ends only after `play_stall_seconds` (default 15,
 `AUTO_SPEECH_PLAY_STALL_SECONDS`) with no progress; a clip that is still advancing is never cut off. Budgets grow with
 the one-minute load per core up to `load_timeout_scale_cap` (default 4). A timed-out line shows in the log as
