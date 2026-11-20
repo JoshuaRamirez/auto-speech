@@ -18,6 +18,7 @@ import subprocess
 import sys
 import threading
 import time
+import wave
 from pathlib import Path
 
 from state_paths import state_path
@@ -25,6 +26,7 @@ from typing import Any, Callable
 
 import tempfile
 
+from edge_padding import EdgePadding
 from mpv_ipc import MpvIpc, MpvIpcError
 from speech_priority import boosted_argv
 
@@ -201,6 +203,16 @@ def _ps_parent_and_command(pid: int) -> tuple[int, str] | None:
         return None
 
 
+def _clip_seconds(path: Path) -> float | None:
+    """The clip's own length from its WAV header; None when it cannot be read."""
+    try:
+        with wave.open(str(path), "rb") as w:
+            rate = w.getframerate()
+            return w.getnframes() / rate if rate > 0 else None
+    except (wave.Error, EOFError, OSError):
+        return None
+
+
 class NativeAudioSink:
     """Synchronous audio sink playing WAV files via mpv with interrupt support.
 
@@ -220,6 +232,7 @@ class NativeAudioSink:
         *,
         sound_yield: SoundYieldGate | Any | None = None,
         audio_output: str | None = None,
+        padding: EdgePadding | None = None,
     ) -> None:
         """Initialize NativeAudioSink.
 
@@ -230,7 +243,12 @@ class NativeAudioSink:
             sound_yield: The gate consulted before every playback. None means
                 the default gate (DEFAULT_SOUND_YIELD_FACTORY); False means
                 no gate at all (never hold).
+            padding: The quiet mpv plays after each clip so the device does
+                not swallow its end (edge_padding.py). None reads
+                AUTO_SPEECH_TAIL_MS; unset means the default.
         """
+        self._padding = padding if padding is not None else EdgePadding.from_env()
+        self._clip_seconds: float | None = None
         self._custom_mpv_path = str(mpv_path) if mpv_path is not None else None
         self._audio_output = (
             (audio_output.strip() or None) if audio_output is not None else audio_output_from_env()
@@ -288,6 +306,9 @@ class NativeAudioSink:
             argv.append(f"--ao={self._audio_output}")
         if self._speed != 1.0:
             argv.append(f"--speed={self._speed:g}")
+        pad = self._padding.mpv_filter(self._speed)
+        if pad is not None:
+            argv.append(pad)
         if self._ipc_path is not None:
             argv.append(f"--input-ipc-server={self._ipc_path}")
         argv.append(str(wav_path))
@@ -428,6 +449,7 @@ class NativeAudioSink:
             with self._state_lock:
                 self._interrupted = False
                 self._ipc_path = self._new_ipc_path()
+                self._clip_seconds = _clip_seconds(path)
                 proc = subprocess.Popen(
                     boosted_argv(self.mpv_argv(mpv_bin, wav_path)),
                     stdout=subprocess.DEVNULL,
@@ -608,7 +630,10 @@ class NativeAudioSink:
         except MpvIpcError:
             return None
         data = reply.get("data") if reply.get("error") == "success" else None
-        return float(data) if isinstance(data, (int, float)) and not isinstance(data, bool) else None
+        if not isinstance(data, (int, float)) or isinstance(data, bool):
+            return None
+        # mpv counts on through the quiet after the clip; the line's own position does not.
+        return self._padding.clip_position(float(data), self._clip_seconds)
 
     def skip(self) -> bool:
         """End the line now playing (never a held one: that is interrupt's)."""
