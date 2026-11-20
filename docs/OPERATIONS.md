@@ -196,6 +196,10 @@ nice above 0 there means its spawner was niced: `narrator_service_start.sh` avoi
 Every clip is played with 300 ms of silence before it and 500 ms after it, added by mpv as it plays, so an output
 device that wakes slowly or is closed early (a Bluetooth adapter) does not swallow the first or last syllable.
 `AUTO_SPEECH_LEAD_IN_MS` and `AUTO_SPEECH_TAIL_MS` set the lengths in the narrator's environment; 0 turns one off.
+A line that starts more than 2 s after the last one ended gets a longer lead-in that is not silence, because his
+adapter lost a first word behind 300 ms of silence: 1.2 s of a 25 Hz tone at -30 dBFS (`AUTO_SPEECH_WAKE_MS`; 0 goes
+back to the silent lead-in). If the first word of a line after quiet is still lost, raise it; if a hum is heard
+before lines, the tone is audible on that output.
 
 A play is watched by mpv's position over IPC and ends only after `play_stall_seconds` (default 15,
 `AUTO_SPEECH_PLAY_STALL_SECONDS`) with no progress; a clip that is still advancing is never cut off. Budgets grow with

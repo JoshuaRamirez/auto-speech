@@ -107,7 +107,7 @@ class TestNativeAudioSink(unittest.TestCase):
                         "--keep-open=no",
                         "--idle=no",
                         "--input-media-keys=no",
-                        "--af=lavfi=[adelay=delays=300:all=1,apad=pad_dur=0.5]",   # quiet before and after the clip (edge_padding.py)
+                        "--af=lavfi=[adelay=delays=1200:all=1[d];sine=f=25:d=1.2,volume=-12dB,afade=t=in:d=0.05,afade=t=out:st=1.15:d=0.05[w];[d][w]amix=inputs=2:duration=first:normalize=0,apad=pad_dur=0.5]",   # a first play: the wake tone, the clip, the quiet after (edge_padding.py)
                         str(wav_path),
                     ],
                 )

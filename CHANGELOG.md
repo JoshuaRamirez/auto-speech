@@ -193,6 +193,20 @@ The Chrome extension under `chrome-extension/` is versioned independently
   position the speech control reads is still the clip's own. Each line
   takes 0.8 s longer. Not measurable from the Mac: what the adapter and
   headphones do with the audio; only his ear confirms the fix.
+- **The first word of a line after quiet is no longer lost: the lead-in is
+  a low tone, not silence.** The 300 ms of digital silence above was not
+  enough. His 2026-11-20 15:24, of a line that began "Two things." after
+  3 min 20 s of quiet: "i didnt hear the word two in two things during the
+  beginning of your speech". Either the adapter does not wake on silence or
+  it needs longer; the Mac cannot tell which, so both are covered. A line
+  that starts more than 2 s after the last one ended (or is the narrator's
+  first) now gets 1.2 s of a 25 Hz tone at -30 dBFS before it, mixed in by
+  mpv over the delay; the clip's samples still pass through unchanged
+  (checked sample for sample). A line that follows another within 2 s
+  keeps the 300 ms silent lead-in. `AUTO_SPEECH_WAKE_MS` sets the length;
+  0 goes back to the silent lead-in. A line after quiet takes 1.7 s longer
+  than its clip. The tone is meant to be inaudible; on headphones with deep
+  bass it may be a faint hum. Only his ear confirms the first word arrives.
 - **The speech control opens only when a line plays, and a control he
   closed stays closed across restarts (ADR-022 amendment,
   #m1031-1313-9a54).** His 2026-10-31 12:53: "why is my speech app opening
