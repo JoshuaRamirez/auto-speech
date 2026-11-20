@@ -251,6 +251,8 @@ class NativeAudioSink:
         self._padding = padding if padding is not None else EdgePadding.from_env()
         self._clip_seconds: float | None = None
         self._play_speed: float = 1.0
+        self._play_cold: bool = True               # nothing has played yet: the device may be asleep
+        self._last_play_end: float | None = None   # time.monotonic() when the last play ended
         self._custom_mpv_path = str(mpv_path) if mpv_path is not None else None
         self._audio_output = (
             (audio_output.strip() or None) if audio_output is not None else audio_output_from_env()
@@ -308,7 +310,7 @@ class NativeAudioSink:
             argv.append(f"--ao={self._audio_output}")
         if self._speed != 1.0:
             argv.append(f"--speed={self._speed:g}")
-        pad = self._padding.mpv_filter(self._speed)
+        pad = self._padding.mpv_filter(self._speed, self._play_cold)
         if pad is not None:
             argv.append(pad)
         if self._ipc_path is not None:
@@ -453,6 +455,9 @@ class NativeAudioSink:
                 self._ipc_path = self._new_ipc_path()
                 self._clip_seconds = _clip_seconds(path)
                 self._play_speed = self._speed   # the rate the padding was scaled by (mpv_argv below)
+                # After quiet the device may be asleep: the wake lead-in. Back to back: the short one.
+                since = None if self._last_play_end is None else time.monotonic() - self._last_play_end
+                self._play_cold = self._padding.is_cold(since)
                 proc = subprocess.Popen(
                     boosted_argv(self.mpv_argv(mpv_bin, wav_path)),
                     stdout=subprocess.DEVNULL,
@@ -473,6 +478,7 @@ class NativeAudioSink:
                 self.interrupt()
                 raise
             finally:
+                self._last_play_end = time.monotonic()
                 with self._state_lock:
                     interrupted = self._interrupted
                     if self._proc is proc:
@@ -636,7 +642,7 @@ class NativeAudioSink:
         if not isinstance(data, (int, float)) or isinstance(data, bool):
             return None
         # mpv counts the quiet before the clip and on through the quiet after it; the line's own position does not.
-        return self._padding.clip_position(float(data), self._clip_seconds, self._play_speed)
+        return self._padding.clip_position(float(data), self._clip_seconds, self._play_speed, self._play_cold)
 
     def skip(self) -> bool:
         """End the line now playing (never a held one: that is interrupt's)."""

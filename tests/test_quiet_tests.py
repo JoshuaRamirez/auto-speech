@@ -103,8 +103,8 @@ class TestSinkAudioOutput(unittest.TestCase):
         sink = NativeAudioSink(sound_yield=False, audio_output="null")
         argv = sink.mpv_argv("/x/mpv", self.wav)
         self.assertEqual(argv[0], "/x/mpv")
-        # the output, then the quiet before and after the clip (edge_padding.py), then the file
-        self.assertEqual(argv[-3:], ["--ao=null", "--af=lavfi=[adelay=delays=300:all=1,apad=pad_dur=0.5]", str(self.wav)])
+        # the output, then a first play's wake tone and the quiet after the clip (edge_padding.py), then the file
+        self.assertEqual(argv[-3:], ["--ao=null", "--af=lavfi=[adelay=delays=1200:all=1[d];sine=f=25:d=1.2,volume=-12dB,afade=t=in:d=0.05,afade=t=out:st=1.15:d=0.05[w];[d][w]amix=inputs=2:duration=first:normalize=0,apad=pad_dur=0.5]", str(self.wav)])
         self.assertIn("--input-media-keys=no", argv)
 
 
