@@ -111,7 +111,12 @@ class TestNativeAudioSink(unittest.TestCase):
                         str(wav_path),
                     ],
                 )
-                self.assertEqual(mock_popen.call_args[1], {"stdout": subprocess.DEVNULL, "stderr": subprocess.PIPE})
+                kwargs = dict(mock_popen.call_args[1])
+                env = kwargs.pop("env")
+                # started clean: posix_spawn (close_fds=False) with a built environment, nothing else inherited
+                self.assertEqual(kwargs, {"stdout": subprocess.DEVNULL, "stderr": subprocess.PIPE, "close_fds": False})
+                self.assertIn("PATH", env)
+                self.assertFalse(any(k.startswith(("CLAUDE", "CG_", "DESK_", "HERDR_")) for k in env), sorted(env))
                 mock_proc.communicate.assert_called_once()
                 self.assertFalse(sink.was_interrupted)
                 self.assertFalse(sink.is_playing)

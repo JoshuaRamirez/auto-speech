@@ -61,7 +61,7 @@ class TestSayWorkerModernized(unittest.TestCase):
 
     def test_spawn_say_worker_pipes_directly_to_speak_py(self) -> None:
         """Verifies spawn_say_worker in mcp_server spawns speak.py with stdin pipe."""
-        with mock.patch("subprocess.Popen") as mock_popen:
+        with mock.patch("clean_spawn.GroupChild") as mock_popen:
             captured = []
             mock_proc = mock.Mock()
             mock_proc.stdin = mock.Mock()

@@ -64,17 +64,17 @@ def _fake_bin(tmp: Path, name: str, body: str) -> Path:
 # Hangs forever, with a child of its own (as `say` has its speech helpers):
 # killing only the parent would leave the child behind.
 HANG = """
-echo $$ >> "$FAKE_DIR/calls"
+echo $$ >> "$AUTO_SPEECH_FAKE_DIR/calls"
 sleep 1000 &
-echo $! >> "$FAKE_DIR/children"
+echo $! >> "$AUTO_SPEECH_FAKE_DIR/children"
 wait
 """
 
 # Hangs on its first call, writes a WAV on the second.
 HANG_THEN_WRITE = """
-echo $$ >> "$FAKE_DIR/calls"
-n=$(wc -l < "$FAKE_DIR/calls")
-if [ "$n" -le 1 ]; then sleep 1000 & echo $! >> "$FAKE_DIR/children"; wait; fi
+echo $$ >> "$AUTO_SPEECH_FAKE_DIR/calls"
+n=$(wc -l < "$AUTO_SPEECH_FAKE_DIR/calls")
+if [ "$n" -le 1 ]; then sleep 1000 & echo $! >> "$AUTO_SPEECH_FAKE_DIR/children"; wait; fi
 out=""
 while [ $# -gt 0 ]; do if [ "$1" = "-o" ]; then out="$2"; fi; shift; done
 printf 'RIFF....WAVEfmt ' > "$out"
@@ -85,11 +85,11 @@ class _Env:
     def __init__(self, body: str) -> None:
         self.tmp = Path(tempfile.mkdtemp(prefix="fake-say-"))
         self.bin = _fake_bin(self.tmp, "say", body)
-        self.saved = {k: os.environ.get(k) for k in ("PATH", "FAKE_DIR", "AUTO_SPEECH_SAY_BOOST")}
+        self.saved = {k: os.environ.get(k) for k in ("PATH", "AUTO_SPEECH_FAKE_DIR", "AUTO_SPEECH_SAY_BOOST")}
 
     def __enter__(self) -> "_Env":
         os.environ["PATH"] = f"{self.bin}:{self.saved['PATH']}"
-        os.environ["FAKE_DIR"] = str(self.tmp)
+        os.environ["AUTO_SPEECH_FAKE_DIR"] = str(self.tmp)
         return self
 
     def __exit__(self, *exc) -> None:

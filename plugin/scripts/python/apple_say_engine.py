@@ -18,6 +18,7 @@ import tempfile
 from pathlib import Path
 from typing import TYPE_CHECKING
 
+import clean_spawn
 from speech_priority import boosted_argv
 from tts_engine import SynthesisTimeout, TTSGenerationError
 
@@ -51,7 +52,7 @@ def get_system_spoken_voice(force_refresh: bool = False) -> str | None:
     if sys.platform != "darwin":
         return None
     try:
-        res = subprocess.run(
+        res = clean_spawn.run(
             ["defaults", "read", "com.apple.Accessibility", "SpokenContentDefaultVoiceSelectionsByLanguage"],
             capture_output=True,
             text=True,
@@ -82,7 +83,7 @@ def get_available_say_voices(force_refresh: bool = False) -> dict[str, str]:
         return _CACHED_AVAILABLE_VOICES
 
     try:
-        res = subprocess.run(["say", "-v", "?"], capture_output=True, text=True, check=False)
+        res = clean_spawn.run(["say", "-v", "?"], capture_output=True, text=True, check=False)
         if res.returncode != 0:
             _CACHED_AVAILABLE_VOICES = {}
             return _CACHED_AVAILABLE_VOICES
@@ -197,19 +198,16 @@ class AppleSayEngine:
     def _run_say(self, argv: list[str], timeout: float) -> subprocess.CompletedProcess:
         """Run `say` in its own process group; past `timeout`, kill the whole
         group (say's helpers too) and raise subprocess.TimeoutExpired."""
-        proc = subprocess.Popen(
-            argv, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, start_new_session=True,
-        )
+        # posix_spawn into a group of its own with a built environment (clean_spawn): never a fork of the daemon
+        proc = clean_spawn.GroupChild(argv, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
         try:
             out, err = proc.communicate(timeout=timeout)
         except subprocess.TimeoutExpired:
-            try:
-                os.killpg(proc.pid, signal.SIGKILL)
-            except OSError:
-                proc.kill()
-            proc.communicate()
+            proc.kill_group(signal.SIGKILL)
+            proc.wait()
+            proc.close()
             raise
-        return subprocess.CompletedProcess(argv, proc.returncode, out, err)
+        return subprocess.CompletedProcess(argv, proc.returncode, out.decode("utf-8", "replace"), err.decode("utf-8", "replace"))
 
     def resolve_rate(self, speed: float = 1.0) -> int:
         """Calculate words per minute based on profile speed multiplier."""

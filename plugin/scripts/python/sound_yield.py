@@ -57,6 +57,8 @@ from dataclasses import dataclass, field, replace
 from datetime import datetime
 from pathlib import Path
 
+import clean_spawn
+import kernel_procs
 from state_paths import state_path
 from typing import Callable, Iterable, Optional
 
@@ -664,13 +666,19 @@ class CoreAudioProbe:
 
 
 class ProcessTable:
-    """One `ps` snapshot: pid -> (ppid, command). Names and ancestry come
-    from here so the gate issues a single ps per assessment."""
+    """One snapshot: pid -> (ppid, command). Names and ancestry come from
+    here, read from the kernel in this process; a runner given (the tests)
+    is run as `ps` instead."""
 
     def __init__(self, runner: Callable[..., "subprocess.CompletedProcess[str]"] | None = None) -> None:
-        self._run = runner or subprocess.run
+        self._runner = runner
+        self._run = runner or clean_spawn.run
 
     def snapshot(self) -> dict[int, tuple[int, str]]:
+        if self._runner is None:
+            table = kernel_procs.process_table()
+            if table is not None:
+                return table
         try:
             res = self._run(
                 ["ps", "-axo", "pid=,ppid=,command="],

@@ -26,6 +26,8 @@ from typing import Any, Callable
 
 import tempfile
 
+import clean_spawn
+import kernel_procs
 from edge_padding import EdgePadding
 from mpv_ipc import MpvIpc, MpvIpcError
 from speech_priority import boosted_argv
@@ -186,21 +188,9 @@ def reap_orphaned_player(
 
 
 def _ps_parent_and_command(pid: int) -> tuple[int, str] | None:
-    """(parent pid, command line) of a live process, or None."""
-    try:
-        out = subprocess.run(
-            ["ps", "-o", "ppid=,command=", "-p", str(pid)],
-            capture_output=True, text=True, timeout=5, check=False, stdin=subprocess.DEVNULL,
-        ).stdout.strip()
-    except (OSError, subprocess.SubprocessError):
-        return None
-    if not out:
-        return None
-    ppid, _, command = out.partition(" ")
-    try:
-        return int(ppid), command.strip()
-    except ValueError:
-        return None
+    """(parent pid, command line) of a live process, or None: read from the
+    kernel, not by starting ps (his rule, 26 Nov 2026)."""
+    return kernel_procs.parent_and_command(pid)
 
 
 def _clip_seconds(path: Path) -> float | None:
@@ -458,10 +448,14 @@ class NativeAudioSink:
                 # After quiet the device may be asleep: the wake lead-in. Back to back: the short one.
                 since = None if self._last_play_end is None else time.monotonic() - self._last_play_end
                 self._play_cold = self._padding.is_cold(since)
+                # posix_spawn with a built environment, never a fork of the daemon (clean_spawn)
+                mpv_env = clean_spawn.child_env()
                 proc = subprocess.Popen(
-                    boosted_argv(self.mpv_argv(mpv_bin, wav_path)),
+                    clean_spawn.spawn_argv(boosted_argv(self.mpv_argv(mpv_bin, wav_path)), mpv_env),
                     stdout=subprocess.DEVNULL,
                     stderr=subprocess.PIPE,
+                    env=mpv_env,
+                    close_fds=False,
                 )
                 self._proc = proc
                 try:
