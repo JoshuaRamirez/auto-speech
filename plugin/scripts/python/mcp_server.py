@@ -36,6 +36,7 @@ from pathlib import Path
 from state_paths import state_path
 from typing import Any
 
+import clean_spawn
 from auto_speech_log import rotate_if_oversize
 from autoplay_config import _resolve_prompt, load_config as load_autoplay_config
 from autoplay_enrollment import SessionEnrollment, format_status as format_enrollment_status
@@ -473,13 +474,15 @@ def spawn_say_worker(text: str) -> None:
     except OSError:
         log = subprocess.DEVNULL
     try:
-        proc = subprocess.Popen(
+        # posix_spawn into a group of its own with a built environment (clean_spawn), never a fork of the server;
+        # the session's own id is named so the line is still told as this session's
+        proc = clean_spawn.GroupChild(
             [sys.executable, str(SPEAK)],
             stdin=subprocess.PIPE,
             stdout=log,
             stderr=subprocess.STDOUT,
-            start_new_session=True,
-            close_fds=True,
+            names=("CLAUDE_CODE_SESSION_ID", "CLAUDE_SESSION_ID"),
+            reap_in_background=True,
         )
         if proc.stdin is not None:
             try:

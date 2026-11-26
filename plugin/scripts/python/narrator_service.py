@@ -91,6 +91,7 @@ from speech_priority import (
 from tts_executor import SynthesisTimeout, TTSExecutor
 from resilient_synthesizer import ResilientSynthesizer
 from tts_engine import TTSEngine
+import kernel_procs
 from voice_profile import VoiceProfile
 from voice_profile_store import VoiceProfileStore
 
@@ -157,18 +158,8 @@ def _wav_duration_seconds(path: Path) -> float:
 
 
 def _pid_cmdline(pid: int) -> str:
-    """Best-effort command line of `pid` via `ps`; '' on any error."""
-    try:
-        out = subprocess.run(
-            ["ps", "-p", str(pid), "-o", "command="],
-            capture_output=True,
-            text=True,
-            timeout=2,
-            check=False,
-        )
-    except (OSError, subprocess.SubprocessError):
-        return ""
-    return out.stdout.strip()
+    """Command line of `pid` read from the kernel (not by starting ps); '' when gone or refused."""
+    return kernel_procs.command_of(pid)
 
 
 def _pid_is_our_daemon(pid: int, cmdline_reader=_pid_cmdline) -> bool:

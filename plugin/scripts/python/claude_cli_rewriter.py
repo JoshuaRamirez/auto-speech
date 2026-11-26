@@ -15,6 +15,8 @@ import shutil
 import subprocess
 from pathlib import Path
 
+import clean_spawn
+
 
 class ClaudeCliUnavailable(RuntimeError):
     """Raised when the `claude` binary is not on PATH."""
@@ -72,16 +74,18 @@ class ClaudeCliRewriter:
         # the project slug dir) and recursively re-rewrites its own
         # output. Set an env var that both hooks check up front; nested
         # invocations bail with exit 0.
-        env = {**os.environ, "AUTO_SPEECH_SUPPRESS_HOOKS": "1"}
+        # started clean (clean_spawn): the few names every child gets, the Claude account folder, and the guard;
+        # not the session ids or tokens of whoever started the server
         try:
-            result = subprocess.run(
+            result = clean_spawn.run(
                 cmd,
+                names=("CLAUDE_CONFIG_DIR",),
+                extra={"AUTO_SPEECH_SUPPRESS_HOOKS": "1"},
                 input=prompt,
                 capture_output=True,
                 text=True,
                 timeout=timeout_seconds,
                 check=True,
-                env=env,
             )
         except subprocess.TimeoutExpired as exc:
             raise ClaudeCliRewriteError(

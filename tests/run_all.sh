@@ -118,6 +118,7 @@ CHEAP=(
     test_leftover_optout_docs.py
     test_autoplay_worker.py
     test_say_worker.py
+    test_clean_spawn.py
     test_replay_control.py
     test_mcp_server.py
     test_job_tracker.py
