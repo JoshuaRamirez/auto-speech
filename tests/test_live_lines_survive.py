@@ -100,8 +100,18 @@ class TestLiveLinesSurviveAStop(_Daemon):
         self.assertEqual(len(self.sink.played), before + 3, "the two live lines played, and no replay")
         self.assertNotIn(self.sink.played[-1], [h.wav for h in heard])
         self.assertNotIn(self.sink.played[-2], [h.wav for h in heard])
+        # The ledger marks a line done, then the history export runs. On a
+        # slow beat the tail is read while the second live line is still
+        # being written, so Heard 4 is still last. Wait until both are in
+        # the history, then require that order.
+        live_texts = [t for t, _ in LIVE]
+        self.wait_for(
+            lambda: [h.text for h in self.svc._history.load()][-2:] == live_texts,
+            5,
+            lambda: [h.text for h in self.svc._history.load()],
+        )
         texts = [h.text for h in self.svc._history.load()]
-        self.assertEqual(texts[-2:], [t for t, _ in LIVE], "heard once each, in the order they came")
+        self.assertEqual(texts[-2:], live_texts, "heard once each, in the order they came")
         self.assertEqual(self.svc._missed.load(), [], "off the missed list once heard")
 
 
