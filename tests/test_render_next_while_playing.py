@@ -60,8 +60,9 @@ class TestRenderNextWhilePlaying(harness._Daemon):
         (_, first_end), (second_start, _) = self.sink.spans
         self.assertLess(self.synth.began["The second passage."], first_end, "rendered while the first played")
         self.assertLess(second_start - first_end, RENDER_S / 2, "no render's wait between the two")
-        left = list((Path(narrator_service.SYNTH_DIR)).glob("*.wav")) if Path(narrator_service.SYNTH_DIR).exists() else []
-        self.assertEqual(left, [], "no render left behind")
+        # The line is done once heard; its own file goes in the speak's cleanup just after.
+        self.wait_for(lambda: not list(Path(narrator_service.SYNTH_DIR).glob("*.wav")), 2,
+                      lambda: f"left behind: {list(Path(narrator_service.SYNTH_DIR).glob('*.wav'))}")
 
     def test_a_render_ahead_that_does_not_match_is_dropped_and_the_line_rendered_again(self):
         self.speak("The first passage.", "a")
