@@ -74,6 +74,7 @@ from narrator_state import (
 )
 from narrator_summarizer import Summarizer, load_summarizer
 from sound_yield import ABORTED, DEFAULT_MAX_WAIT_SECONDS, REASON_MEETING as HOLD_REASON_MEETING, SoundYieldGate
+from next_line_render import NextLineRender
 from priority_arbiter import Priority, PriorityArbiter, QueueItem, QueueProxyFacade
 from speaker import Announcer, Plan
 from speech_history import SpeechHistory, clean_origin_file, estimate_word_timings
@@ -1466,6 +1467,83 @@ class NarratorService:
             return submit(synth.synthesize_one, text, profile, out, timeout=budget)
         return submit(synth.synthesize_one, text, profile, out)
 
+    def _line_profile(self, voice_id: Optional[str], speed: Optional[float]) -> Any:
+        """The voice a line is rendered in: the daemon's own, with the line's
+        voice and speed when it asks for others."""
+        profile = self._profile
+        if profile is not None and (
+            (voice_id and voice_id != profile.voice_id)
+            or (speed is not None and speed != profile.speed)
+        ):
+            profile = VoiceProfile(
+                voice_id=voice_id or profile.voice_id,
+                speed=speed if speed is not None else profile.speed,
+                chars_per_second=profile.chars_per_second,
+                calibrated_at=profile.calibrated_at,
+                calibration_source_chars=profile.calibration_source_chars,
+            )
+        return profile
+
+    def _render_next(self) -> None:
+        """While a line plays, render the line queued next on the one
+        synthesis lane, so it follows without a render's wait
+        (task:auto-speech-render-next-while-playing). Off with
+        render_next_while_playing: false in the config."""
+        try:
+            cfg = getattr(self, "_config", None)
+            if isinstance(cfg, dict) and cfg.get("render_next_while_playing", True) is False:
+                return
+            if self._is_stopped() or self._profile is None:
+                return
+            queued = self._queued_items()
+            nxt = queued[0] if queued else None
+            if not isinstance(nxt, QueueItem) or nxt.retries > 0 or not isinstance(nxt.payload, str):
+                return
+            text = nxt.payload.strip()
+            if not text or nxt.payload.endswith(".wav"):
+                return
+            sh = nxt.source_hash
+            if sh and len(sh) == 64 and all(c in "0123456789abcdef" for c in sh) and self._cache.lookup(sh) is not None:
+                return   # played from the cache: nothing to render
+            profile = self._line_profile(nxt.voice_id, nxt.speed)
+            key = (text, getattr(profile, "voice_id", None), getattr(profile, "speed", None))
+            current = getattr(self, "_next_render", None)
+            if current is not None:
+                if current.key == key:
+                    return
+                current.drop()
+            executor = getattr(self, "_tts_executor", None)
+            synth = getattr(executor, "synth", None) if executor is not None else getattr(self, "_synth", None)
+            if synth is None:
+                self._next_render = None
+                return
+            budget = self._synthesis_timeout(text, profile)
+            if executor is not None and hasattr(executor, "submit"):
+                def render(out: Path) -> bool:
+                    return self._submit_synthesis(synth, text, profile, out, budget)
+            else:
+                def render(out: Path) -> bool:
+                    return synth.synthesize_one(text, profile, out)
+            synth_dir = SYNTH_DIR if SYNTH_DIR.is_dir() else Path(tempfile.gettempdir())
+            fd, name = tempfile.mkstemp(prefix="next_line_", suffix=".wav", dir=synth_dir)
+            os.close(fd)
+            self._next_render = NextLineRender(key, Path(name))
+            self._next_render.start(render, _log)
+        except Exception as exc:  # noqa: BLE001 - a render ahead never stops the line playing
+            _log(f"next-line render not started: {exc!r}")
+
+    def _take_next_render(self, text: str, profile: Any, dest: Path, budget: Optional[float]) -> bool:
+        """Use the render made while the last line played when it is this
+        line in this voice; else drop it and render as before."""
+        current = getattr(self, "_next_render", None)
+        if current is None:
+            return False
+        self._next_render = None
+        if current.key != (text, getattr(profile, "voice_id", None), getattr(profile, "speed", None)):
+            current.drop()
+            return False
+        return current.take(dest, budget)
+
     def _play_timeout(self, path: Path) -> Optional[float]:
         """The wall-clock budget for one play, used by the sink only while
         mpv's position cannot be read (ADR-019; a clip still advancing is
@@ -1941,6 +2019,7 @@ class NarratorService:
         try:
             if self._set_aside_if_stopped(text, item):
                 return False
+            self._render_next()
             heard = self._play_item_body(path, item, text=text, session_id=session_id, age=age, hold=hold,
                                          held=held, on_hold=on_hold, on_start=on_start, name=name)
             return heard
@@ -2717,18 +2796,7 @@ class NarratorService:
             _log(f"tts engine not available; dropped narration: {line[:50]!r}")
             return
 
-        profile = self._profile
-        if profile is not None and (
-            (voice_id and voice_id != profile.voice_id)
-            or (speed is not None and speed != profile.speed)
-        ):
-            profile = VoiceProfile(
-                voice_id=voice_id or profile.voice_id,
-                speed=speed if speed is not None else profile.speed,
-                chars_per_second=profile.chars_per_second,
-                calibrated_at=profile.calibrated_at,
-                calibration_source_chars=profile.calibration_source_chars,
-            )
+        profile = self._line_profile(voice_id, speed)
 
         # Check cache if valid source_hash provided
         if source_hash and len(source_hash) == 64 and all(c in "0123456789abcdef" for c in source_hash):
@@ -2779,7 +2847,10 @@ class NarratorService:
             self._progress("synthesizing", expect=budget or 0.0)
             if item is not None and item.line_id:
                 self._line_ledger().synth_started(item.line_id)
-            if hasattr(self, "_tts_executor") and self._tts_executor is not None:
+            if self._take_next_render(spoken_line, profile, temp_wav, budget):
+                has_audio = True
+                _log(f"rendered while the line before it played: {line[:50]!r}")
+            elif hasattr(self, "_tts_executor") and self._tts_executor is not None:
                 synth = getattr(self._tts_executor, "synth", getattr(self, "_synth", None))
                 if synth is not None and hasattr(self._tts_executor, "submit"):
                     try:
